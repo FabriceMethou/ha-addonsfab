@@ -48,8 +48,8 @@ RUN chown -R $user:$user . \
     && chmod 775 -R storage/framework/ \
     && chmod 775 -R storage/logs/ \
     && chmod 775 -R bootstrap/cache/ \
-    && touch /var/www/database/database.sqlite \
-    && chown $user:$user /var/www/database/database.sqlite \
-    && chmod 775 /var/www/database/database.sqlite
+    && touch /data/database.sqlite \
+    && chown $user:$user /data/database.sqlite \
+    && chmod 775 /data/database.sqlite
 
 CMD [ "bash", "/var/www/run.sh" ]
