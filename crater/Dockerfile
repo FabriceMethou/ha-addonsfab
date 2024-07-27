@@ -32,7 +32,13 @@ RUN rm -rf * \
     && git clone https://github.com/crater-invoice/crater.git . \
     && git checkout 05d5ce2 \
     && rm -rf .git \
-    && cp .env.example .env
+    && cp .env.example .env \
+    && sed -i -e 's/^DB_CONNECTION=mysql/DB_CONNECTION=sqlite/' \
+    -e '/^DB_HOST=/d' \
+    -e '/^DB_PORT=/d' \
+    -e '/^DB_DATABASE=/d' \
+    -e '/^DB_USERNAME=/d' \
+    -e '/^DB_PASSWORD=/d' .env
 
 COPY ./php/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
 COPY ./nginx /etc/nginx/conf.d/
@@ -48,5 +54,5 @@ RUN chown -R $user:$user . \
     && chmod 775 -R storage/framework/ \
     && chmod 775 -R storage/logs/ \
     && chmod 775 -R bootstrap/cache/
-    
+
 CMD [ "bash", "/var/www/run.sh" ]
