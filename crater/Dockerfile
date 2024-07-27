@@ -47,9 +47,6 @@ RUN composer install --no-interaction --prefer-dist --optimize-autoloader && \
 RUN chown -R $user:$user . \
     && chmod 775 -R storage/framework/ \
     && chmod 775 -R storage/logs/ \
-    && chmod 775 -R bootstrap/cache/ \
-    && touch /data/database.sqlite \
-    && chown $user:$user /data/database.sqlite \
-    && chmod 775 /data/database.sqlite
-
+    && chmod 775 -R bootstrap/cache/
+    
 CMD [ "bash", "/var/www/run.sh" ]
