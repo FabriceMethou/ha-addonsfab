@@ -14,8 +14,11 @@ if [ -f "$ISCREATED_FILE" ]; then
     ln -s /data/crater/storage /var/www/storage
 else
     echo "Database does not already exists, creating an empty one"
-    mkdir -p /data/crater/storage
-    chmod 777 -R /data/crater/storage
+
+    mkdir -p /data/crater/
+    cp -r /var/www/storage /data/crater
+    chmod 777 -R /data/crater
+
     rm -rf /var/www/storage
     ln -s /data/crater/storage /var/www/storage
 
