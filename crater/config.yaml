@@ -1,6 +1,6 @@
 name: "Crater"
 description: "Embedded Invoicing & Bill Pay for platforms. Add payments, invoicing workflows, and working capital tools for users."
-version: "0.0.7"
+version: "0.1.0"
 slug: "crater"
 init: false
 arch:
@@ -9,3 +9,5 @@ arch:
 startup: services
 ports:
   80/tcp: 7649
+
+webui: "http://[HOST]:[PORT:80]"
