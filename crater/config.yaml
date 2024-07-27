@@ -1,6 +1,6 @@
 name: "Crater"
 description: "Embedded Invoicing & Bill Pay for platforms. Add payments, invoicing workflows, and working capital tools for users."
-version: "0.0.1"
+version: "0.0.2"
 slug: "crater"
 init: false
 arch:
