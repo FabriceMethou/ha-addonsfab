@@ -12,7 +12,14 @@ This repository contains the following add-ons
 
 ![Supports amd64 Architecture][amd64-shield]
 
-_Example add-on to use as a blueprint for new add-ons._
+_Embedded Invoicing & Bill Pay for platforms. Add payments, invoicing workflows, and working capital tools for users._
+
+### [OpenProject add-on](./openproject)
+
+![Supports amd64 Architecture][amd64-shield]
+
+_Powerful classic, agile or hybrid project management in a secure environment._
+
 
 <!--
 
