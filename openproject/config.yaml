@@ -1,0 +1,21 @@
+name: "Openproject"
+description: "Powerful classic, agile or hybrid project management in a secure environment."
+version: "0.1.0"
+slug: "openproject"
+init: false
+arch:
+  - amd64
+
+startup: services
+ports:
+  80/tcp: 7650
+options:
+  app_hostname: null
+  secret: null
+  ssl: false
+schema:
+  app_hostname: str
+  secret: str
+  ssl: bool
+
+webui: "http://[HOST]:[PORT:80]"
