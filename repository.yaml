@@ -1,4 +1,4 @@
 # https://developers.home-assistant.io/docs/add-ons/repository#repository-configuration
-name: Crater
+name: Personal Addons Fab
 url: "https://github.com/FabriceMethou/ha-addonsfab"
 maintainer: Fabrice Methou

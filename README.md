@@ -1,4 +1,4 @@
-# Crater Home Assistant add-on repository
+#Personal Home Assistant add-on repository
 
 Home Assistant add-on documentation: <https://developers.home-assistant.io/docs/add-ons>
 
