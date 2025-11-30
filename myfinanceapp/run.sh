@@ -1,66 +1,39 @@
 #!/usr/bin/with-contenv bashio
-# ==============================================================================
-# Home Assistant Add-on: Finance Tracker
-# Runs the Finance Tracker Streamlit application
-# ==============================================================================
 
-bashio::log.info "Starting Finance Tracker..."
+# /app/data is used by the application for persistent storage
+# we keep it persistent in /data/myfinanceapp/data
 
-# Get configuration options
-DATA_DIR=$(bashio::config 'data_dir')
-BACKUP_DIR=$(bashio::config 'backup_dir')
-TIMEZONE=$(bashio::config 'timezone')
-THEME=$(bashio::config 'theme')
+DATA_MARKER="/data/myfinanceapp/data_initialized"
 
-# Set timezone
-bashio::log.info "Setting timezone to ${TIMEZONE}"
-export TZ="${TIMEZONE}"
+# Check if data directory is already initialized
+if [ -f "$DATA_MARKER" ]; then
+    echo "Data already initialized, using existing data"
+    rm -rf /app/data
+    ln -s /data/myfinanceapp/data /app/data
+else
+    echo "Initializing data directory for first time"
 
-# Create directories if they don't exist
-bashio::log.info "Setting up data directory: ${DATA_DIR}"
-mkdir -p "${DATA_DIR}"
-mkdir -p "${DATA_DIR}/backups"
+    mkdir -p /data/myfinanceapp/data
+    chmod 777 -R /data/myfinanceapp
 
-if [ -n "${BACKUP_DIR}" ]; then
-    bashio::log.info "Setting up backup directory: ${BACKUP_DIR}"
-    mkdir -p "${BACKUP_DIR}"
+    # If /app/data exists from the build, move it to persistent storage
+    if [ -d /app/data ]; then
+        cp -r /app/data/* /data/myfinanceapp/data/ 2>/dev/null || true
+    fi
+
+    rm -rf /app/data
+    ln -s /data/myfinanceapp/data /app/data
+
+    # Mark as initialized
+    touch "$DATA_MARKER"
 fi
 
-# Set permissions
-chmod -R 755 "${DATA_DIR}"
-
-# Create symlink to data directory so app uses it
-ln -sf "${DATA_DIR}" /app/data
-
-# Set Streamlit configuration
-export STREAMLIT_SERVER_PORT=8501
-export STREAMLIT_SERVER_ADDRESS=0.0.0.0
-export STREAMLIT_SERVER_HEADLESS=true
-export STREAMLIT_SERVER_ENABLE_CORS=false
-export STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true
-
-# Set theme if specified
-if [ "${THEME}" = "dark" ]; then
-    export STREAMLIT_THEME_BASE="dark"
-elif [ "${THEME}" = "light" ]; then
-    export STREAMLIT_THEME_BASE="light"
-fi
-
-# Display configuration
-bashio::log.info "Configuration:"
-bashio::log.info " - Data directory: ${DATA_DIR}"
-bashio::log.info " - Backup directory: ${BACKUP_DIR}"
-bashio::log.info " - Timezone: ${TIMEZONE}"
-bashio::log.info " - Theme: ${THEME}"
-bashio::log.info " - Web interface will be available on port 8501"
-
-# Start the application
-bashio::log.info "Starting Streamlit application..."
+# Start the Streamlit application
 cd /app || exit 1
 
 exec streamlit run app.py \
-    --server.port="${STREAMLIT_SERVER_PORT}" \
-    --server.address="${STREAMLIT_SERVER_ADDRESS}" \
+    --server.port=8501 \
+    --server.address=0.0.0.0 \
     --server.headless=true \
     --server.enableCORS=false \
     --server.enableXsrfProtection=true \
