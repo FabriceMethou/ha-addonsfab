@@ -1,0 +1,13 @@
+name: "myfinanceapp"
+description: "Financial tracker and budget"
+version: "1.0.0"
+slug: "myfinanceapp"
+init: false
+arch:
+  - amd64
+
+startup: services
+ports:
+  80/tcp: 8501
+
+webui: "http://[HOST]:[PORT:80]"
