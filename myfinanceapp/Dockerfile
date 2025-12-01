@@ -9,19 +9,16 @@ RUN \
     apk add --no-cache \
         python3 \
         py3-pip \
-        git \
         curl
 
 # Set working directory
 WORKDIR /app
 
-# Clone the myfinanceapp repository
-RUN rm -rf * \
-    && git clone https://github.com/FabriceMethou/myfinanceapp.git . \
-    && rm -rf .git
+# Copy application files
+COPY app/ /app/
 
 # Install Python dependencies
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
 # Copy run script
 COPY run.sh /
