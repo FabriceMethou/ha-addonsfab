@@ -53,12 +53,16 @@ FROM $BUILD_FROM
 # Set shell
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-## ⚠️ OPTIMIZED & CORRECTED INSTALLATION ⚠️
-# The previous sections were redundant or inefficient. 
-# This combined step installs runtime dependencies,
-# THEN installs the build tools (build-base),
-# THEN installs the Python packages (which requires the build tools for scikit-learn),
-# and finally REMOVES the build tools to save space.
+## 1. SET UP CONTEXT 
+# Define the working directory.
+WORKDIR /app
+
+# Copy application files (including requirements.txt) FIRST.
+# This makes the /app/requirements.txt file available for the next step.
+COPY app/ /app/
+
+## 2. INSTALLATION, COMPILATION, AND CLEANUP
+# This step is now correct and optimized.
 RUN \
     # 1. Install core dependencies (python, pip, curl) and build tools (build-base)
     apk add --no-cache \
@@ -67,23 +71,18 @@ RUN \
         curl \
         build-base \
     \
-    # 2. Install Python dependencies using pip
+    # 2. Install Python dependencies using pip. /app/requirements.txt now exists.
     && pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt \
     \
     # 3. Remove build tools package to reduce final image size
     && apk del build-base
 
-# Set working directory
-WORKDIR /app
-
-# Copy application files (This should ideally happen before or alongside the install step for correct layering)
-COPY app/ /app/
-
+## 3. FINAL STEPS
 # Copy run script
 COPY run.sh /
 RUN chmod a+x /run.sh
 
-# Labels (Keep these as they are)
+# Labels (Rest of the file remains the same)
 LABEL \
     io.hass.name="Finance Tracker" \
     io.hass.description="Personal finance management with transaction tracking and reporting" \
