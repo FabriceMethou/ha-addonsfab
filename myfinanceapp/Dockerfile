@@ -79,6 +79,7 @@ RUN \
         # Numerical Libraries (Headers + Runtime):
         openblas \
         openblas-dev \
+        python3-dev \
     \
     # 2. Install Python dependencies (scikit-learn should now compile successfully)
     && pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt \
