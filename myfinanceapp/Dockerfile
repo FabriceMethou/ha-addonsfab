@@ -17,6 +17,11 @@ WORKDIR /app
 # Copy application files
 COPY app/ /app/
 
+# Existing step to install basic runtime dependencies
+RUN apk add --no-cache python3 py3-pip curl
+
+# NEW STEP: Install build tools needed for packages like scikit-learn
+RUN apk add --no-cache build-base
 # Install Python dependencies
 RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
 
