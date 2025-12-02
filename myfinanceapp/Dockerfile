@@ -61,22 +61,22 @@ WORKDIR /app
 # This makes the /app/requirements.txt file available for the next step.
 COPY app/ /app/
 
-## 2. INSTALLATION, COMPILATION, AND CLEANUP
-# This step is now correct and optimized.
+## 2. INSTALLATION, COMPILATION, AND CLEANUP (FINAL FIX)
 RUN \
-    # 1. Install core dependencies (python, pip, curl) and build tools (build-base)
+    # 1. Install core dependencies (python, pip, curl), build tools (build-base),
+    #    and numerical compilation dependencies (openblas-dev)
     apk add --no-cache \
         python3 \
         py3-pip \
         curl \
         build-base \
+        openblas-dev \
     \
-    # 2. Install Python dependencies using pip. /app/requirements.txt now exists.
+    # 2. Install Python dependencies. openblas-dev helps scikit-learn compile properly.
     && pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt \
     \
-    # 3. Remove build tools package to reduce final image size
-    && apk del build-base
-
+    # 3. Remove build tools package and development libraries to reduce final image size
+    && apk del build-base openblas-dev
 ## 3. FINAL STEPS
 # Copy run script
 COPY run.sh /
