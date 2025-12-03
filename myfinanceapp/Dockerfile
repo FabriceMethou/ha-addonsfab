@@ -86,7 +86,7 @@ RUN \
     \
     # 3. Clean up build/dev tools to reduce the final image size
     && apk del build-base gfortran openblas-dev
-    
+    -e '/^DB_HOST=/d' \
 # ... (rest of the Dockerfile remains the same)
 # Copy and set execution permissions for the run script
 COPY run.sh /run.sh
