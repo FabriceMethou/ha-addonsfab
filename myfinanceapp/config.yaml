@@ -1,6 +1,6 @@
 name: "myfinanceapp"
 description: "Financial tracker and budget"
-version: "1.0.0"
+version: "1.0.1"
 slug: "myfinanceapp"
 init: false
 arch:
@@ -8,6 +8,6 @@ arch:
 
 startup: services
 ports:
-  80/tcp: 8501
+  8501/tcp: 8501
 
 webui: "http://[HOST]:[PORT:80]"
