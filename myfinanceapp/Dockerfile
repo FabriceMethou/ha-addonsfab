@@ -86,7 +86,6 @@ RUN \
     \
     # 3. Clean up build/dev tools to reduce the final image size
     && apk del build-base gfortran openblas-dev
-    -e '/^DB_HOST=/d' \
 # ... (rest of the Dockerfile remains the same)
 # Copy and set execution permissions for the run script
 COPY run.sh /run.sh
@@ -101,7 +100,7 @@ LABEL \
     io.hass.description="Personal finance management with transaction tracking and reporting" \
     io.hass.arch="armhf|armv7|aarch64|amd64|i386" \
     io.hass.type="addon" \
-    io.hass.version="1.0.0" \
+    io.hass.version="1.0.2" \
     maintainer="Fabrice Methou" \
     org.opencontainers.image.title="Finance Tracker" \
     org.opencontainers.image.description="Personal finance management application" \
