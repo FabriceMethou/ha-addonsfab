@@ -4,6 +4,7 @@ import axios from 'axios';
 // Default to relative /api when running inside the add-on (nginx proxy),
 // but allow overriding for local dev via VITE_API_URL.
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
+const BASE_URL_HAS_API_SUFFIX = API_BASE_URL === '/api' || API_BASE_URL.endsWith('/api');
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -15,6 +16,16 @@ const api = axios.create({
 // Request interceptor to add auth token
 api.interceptors.request.use(
   (config) => {
+    // Avoid accidental double-prefixing when baseURL already includes `/api`
+    // and endpoints are defined as `/api/...` (e.g. `/api` + `/api/auth/token`).
+    if (
+      BASE_URL_HAS_API_SUFFIX &&
+      typeof config.url === 'string' &&
+      (config.url === '/api' || config.url.startsWith('/api/'))
+    ) {
+      config.url = config.url.slice('/api'.length) || '/';
+    }
+
     const token = localStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
