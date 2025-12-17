@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 
 # Base image for the final Home Assistant add-on (can be overridden by the build system)
-ARG BUILD_FROM="ghcr.io/home-assistant/amd64-base:3.19"
+ARG BUILD_FROM="ghcr.io/home-assistant/amd64-base:latest"
 
 #
 # Stage 1: Build the React frontend
@@ -41,6 +41,12 @@ RUN apk add --no-cache \
     supervisor \
     python3 \
     py3-pip \
+    py3-joblib \
+    py3-numpy \
+    py3-pandas \
+    py3-pillow \
+    py3-scikit-learn \
+    py3-scipy \
     libffi \
     openssl \
     openblas \
@@ -50,19 +56,17 @@ RUN apk add --no-cache \
 COPY app/backend/requirements.txt /tmp/requirements.txt
 RUN apk add --no-cache --virtual .build-deps \
         build-base \
-        gfortran \
-        openblas-dev \
         python3-dev \
         libffi-dev \
         openssl-dev \
-        cargo \
-    && PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install --no-cache-dir -r /tmp/requirements.txt \
+    && sed -E '/^(pandas|scikit-learn|joblib|pillow)==/d' /tmp/requirements.txt > /tmp/requirements.pip.txt \
+    && PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install --no-cache-dir -r /tmp/requirements.pip.txt \
     && apk del .build-deps
 
 # Application code
 COPY app/backend /app/backend
 COPY app/*.py /app/
-COPY app/data /app/data
+RUN mkdir -p /app/data
 
 # Frontend assets served by nginx
 COPY --from=frontend-builder /frontend/dist /usr/share/nginx/html
