@@ -1,110 +1,93 @@
-# ARG BUILD_FROM
-# FROM $BUILD_FROM
-
-# # Set shell
-# SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-# # Install requirements for add-on
-# RUN \
-#     apk add --no-cache \
-#         python3 \
-#         py3-pip \
-#         curl
-
-# # Set working directory
-# WORKDIR /app
-
-# # Copy application files
-# COPY app/ /app/
-
-# # Existing step to install basic runtime dependencies
-# RUN apk add --no-cache python3 py3-pip curl
-
-# # NEW STEP: Install build tools needed for packages like scikit-learn
-# RUN apk add --no-cache build-base
-# # Install Python dependencies
-# RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
-
-# # Copy run script
-# COPY run.sh /
-# RUN chmod a+x /run.sh
-
-# # Labels
-# LABEL \
-#     io.hass.name="Finance Tracker" \
-#     io.hass.description="Personal finance management with transaction tracking and reporting" \
-#     io.hass.arch="armhf|armv7|aarch64|amd64|i386" \
-#     io.hass.type="addon" \
-#     io.hass.version="1.0.0" \
-#     maintainer="Fabrice Methou" \
-#     org.opencontainers.image.title="Finance Tracker" \
-#     org.opencontainers.image.description="Personal finance management application" \
-#     org.opencontainers.image.vendor="Home Assistant Community Add-ons" \
-#     org.opencontainers.image.authors="Fabrice Methou" \
-#     org.opencontainers.image.licenses="MIT" \
-#     org.opencontainers.image.url="https://github.com/FabriceMethou/myfinanceapp" \
-#     org.opencontainers.image.source="https://github.com/FabriceMethou/myfinanceapp" \
-#     org.opencontainers.image.documentation="https://github.com/FabriceMethou/myfinanceapp/blob/main/README.md"
-
 # syntax=docker/dockerfile:1.4
-ARG BUILD_FROM="ghcr.io/home-assistant/amd64-base:latest"
-FROM $BUILD_FROM
 
-# Set shell (optional)
+# Base image for the final Home Assistant add-on (can be overridden by the build system)
+ARG BUILD_FROM="ghcr.io/home-assistant/amd64-base:3.19"
+
+#
+# Stage 1: Build the React frontend
+#
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /frontend
+
+# Install dependencies
+COPY frontend/package.json frontend/package-lock.json ./
+ARG VITE_API_URL=/api
+ENV VITE_API_URL=${VITE_API_URL}
+RUN npm ci
+
+# Build frontend assets
+COPY frontend/ ./
+RUN npm run build
+
+#
+# Stage 2: Home Assistant add-on image
+#
+FROM ${BUILD_FROM}
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Set the application's working directory
+ENV \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Copy the application code and requirements.txt
-COPY app/ /app/
+# Core packages for python, nginx, supervisor, and HA helpers
+RUN apk add --no-cache \
+    bash \
+    curl \
+    nginx \
+    supervisor \
+    python3 \
+    py3-pip \
+    libffi \
+    openssl \
+    openblas \
+    tzdata
 
-# The Critical Fix: Install all build tools, install Python dependencies, then clean up.
-# This ensures gfortran, the C/C++ compilers, and OpenBLAS headers are present 
-# for scikit-learn's internal C extension compilation.
-# ... (rest of the Dockerfile remains the same)
-
-# CRITICAL FIX: Comprehensive build dependencies for scikit-learn/scipy on Alpine.
-# This ensures all compilers (C/C++/Fortran) and optimized numerical libraries (OpenBLAS) 
-# are available during the pip installation.
-RUN \
-    # 1. Install core dependencies and critical build packages
-    apk add --no-cache \
-        python3 \
-        py3-pip \
-        curl \
-        # Compilers and base tools:
+# Python dependencies (use build deps only while installing)
+COPY app/backend/requirements.txt /tmp/requirements.txt
+RUN apk add --no-cache --virtual .build-deps \
         build-base \
         gfortran \
-        # Numerical Libraries (Headers + Runtime):
-        openblas \
         openblas-dev \
         python3-dev \
-    \
-    # 2. Install Python dependencies (scikit-learn should now compile successfully)
-    && pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt \
-    \
-    # 3. Clean up build/dev tools to reduce the final image size
-    && apk del build-base gfortran openblas-dev
-    -e '/^DB_HOST=/d' \
-# ... (rest of the Dockerfile remains the same)
-# Copy and set execution permissions for the run script
-COPY run.sh /run.sh
-RUN chmod a+x /run.sh
+        libffi-dev \
+        openssl-dev \
+        cargo \
+    && PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install --no-cache-dir -r /tmp/requirements.txt \
+    && apk del .build-deps
 
-# Set the primary command
+# Application code
+COPY app/backend /app/backend
+COPY app/*.py /app/
+COPY app/data /app/data
+
+# Frontend assets served by nginx
+COPY --from=frontend-builder /frontend/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/http.d/default.conf
+
+# Supervisor and startup script
+COPY supervisord.conf /etc/supervisord.conf
+COPY run.sh /run.sh
+
+RUN chmod a+x /run.sh \
+    && mkdir -p /run/nginx /var/log/supervisor /data/myfinanceapp/data
+
+EXPOSE 8501
+
 CMD [ "/run.sh" ]
 
-# Labels (Metadata for Home Assistant Add-on Store)
 LABEL \
     io.hass.name="Finance Tracker" \
     io.hass.description="Personal finance management with transaction tracking and reporting" \
     io.hass.arch="armhf|armv7|aarch64|amd64|i386" \
     io.hass.type="addon" \
-    io.hass.version="1.0.0" \
+    io.hass.version="2.0.0" \
     maintainer="Fabrice Methou" \
     org.opencontainers.image.title="Finance Tracker" \
-    org.opencontainers.image.description="Personal finance management application" \
+    org.opencontainers.image.description="Personal finance management application with React frontend and FastAPI backend" \
     org.opencontainers.image.vendor="Home Assistant Community Add-ons" \
     org.opencontainers.image.authors="Fabrice Methou" \
     org.opencontainers.image.licenses="MIT" \
