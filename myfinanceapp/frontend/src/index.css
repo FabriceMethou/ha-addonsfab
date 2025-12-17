@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* small helper for demo */
+.demo-row { display: flex; gap: 1rem; align-items: center; }
+
+/* Glassmorphism helpers */
+:root{
+  --glass-bg: rgba(255,255,255,0.04);
+  --glass-bg-2: rgba(255,255,255,0.03);
+  --glass-border: rgba(255,255,255,0.06);
+}
+
+body {
+  background: radial-gradient(1200px 600px at 10% 10%, rgba(59,130,246,0.06), transparent 12%),
+              radial-gradient(1000px 500px at 90% 90%, rgba(236,72,153,0.04), transparent 12%),
+              linear-gradient(180deg,#040617 0%, #071022 100%);
+  color: #e6eef8;
+}
+
+/* Reusable glass panel */
+.glass {
+  background: linear-gradient(135deg, var(--glass-bg), var(--glass-bg-2));
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 8px 30px rgba(2,6,23,0.6);
+}
+
+.glass-soft {
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.04);
+}
+
+/* small utility for muted text */
+.muted { color: #9fb0c8; }
+
+/* Animations */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in-up { animation: fadeInUp 380ms ease both; }
+
+
