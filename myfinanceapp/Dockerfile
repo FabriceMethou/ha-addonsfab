@@ -88,7 +88,7 @@ LABEL \
     io.hass.description="Personal finance management with transaction tracking and reporting" \
     io.hass.arch="armhf|armv7|aarch64|amd64|i386" \
     io.hass.type="addon" \
-    io.hass.version="2.0.0" \
+    io.hass.version="2.0.1" \
     maintainer="Fabrice Methou" \
     org.opencontainers.image.title="Finance Tracker" \
     org.opencontainers.image.description="Personal finance management application with React frontend and FastAPI backend" \
