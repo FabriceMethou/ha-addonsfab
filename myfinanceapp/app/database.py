@@ -302,6 +302,33 @@ class FinanceDatabase:
             )
         """)
 
+        # Currencies table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS currencies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                symbol TEXT,
+                exchange_rate_to_eur REAL NOT NULL DEFAULT 1.0,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Insert default currencies if table is empty
+        cursor.execute("SELECT COUNT(*) as count FROM currencies")
+        if cursor.fetchone()['count'] == 0:
+            default_currencies = [
+                ('EUR', 'Euro', '€', 1.0, 1),
+                ('SEK', 'Swedish Krona', 'kr', 0.088, 1),  # ~11.4 SEK = 1 EUR
+                ('DKK', 'Danish Krone', 'kr', 0.134, 1),  # ~7.5 DKK = 1 EUR
+            ]
+            cursor.executemany("""
+                INSERT INTO currencies (code, name, symbol, exchange_rate_to_eur, is_active)
+                VALUES (?, ?, ?, ?, ?)
+            """, default_currencies)
+
         # Accounts table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS accounts (
@@ -315,7 +342,8 @@ class FinanceDatabase:
                 balance REAL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (bank_id) REFERENCES banks(id),
-                FOREIGN KEY (owner_id) REFERENCES owners(id)
+                FOREIGN KEY (owner_id) REFERENCES owners(id),
+                FOREIGN KEY (currency) REFERENCES currencies(code)
             )
         """)
 
@@ -465,6 +493,7 @@ class FinanceDatabase:
                 start_date DATE NOT NULL,
                 linked_account_id INTEGER,
                 is_active BOOLEAN DEFAULT 1,
+                notes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (linked_account_id) REFERENCES accounts(id)
             )
@@ -502,23 +531,49 @@ class FinanceDatabase:
             )
         """)
 
+        # Securities master table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS securities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                investment_type TEXT NOT NULL CHECK(investment_type IN ('stock', 'etf', 'mutual_fund', 'bond', 'crypto')),
+                isin TEXT UNIQUE,
+                exchange TEXT,
+                currency TEXT NOT NULL,
+                sector TEXT,
+                country TEXT,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Investment holdings table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS investment_holdings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id INTEGER NOT NULL,
-                symbol TEXT NOT NULL,
-                name TEXT NOT NULL,
-                investment_type TEXT NOT NULL CHECK(investment_type IN ('stock', 'etf', 'mutual_fund', 'bond', 'crypto')),
+                security_id INTEGER NOT NULL,
+                quantity REAL DEFAULT 0,
+                average_cost REAL DEFAULT 0,
                 currency TEXT NOT NULL,
-                isin TEXT,
                 current_price REAL DEFAULT 0,
                 last_price_update TIMESTAMP,
+                notes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (account_id) REFERENCES accounts(id),
-                UNIQUE(account_id, symbol)
+                FOREIGN KEY (security_id) REFERENCES securities(id),
+                UNIQUE(account_id, security_id)
             )
         """)
+
+        # Migration: Add notes column to investment_holdings if it doesn't exist
+        cursor.execute("PRAGMA table_info(investment_holdings)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'notes' not in columns:
+            cursor.execute("ALTER TABLE investment_holdings ADD COLUMN notes TEXT")
+            logger.info("Added notes column to investment_holdings table")
 
         # Migration: Add linked_account_id column to accounts if it doesn't exist
         cursor.execute("PRAGMA table_info(accounts)")
@@ -550,6 +605,82 @@ class FinanceDatabase:
         if 'isin' not in columns:
             cursor.execute("ALTER TABLE investment_holdings ADD COLUMN isin TEXT")
             logger.info("Added ISIN column to investment_holdings table")
+
+        # Migration: Check if we need to migrate from old investment_holdings schema to new one with securities
+        cursor.execute("PRAGMA table_info(investment_holdings)")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        # If the table has 'symbol' and 'name' columns but no 'security_id', we need to migrate
+        if 'symbol' in columns and 'name' in columns and 'security_id' not in columns:
+            logger.info("Migrating investment_holdings to use securities table...")
+            
+            # Create a backup of the old table
+            cursor.execute("ALTER TABLE investment_holdings RENAME TO investment_holdings_old")
+            
+            # Create the new table structure
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS investment_holdings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL,
+                    security_id INTEGER NOT NULL,
+                    quantity REAL DEFAULT 0,
+                    average_cost REAL DEFAULT 0,
+                    currency TEXT NOT NULL,
+                    current_price REAL DEFAULT 0,
+                    last_price_update TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (account_id) REFERENCES accounts(id),
+                    FOREIGN KEY (security_id) REFERENCES securities(id),
+                    UNIQUE(account_id, security_id)
+                )
+            """)
+            
+            # Migrate data from old table to new structure
+            cursor.execute("SELECT * FROM investment_holdings_old")
+            old_holdings = cursor.fetchall()
+            
+            for holding in old_holdings:
+                # Create security entry
+                cursor.execute("""
+                    INSERT OR IGNORE INTO securities 
+                    (symbol, name, investment_type, isin, currency, notes)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    holding['symbol'],
+                    holding['name'],
+                    holding['investment_type'],
+                    holding['isin'] if 'isin' in holding.keys() else None,
+                    holding['currency'],
+                    ''
+                ))
+                
+                # Get the security ID
+                cursor.execute("SELECT id FROM securities WHERE symbol = ?", (holding['symbol'],))
+                security_row = cursor.fetchone()
+                security_id = security_row['id']
+                
+                # Insert into new holdings table
+                cursor.execute("""
+                    INSERT INTO investment_holdings 
+                    (id, account_id, security_id, quantity, average_cost, currency, current_price, last_price_update, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    holding['id'],
+                    holding['account_id'],
+                    security_id,
+                    0,  # quantity will be calculated from transactions
+                    0,  # average_cost will be calculated from transactions
+                    holding['currency'],
+                    holding['current_price'],
+                    holding['last_price_update'],
+                    holding['created_at']
+                ))
+            
+            # Drop the old table
+            cursor.execute("DROP TABLE investment_holdings_old")
+            
+            conn.commit()
+            logger.info("Successfully migrated investment_holdings to use securities table")
 
         # Investment transactions table
         cursor.execute("""
@@ -636,8 +767,9 @@ class FinanceDatabase:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_type ON budgets(type_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_active ON budgets(is_active)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_holdings_account ON investment_holdings(account_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_holdings_symbol ON investment_holdings(symbol)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_holdings_isin ON investment_holdings(isin)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_holdings_security ON investment_holdings(security_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_securities_symbol ON securities(symbol)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_securities_isin ON securities(isin)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_transactions_holding ON investment_transactions(holding_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_transactions_date ON investment_transactions(transaction_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_validations_account ON balance_validations(account_id)")
@@ -942,6 +1074,77 @@ class FinanceDatabase:
         conn.close()
         return success
 
+    # ==================== CURRENCIES ====================
+
+    def get_currencies(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        """Get all currencies, optionally filtered by active status."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if active_only:
+            cursor.execute("""
+                SELECT * FROM currencies
+                WHERE is_active = 1
+                ORDER BY code
+            """)
+        else:
+            cursor.execute("""
+                SELECT * FROM currencies
+                ORDER BY code
+            """)
+
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_currency(self, code: str) -> Optional[Dict[str, Any]]:
+        """Get a specific currency by code."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM currencies WHERE code = ?", (code,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def add_currency(self, currency_data: Dict[str, Any]) -> int:
+        """Add a new currency."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO currencies (code, name, symbol, exchange_rate_to_eur, is_active)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            currency_data['code'].upper(),
+            currency_data['name'],
+            currency_data.get('symbol', ''),
+            currency_data.get('exchange_rate_to_eur', 1.0),
+            currency_data.get('is_active', 1)
+        ))
+
+        currency_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        logger.info(f"Added currency: {currency_data['code']}")
+        return currency_id
+
+    def update_currency(self, code: str, **kwargs) -> bool:
+        """Update currency details."""
+        allowed_columns = {'name', 'symbol', 'exchange_rate_to_eur', 'is_active'}
+        return self._safe_update('currencies', code, kwargs, allowed_columns, id_column='code')
+
+    def delete_currency(self, code: str) -> bool:
+        """Delete a currency (soft delete by setting is_active = 0)."""
+        try:
+            return self.update_currency(code, is_active=0)
+        except Exception as e:
+            logger.error(f"Failed to delete currency {code}: {e}")
+            return False
+
+    def get_account_types(self) -> List[str]:
+        """Get list of valid account types."""
+        return ['cash', 'investment', 'savings', 'checking']
+
     # ==================== ACCOUNTS ====================
     
     def get_accounts(self, owner_id: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -970,6 +1173,23 @@ class FinanceDatabase:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    def get_account(self, account_id: int) -> Optional[Dict[str, Any]]:
+        """Get a single account by ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT a.*, b.name as bank_name, o.name as owner_name
+            FROM accounts a
+            LEFT JOIN banks b ON a.bank_id = b.id
+            JOIN owners o ON a.owner_id = o.id
+            WHERE a.id = ?
+        """, (account_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
 
     def add_account(self, account_data: Dict[str, Any]) -> int:
         """
@@ -1039,7 +1259,8 @@ class FinanceDatabase:
         # Whitelist of allowed columns to prevent SQL injection
         ALLOWED_COLUMNS = {
             'name', 'account_type', 'currency', 'bank_id',
-            'owner_id', 'opening_date', 'balance'
+            'owner_id', 'opening_date', 'balance', 'opening_balance',
+            'linked_account_id'
         }
 
         return self._safe_update('accounts', account_id, updates, ALLOWED_COLUMNS)
@@ -2060,15 +2281,19 @@ class FinanceDatabase:
             SELECT t.*,
                    tt.name as type_name, tt.category, tt.icon, tt.color,
                    ts.name as subtype_name,
-                   a.name as account_name,
+                   a.name as account_name, a.account_type, a.currency as account_currency,
                    b.name as bank_name,
-                   o.name as owner_name
+                   o.name as owner_name,
+                   ta.name as transfer_account_name, ta.account_type as transfer_account_type,
+                   tb.name as transfer_bank_name
             FROM transactions t
             JOIN transaction_types tt ON t.type_id = tt.id
             JOIN transaction_subtypes ts ON t.subtype_id = ts.id
             JOIN accounts a ON t.account_id = a.id
             LEFT JOIN banks b ON a.bank_id = b.id
             JOIN owners o ON a.owner_id = o.id
+            LEFT JOIN accounts ta ON t.transfer_account_id = ta.id
+            LEFT JOIN banks tb ON ta.bank_id = tb.id
             WHERE 1=1
         """
         params = []
@@ -2100,6 +2325,37 @@ class FinanceDatabase:
         conn.close()
 
         return [dict(row) for row in rows]
+
+    def get_transaction(self, transaction_id: int) -> Optional[Dict[str, Any]]:
+        """Get a single transaction by ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT t.*,
+                   tt.name as type_name, tt.category, tt.icon, tt.color,
+                   ts.name as subtype_name,
+                   a.name as account_name, a.account_type, a.currency as account_currency,
+                   b.name as bank_name,
+                   o.name as owner_name,
+                   ta.name as transfer_account_name, ta.account_type as transfer_account_type,
+                   tb.name as transfer_bank_name
+            FROM transactions t
+            JOIN transaction_types tt ON t.type_id = tt.id
+            JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+            JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN banks b ON a.bank_id = b.id
+            JOIN owners o ON a.owner_id = o.id
+            LEFT JOIN accounts ta ON t.transfer_account_id = ta.id
+            LEFT JOIN banks tb ON ta.bank_id = tb.id
+            WHERE t.id = ?
+        """
+
+        cursor.execute(query, (transaction_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        return dict(row) if row else None
 
     def update_transaction(self, transaction_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing transaction."""
@@ -2315,15 +2571,40 @@ class FinanceDatabase:
         """Delete an envelope (soft delete - mark as inactive)."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("UPDATE envelopes SET is_active = 0 WHERE id = ?", (envelope_id,))
         success = cursor.rowcount > 0
         conn.commit()
         conn.close()
-        
+
         if success:
             logger.info(f"Deleted (deactivated) envelope {envelope_id}")
         return success
+
+    def permanent_delete_envelope(self, envelope_id: int) -> bool:
+        """Permanently delete an envelope and all its transactions."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        try:
+            # Delete all envelope transactions first (foreign key constraint)
+            cursor.execute("DELETE FROM envelope_transactions WHERE envelope_id = ?", (envelope_id,))
+
+            # Delete the envelope
+            cursor.execute("DELETE FROM envelopes WHERE id = ?", (envelope_id,))
+            success = cursor.rowcount > 0
+
+            conn.commit()
+
+            if success:
+                logger.info(f"Permanently deleted envelope {envelope_id}")
+            return success
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Failed to permanently delete envelope {envelope_id}: {e}")
+            return False
+        finally:
+            conn.close()
 
     def add_envelope_transaction(self, envelope_transaction_data: Dict[str, Any]) -> int:
         """Add money to an envelope (allocation)."""
@@ -2941,6 +3222,23 @@ class FinanceDatabase:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    def get_debt(self, debt_id: int) -> Optional[Dict[str, Any]]:
+        """Get a specific debt by ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT d.*, a.name as account_name
+            FROM debts d
+            LEFT JOIN accounts a ON d.linked_account_id = a.id
+            WHERE d.id = ?
+        """, (debt_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        return dict(row) if row else None
 
     def add_debt(self, debt_data: Dict[str, Any]) -> int:
         """Add a new debt and create associated recurring transaction template.
@@ -3857,58 +4155,414 @@ class FinanceDatabase:
             'data': trend_data
         }
 
-    # ==================== INVESTMENTS ====================
 
-    def get_investment_holdings(self, account_id: int = None) -> List[Dict[str, Any]]:
-        """Get all investment holdings, optionally filtered by account."""
         conn = self._get_connection()
         cursor = conn.cursor()
         
+        query = "SELECT * FROM securities"
+        params = []
+        
+        if search:
+            query += " WHERE symbol LIKE ? OR name LIKE ? OR isin LIKE ?"
+            params = [f"%{search}%", f"%{search}%", f"%{search}%"]
+        
+        query += " ORDER BY symbol"
+        
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+        
+        cursor.execute(query, params)
+        securities = cursor.fetchall()
+        conn.close()
+        
+        return securities
+
+    def get_security(self, security_id: int) -> Dict[str, Any]:
+        """Get a single security by ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM securities WHERE id = ?", (security_id,))
+        security = cursor.fetchone()
+        conn.close()
+        
+        return security
+
+    def add_security(self, security_data: Dict[str, Any]) -> int:
+        """Add a new security to the master list."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        required_fields = ['symbol', 'name', 'investment_type', 'currency']
+        for field in required_fields:
+            if field not in security_data:
+                raise ValueError(f"Missing required field: {field}")
+        
+        cursor.execute("""
+            INSERT INTO securities 
+            (symbol, name, investment_type, isin, exchange, currency, sector, country, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            security_data['symbol'].upper(),
+            security_data['name'],
+            security_data['investment_type'],
+            security_data.get('isin'),
+            security_data.get('exchange'),
+            security_data['currency'],
+            security_data.get('sector'),
+            security_data.get('country'),
+            security_data.get('notes', '')
+        ))
+        
+        security_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Added security: {security_data['symbol']} - {security_data['name']}")
+        return security_id
+
+    def update_security(self, security_id: int, update_data: Dict[str, Any]) -> bool:
+        """Update security information."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        if not update_data:
+            return False
+        
+        set_clause = ", ".join([f"{key} = ?" for key in update_data.keys()])
+        values = list(update_data.values()) + [security_id]
+        
+        cursor.execute(f"UPDATE securities SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        
+        if success:
+            logger.info(f"Updated security {security_id}")
+        return success
+
+    def delete_security(self, security_id: int) -> bool:
+        """Delete a security from master list (only if not used by any holdings)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Check if security is used by any holdings
+        cursor.execute("SELECT COUNT(*) FROM investment_holdings WHERE security_id = ?", (security_id,))
+        count = cursor.fetchone()[0]
+        
+        if count > 0:
+            conn.close()
+            raise ValueError("Cannot delete security that is used by existing holdings")
+        
+        cursor.execute("DELETE FROM securities WHERE id = ?", (security_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        
+        if success:
+            logger.info(f"Deleted security {security_id}")
+        return success
+    # ==================== INVESTMENTS ====================
+
+
+    # Securities (master list of investment instruments)
+    def get_securities(self, search: str = None, limit: int = None) -> List[Dict[str, Any]]:
+        """Get securities from master list, optionally filtered by search term."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        query = "SELECT * FROM securities"
+        params = []
+        
+        if search:
+            query += " WHERE symbol LIKE ? OR name LIKE ? OR isin LIKE ?"
+            params = [f"%{search}%", f"%{search}%", f"%{search}%"]
+        
+        query += " ORDER BY symbol"
+        
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+        
+        cursor.execute(query, params)
+        securities = cursor.fetchall()
+        conn.close()
+        
+        return securities
+
+    def get_security(self, security_id: int) -> Dict[str, Any]:
+        """Get a single security by ID."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM securities WHERE id = ?", (security_id,))
+        security = cursor.fetchone()
+        conn.close()
+        
+        return security
+
+    def add_security(self, security_data: Dict[str, Any]) -> int:
+        """Add a new security to the master list."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        required_fields = ['symbol', 'name', 'investment_type', 'currency']
+        for field in required_fields:
+            if field not in security_data:
+                raise ValueError(f"Missing required field: {field}")
+        
+        cursor.execute("""
+            INSERT INTO securities 
+            (symbol, name, investment_type, isin, exchange, currency, sector, country, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            security_data['symbol'].upper(),
+            security_data['name'],
+            security_data['investment_type'],
+            security_data.get('isin'),
+            security_data.get('exchange'),
+            security_data['currency'],
+            security_data.get('sector'),
+            security_data.get('country'),
+            security_data.get('notes', '')
+        ))
+        
+        security_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Added security: {security_data['symbol']} - {security_data['name']}")
+        return security_id
+
+    def update_security(self, security_id: int, update_data: Dict[str, Any]) -> bool:
+        """Update security information."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        if not update_data:
+            return False
+        
+        set_clause = ", ".join([f"{key} = ?" for key in update_data.keys()])
+        values = list(update_data.values()) + [security_id]
+        
+        cursor.execute(f"UPDATE securities SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        
+        if success:
+            logger.info(f"Updated security {security_id}")
+        return success
+
+    def delete_security(self, security_id: int) -> bool:
+        """Delete a security from master list (only if not used by any holdings)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Check if security is used by any holdings
+        cursor.execute("SELECT COUNT(*) FROM investment_holdings WHERE security_id = ?", (security_id,))
+        count = cursor.fetchone()[0]
+        
+        if count > 0:
+            conn.close()
+            raise ValueError("Cannot delete security that is used by existing holdings")
+        
+        cursor.execute("DELETE FROM securities WHERE id = ?", (security_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        
+        if success:
+            logger.info(f"Deleted security {security_id}")
+        return success
+
+    def get_investment_holdings(self, account_id: int = None) -> List[Dict[str, Any]]:
+        """Get all investment holdings with calculated quantity and average cost from transactions."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
         if account_id:
             query = """
-                SELECT h.*, a.name as account_name, a.currency as account_currency
+                SELECT h.id as holding_id,
+                       h.account_id,
+                       h.security_id,
+                       h.quantity as calculated_quantity,
+                       h.average_cost as calculated_average_cost,
+                       h.currency as holding_currency,
+                       h.current_price,
+                       h.last_price_update,
+                       h.created_at as holding_created_at,
+                       s.symbol,
+                       s.name,
+                       s.investment_type,
+                       s.isin,
+                       s.exchange,
+                       s.currency as security_currency,
+                       s.sector,
+                       s.country,
+                       s.notes as security_notes,
+                       a.name as account_name,
+                       a.currency as account_currency,
+                       -- Prefer stored values, fall back to transaction calculations
+                       CASE
+                           WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
+                           ELSE COALESCE(
+                               SUM(CASE
+                                   WHEN t.transaction_type = 'buy' THEN t.shares
+                                   WHEN t.transaction_type = 'sell' THEN -t.shares
+                                   ELSE 0
+                               END), 0
+                           )
+                       END as quantity,
+                       CASE
+                           WHEN h.average_cost IS NOT NULL AND h.average_cost > 0 THEN h.average_cost
+                           WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
+                           THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END) /
+                                SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
+                           ELSE 0
+                       END as average_cost
                 FROM investment_holdings h
+                JOIN securities s ON h.security_id = s.id
                 JOIN accounts a ON h.account_id = a.id
+                LEFT JOIN investment_transactions t ON h.id = t.holding_id
                 WHERE h.account_id = ?
-                ORDER BY h.name
+                GROUP BY h.id
+                ORDER BY s.symbol
             """
             cursor.execute(query, (account_id,))
         else:
             query = """
-                SELECT h.*, a.name as account_name, a.currency as account_currency
+                SELECT h.id as holding_id,
+                       h.account_id,
+                       h.security_id,
+                       h.quantity as calculated_quantity,
+                       h.average_cost as calculated_average_cost,
+                       h.currency as holding_currency,
+                       h.current_price,
+                       h.last_price_update,
+                       h.created_at as holding_created_at,
+                       s.symbol,
+                       s.name,
+                       s.investment_type,
+                       s.isin,
+                       s.exchange,
+                       s.currency as security_currency,
+                       s.sector,
+                       s.country,
+                       s.notes as security_notes,
+                       a.name as account_name,
+                       a.currency as account_currency,
+                       -- Prefer stored values, fall back to transaction calculations
+                       CASE
+                           WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
+                           ELSE COALESCE(
+                               SUM(CASE
+                                   WHEN t.transaction_type = 'buy' THEN t.shares
+                                   WHEN t.transaction_type = 'sell' THEN -t.shares
+                                   ELSE 0
+                               END), 0
+                           )
+                       END as quantity,
+                       CASE
+                           WHEN h.average_cost IS NOT NULL AND h.average_cost > 0 THEN h.average_cost
+                           WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
+                           THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END) /
+                                SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
+                           ELSE 0
+                       END as average_cost
                 FROM investment_holdings h
+                JOIN securities s ON h.security_id = s.id
                 JOIN accounts a ON h.account_id = a.id
-                ORDER BY a.name, h.name
+                LEFT JOIN investment_transactions t ON h.id = t.holding_id
+                GROUP BY h.id
+                ORDER BY a.name, s.symbol
             """
             cursor.execute(query)
-        
+
         rows = cursor.fetchall()
         conn.close()
-        return [dict(row) for row in rows]
+        
+        # Process rows to merge calculated values with transaction-based values
+        holdings = []
+        for row in rows:
+            holding = dict(row)
+            # Use transaction-based values if available, otherwise use stored values
+            holding['quantity'] = holding['quantity'] or holding['calculated_quantity']
+            holding['average_cost'] = holding['average_cost'] or holding['calculated_average_cost']
+            
+            # Map holding_id to id for frontend compatibility
+            if 'holding_id' in holding:
+                holding['id'] = holding['holding_id']
+                del holding['holding_id']
+            
+            holdings.append(holding)
+        
+        return holdings
 
     def add_investment_holding(self, holding_data: Dict[str, Any]) -> int:
         """Add a new investment holding with optional ISIN."""
         conn = self._get_connection()
         cursor = conn.cursor()
 
+        # First, ensure the security exists in the securities table
+        security_id = None
+        
+        # If security_id is provided directly, use it
+        if 'security_id' in holding_data and holding_data['security_id']:
+            security_id = holding_data['security_id']
+        else:
+            # Otherwise, check if security already exists by symbol
+            cursor.execute("SELECT id FROM securities WHERE symbol = ?", (holding_data['symbol'].upper(),))
+            existing_security = cursor.fetchone()
+            
+            if existing_security:
+                security_id = existing_security['id']
+            else:
+                # Create new security
+                cursor.execute("""
+                    INSERT INTO securities 
+                    (symbol, name, investment_type, isin, currency, notes)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    holding_data['symbol'].upper(),
+                    holding_data['name'],
+                    holding_data['investment_type'],
+                    holding_data.get('isin', '').upper() if holding_data.get('isin') else None,
+                    holding_data['currency'],
+                    holding_data.get('notes', '')
+                ))
+                security_id = cursor.lastrowid
+
+        # Now create the holding
         cursor.execute("""
             INSERT INTO investment_holdings
-            (account_id, symbol, name, investment_type, currency, isin, current_price)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (account_id, security_id, currency, current_price)
+            VALUES (?, ?, ?, ?)
         """, (
             holding_data['account_id'],
-            holding_data['symbol'].upper(),
-            holding_data['name'],
-            holding_data['investment_type'],
+            security_id,
             holding_data['currency'],
-            holding_data.get('isin', '').upper() if holding_data.get('isin') else None,
             holding_data.get('current_price', 0)
         ))
 
         holding_id = cursor.lastrowid
         conn.commit()
+        
+        # Get symbol for logging if available
+        symbol_for_log = holding_data.get('symbol', 'Unknown')
+        if symbol_for_log == 'Unknown' and security_id:
+            # If we don't have symbol but have security_id, fetch it for logging
+            cursor_log = conn.cursor()
+            cursor_log.execute("SELECT symbol FROM securities WHERE id = ?", (security_id,))
+            security_row = cursor_log.fetchone()
+            if security_row:
+                symbol_for_log = security_row['symbol']
+        
+        logger.info(f"Added investment holding: {symbol_for_log} (ISIN: {holding_data.get('isin', 'N/A')})")
         conn.close()
-        logger.info(f"Added investment holding: {holding_data['symbol']} (ISIN: {holding_data.get('isin', 'N/A')})")
         return holding_id
 
     def update_investment_holding(self, holding_id: int, update_data: Dict[str, Any]) -> bool:
@@ -3916,25 +4570,67 @@ class FinanceDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        # Build update query dynamically based on provided fields
+        update_fields = []
+        update_values = []
+        
+        # Only update fields that are actually provided in update_data
+        if 'quantity' in update_data:
+            update_fields.append("quantity = ?")
+            update_values.append(update_data['quantity'])
+        
+        if 'purchase_price' in update_data:
+            update_fields.append("average_cost = ?")
+            update_values.append(update_data['purchase_price'])
+        
+        if 'account_id' in update_data:
+            update_fields.append("account_id = ?")
+            update_values.append(update_data['account_id'])
+        
+        if 'currency' in update_data:
+            update_fields.append("currency = ?")
+            update_values.append(update_data['currency'])
+        
+        if 'current_price' in update_data:
+            update_fields.append("current_price = ?")
+            update_values.append(update_data['current_price'])
+        
+        if 'notes' in update_data:
+            update_fields.append("notes = ?")
+            update_values.append(update_data['notes'])
+        
+        if not update_fields:
+            # No fields to update
+            conn.close()
+            return False
+        
+        update_values.append(holding_id)
+        
+        query = f"""
             UPDATE investment_holdings
-            SET symbol = ?, name = ?, investment_type = ?, currency = ?, isin = ?
+            SET {', '.join(update_fields)}
             WHERE id = ?
-        """, (
-            update_data['symbol'].upper(),
-            update_data['name'],
-            update_data['investment_type'],
-            update_data['currency'],
-            update_data.get('isin', '').upper() if update_data.get('isin') else None,
-            holding_id
-        ))
+        """
+        
+        cursor.execute(query, update_values)
 
         success = cursor.rowcount > 0
         conn.commit()
         conn.close()
 
         if success:
-            logger.info(f"Updated investment holding ID {holding_id}: {update_data['symbol']}")
+            # Build log message based on what was actually updated
+            updated_fields = []
+            if 'quantity' in update_data:
+                updated_fields.append(f"quantity={update_data['quantity']}")
+            if 'purchase_price' in update_data:
+                updated_fields.append(f"price={update_data['purchase_price']}")
+            if 'currency' in update_data:
+                updated_fields.append(f"currency={update_data['currency']}")
+            if 'notes' in update_data:
+                updated_fields.append("notes")
+            
+            logger.info(f"Updated investment holding ID {holding_id}: {', '.join(updated_fields)}")
 
         return success
 
@@ -3961,7 +4657,11 @@ class FinanceDatabase:
         cursor = conn.cursor()
 
         # Get holding info for logging
-        cursor.execute("SELECT symbol FROM investment_holdings WHERE id = ?", (holding_id,))
+        cursor.execute("""
+            SELECT s.symbol FROM investment_holdings h
+            JOIN securities s ON h.security_id = s.id
+            WHERE h.id = ?
+        """, (holding_id,))
         holding = cursor.fetchone()
 
         if not holding:
@@ -3997,8 +4697,12 @@ class FinanceDatabase:
         cursor = conn.cursor()
 
         # Get the holding's investment account_id
-        cursor.execute("SELECT account_id, symbol, name FROM investment_holdings WHERE id = ?",
-                      (trans_data['holding_id'],))
+        cursor.execute("""
+            SELECT h.account_id, s.symbol, s.name 
+            FROM investment_holdings h
+            JOIN securities s ON h.security_id = s.id
+            WHERE h.id = ?
+        """, (trans_data['holding_id'],))
         holding_result = cursor.fetchone()
         if not holding_result:
             conn.close()
@@ -4147,18 +4851,20 @@ class FinanceDatabase:
         
         if holding_id:
             query = """
-                SELECT it.*, h.symbol, h.name
+                SELECT it.*, s.symbol, s.name
                 FROM investment_transactions it
                 JOIN investment_holdings h ON it.holding_id = h.id
+                JOIN securities s ON h.security_id = s.id
                 WHERE it.holding_id = ?
                 ORDER BY it.transaction_date DESC
             """
             cursor.execute(query, (holding_id,))
         else:
             query = """
-                SELECT it.*, h.symbol, h.name
+                SELECT it.*, s.symbol, s.name
                 FROM investment_transactions it
                 JOIN investment_holdings h ON it.holding_id = h.id
+                JOIN securities s ON h.security_id = s.id
                 ORDER BY it.transaction_date DESC
             """
             cursor.execute(query)

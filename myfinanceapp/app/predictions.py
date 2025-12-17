@@ -3,9 +3,26 @@ Spending Predictions Module
 Analyzes historical data to predict future spending
 """
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import pandas as pd
 import numpy as np
+
+
+def convert_numpy_types(obj: Any) -> Any:
+    """Convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    return obj
 
 
 class SpendingPredictor:
@@ -22,8 +39,12 @@ class SpendingPredictor:
             budgets: Active budget limits for spending categories
         """
         self.df = pd.DataFrame(transactions) if transactions else pd.DataFrame()
-        if not self.df.empty and 'date' in self.df.columns:
-            self.df['date'] = pd.to_datetime(self.df['date'])
+        if not self.df.empty:
+            # Handle both 'date' and 'transaction_date' field names
+            if 'transaction_date' in self.df.columns:
+                self.df['date'] = pd.to_datetime(self.df['transaction_date'])
+            elif 'date' in self.df.columns:
+                self.df['date'] = pd.to_datetime(self.df['date'])
 
         self.pending = pending_transactions or []
         self.future_recurring = future_recurring or []
@@ -32,6 +53,10 @@ class SpendingPredictor:
     def predict_monthly_spending(self, months_ahead: int = 1) -> Dict:
         """Predict spending for upcoming months, including future recurring transactions."""
         if self.df.empty:
+            return {'predicted': 0, 'confidence': 0, 'base_prediction': 0, 'recurring_amount': 0, 'pending_amount': 0}
+
+        # Check if date column exists
+        if 'date' not in self.df.columns:
             return {'predicted': 0, 'confidence': 0, 'base_prediction': 0, 'recurring_amount': 0, 'pending_amount': 0}
 
         # Filter to expenses only
@@ -103,6 +128,10 @@ class SpendingPredictor:
         # Get budget comparison
         budget_info = self._compare_with_budgets(total_prediction)
 
+        # Convert history to dict and ensure all numpy types are converted
+        history_records = monthly[['month', 'amount']].to_dict('records') if len(monthly) >= 3 else monthly.to_dict('records')
+        history_records = convert_numpy_types(history_records)
+
         return {
             'predicted': float(total_prediction),
             'base_prediction': max(0, float(base_prediction)),
@@ -112,7 +141,7 @@ class SpendingPredictor:
             'trend': trend,
             'slope': float(slope),
             'method': method,
-            'history': monthly[['month', 'amount']].to_dict('records') if len(monthly) >= 3 else monthly.to_dict('records'),
+            'history': history_records,
             'budget_comparison': budget_info
         }
 
@@ -143,7 +172,7 @@ class SpendingPredictor:
         return {
             'has_budget': True,
             'total_budget': float(total_budget),
-            'over_budget': over_budget,
+            'over_budget': bool(over_budget),
             'difference': float(difference),
             'percentage': float(percentage),
             'status': 'over' if over_budget else 'under'
@@ -152,6 +181,10 @@ class SpendingPredictor:
     def predict_category_spending(self) -> List[Dict]:
         """Predict spending by category for next month."""
         if self.df.empty:
+            return []
+
+        # Check if date column exists
+        if 'date' not in self.df.columns:
             return []
 
         expenses = self.df[self.df['category'] == 'expense'].copy()
@@ -174,15 +207,19 @@ class SpendingPredictor:
                 'category': row['type_name'],
                 'predicted': float(row['mean']),
                 'std': float(row['std']) if pd.notna(row['std']) else 0,
-                'confidence': confidence,
+                'confidence': float(confidence),
                 'sample_size': int(row['count'])
             })
 
-        return sorted(predictions, key=lambda x: x['predicted'], reverse=True)
+        return convert_numpy_types(sorted(predictions, key=lambda x: x['predicted'], reverse=True))
 
     def detect_anomalies(self, threshold: float = 2.0) -> List[Dict]:
         """Detect unusual spending patterns."""
         if self.df.empty:
+            return []
+
+        # Check if date column exists
+        if 'date' not in self.df.columns:
             return []
 
         expenses = self.df[self.df['category'] == 'expense'].copy()
@@ -213,11 +250,15 @@ class SpendingPredictor:
                             'description': txn.get('description', '')
                         })
 
-        return sorted(anomalies, key=lambda x: x['deviation'], reverse=True)
+        return convert_numpy_types(sorted(anomalies, key=lambda x: x['deviation'], reverse=True))
 
     def get_spending_forecast(self, days: int = 30) -> pd.DataFrame:
         """Generate daily spending forecast."""
         if self.df.empty:
+            return pd.DataFrame()
+
+        # Check if date column exists
+        if 'date' not in self.df.columns:
             return pd.DataFrame()
 
         expenses = self.df[self.df['category'] == 'expense'].copy()
