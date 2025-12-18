@@ -169,9 +169,9 @@ export default function BudgetsPage() {
     return Math.min((spent / budget) * 100, 100);
   };
 
-  const getProgressVariant = (spent: number, budget: number): 'success' | 'warning' | 'destructive' => {
+  const getProgressVariant = (spent: number, budget: number): 'success' | 'warning' | 'error' => {
     const percentage = (spent / budget) * 100;
-    if (percentage >= 100) return 'destructive';
+    if (percentage >= 100) return 'error';
     if (percentage >= 80) return 'warning';
     return 'success';
   };

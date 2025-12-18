@@ -32,6 +32,8 @@ import {
   CheckCircle,
   AlertTriangle,
   LogOut,
+  Users,
+  Shield,
 } from 'lucide-react';
 import { authAPI, backupsAPI, currenciesAPI, transactionsAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -57,16 +59,43 @@ export default function SettingsPage() {
   const [currencyDialog, setCurrencyDialog] = useState(false);
   const [editingCurrency, setEditingCurrency] = useState<any>(null);
   const [deleteCurrencyConfirm, setDeleteCurrencyConfirm] = useState<any>(null);
+  const [userDialog, setUserDialog] = useState(false);
+  const [editUserDialog, setEditUserDialog] = useState(false);
+  const [newUserForm, setNewUserForm] = useState({
+    username: '',
+    email: '',
+    password: '',
+    is_admin: false,
+  });
+  const [editUserForm, setEditUserForm] = useState({
+    id: 0,
+    email: '',
+    is_admin: false,
+  });
+  const [deleteUserConfirm, setDeleteUserConfirm] = useState<any>(null);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
   // Fetch currencies
-  const { data: currenciesData, isLoading: currenciesLoading } = useQuery({
+  const { data: currenciesData = [], isLoading: currenciesLoading } = useQuery({
     queryKey: ['currencies'],
     queryFn: async () => {
       const response = await currenciesAPI.getAll(false); // Get all including inactive
-      return response.data.currencies;
+      return response.data.currencies || [];
     },
+    initialData: [],
+  });
+
+  // Fetch users (admin only)
+  const { data: usersData = [], isLoading: usersLoading } = useQuery({
+    queryKey: ['users'],
+    queryFn: async () => {
+      if (!user?.is_admin) return [];
+      const response = await authAPI.listUsers();
+      return response.data.users || [];
+    },
+    enabled: !!user?.is_admin,
+    initialData: [],
   });
 
   // Fetch categorizer status
@@ -165,6 +194,50 @@ export default function SettingsPage() {
     },
   });
 
+  // User mutations
+  const createUserMutation = useMutation({
+    mutationFn: (data: any) => authAPI.registerUser(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setSuccessMessage('User created successfully!');
+      setUserDialog(false);
+      setNewUserForm({ username: '', email: '', password: '', is_admin: false });
+      setTimeout(() => setSuccessMessage(''), 3000);
+    },
+    onError: (error: any) => {
+      setErrorMessage(error.response?.data?.detail || 'Failed to create user');
+      setTimeout(() => setErrorMessage(''), 3000);
+    },
+  });
+
+  const updateUserMutation = useMutation({
+    mutationFn: ({ userId, data }: any) => authAPI.updateUser(userId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setSuccessMessage('User updated successfully!');
+      setEditUserDialog(false);
+      setTimeout(() => setSuccessMessage(''), 3000);
+    },
+    onError: (error: any) => {
+      setErrorMessage(error.response?.data?.detail || 'Failed to update user');
+      setTimeout(() => setErrorMessage(''), 3000);
+    },
+  });
+
+  const deleteUserMutation = useMutation({
+    mutationFn: (userId: number) => authAPI.deleteUser(userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setSuccessMessage('User deleted successfully!');
+      setDeleteUserConfirm(null);
+      setTimeout(() => setSuccessMessage(''), 3000);
+    },
+    onError: (error: any) => {
+      setErrorMessage(error.response?.data?.detail || 'Failed to delete user');
+      setTimeout(() => setErrorMessage(''), 3000);
+    },
+  });
+
   const handlePasswordChange = () => {
     if (!passwordForm.oldPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
       setErrorMessage('All password fields are required');
@@ -257,6 +330,55 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSubmitUser = () => {
+    if (!newUserForm.username || !newUserForm.password) {
+      setErrorMessage('Username and Password are required');
+      setTimeout(() => setErrorMessage(''), 3000);
+      return;
+    }
+
+    if (newUserForm.password.length < 6) {
+      setErrorMessage('Password must be at least 6 characters');
+      setTimeout(() => setErrorMessage(''), 3000);
+      return;
+    }
+
+    // Email is optional, will use default if empty
+    const userData = {
+      username: newUserForm.username,
+      password: newUserForm.password,
+      is_admin: newUserForm.is_admin,
+      ...(newUserForm.email && { email: newUserForm.email })
+    };
+
+    createUserMutation.mutate(userData);
+  };
+
+  const handleEditUser = (userData: any) => {
+    setEditUserForm({
+      id: userData.id,
+      email: userData.email,
+      is_admin: userData.role === 'admin',
+    });
+    setEditUserDialog(true);
+  };
+
+  const handleSubmitUserUpdate = () => {
+    if (!editUserForm.email) {
+      setErrorMessage('Email is required');
+      setTimeout(() => setErrorMessage(''), 3000);
+      return;
+    }
+
+    updateUserMutation.mutate({
+      userId: editUserForm.id,
+      data: {
+        email: editUserForm.email,
+        is_admin: editUserForm.is_admin,
+      }
+    });
+  };
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-foreground">Settings</h1>
@@ -289,6 +411,106 @@ export default function SettingsPage() {
           </div>
         </div>
       </Card>
+
+      {/* User Management (Admin Only) */}
+      {user?.is_admin && (
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-primary" />
+              <h2 className="text-lg font-semibold text-foreground">User Management</h2>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                setNewUserForm({ username: '', email: '', password: '', is_admin: false });
+                setUserDialog(true);
+              }}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add User
+            </Button>
+          </div>
+          <div className="border-t border-border pt-4">
+            <p className="text-sm text-foreground-muted mb-4">
+              Manage user accounts and their roles
+            </p>
+
+            {usersLoading ? (
+              <div className="flex justify-center p-6">
+                <Spinner />
+              </div>
+            ) : (
+              <Card className="overflow-hidden border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Username</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead className="text-center">Status</TableHead>
+                      <TableHead className="text-center">MFA</TableHead>
+                      <TableHead>Last Login</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Array.isArray(usersData) && usersData.map((userData: any) => (
+                      <TableRow key={userData.id}>
+                        <TableCell className="font-semibold">{userData.username}</TableCell>
+                        <TableCell>{userData.email}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            {userData.role === 'admin' && <Shield className="w-3 h-3 text-primary" />}
+                            <span className={userData.role === 'admin' ? 'text-primary font-semibold' : ''}>
+                              {userData.role === 'admin' ? 'Administrator' : 'User'}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge variant={userData.is_active ? 'success' : 'outline'} size="sm">
+                            {userData.is_active ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge variant={userData.mfa_enabled ? 'success' : 'outline'} size="sm">
+                            {userData.mfa_enabled ? 'Enabled' : 'Disabled'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {userData.last_login
+                            ? new Date(userData.last_login).toLocaleString()
+                            : 'Never'}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleEditUser(userData)}
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setDeleteUserConfirm(userData)}
+                              disabled={userData.username === user?.username}
+                              className="text-error hover:text-error hover:bg-error/10"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Card>
+            )}
+          </div>
+        </Card>
+      )}
 
       {/* Change Password */}
       <Card className="p-6">
@@ -401,7 +623,7 @@ export default function SettingsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {currenciesData && currenciesData.map((currency: any) => (
+                  {Array.isArray(currenciesData) && currenciesData.map((currency: any) => (
                     <TableRow key={currency.code}>
                       <TableCell className="font-semibold">{currency.code}</TableCell>
                       <TableCell>{currency.name}</TableCell>
@@ -704,6 +926,151 @@ export default function SettingsPage() {
               disabled={deleteCurrencyMutation.isPending}
             >
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add User Dialog */}
+      <Dialog open={userDialog} onOpenChange={() => setUserDialog(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add New User</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-foreground mb-2 block">Username</label>
+              <Input
+                value={newUserForm.username}
+                onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value })}
+                placeholder="Enter username"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-foreground mb-2 block">Email</label>
+              <Input
+                type="email"
+                value={newUserForm.email}
+                onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                placeholder="user@example.com (optional)"
+              />
+              <p className="text-xs text-foreground-muted mt-1">Optional - defaults to username@local.app</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium text-foreground mb-2 block">Password</label>
+              <Input
+                type="password"
+                value={newUserForm.password}
+                onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                placeholder="Enter password (min 6 characters)"
+              />
+              <p className="text-xs text-foreground-muted mt-1">Minimum 6 characters</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="is_admin"
+                checked={newUserForm.is_admin}
+                onChange={(e) => setNewUserForm({ ...newUserForm, is_admin: e.target.checked })}
+                className="w-4 h-4"
+              />
+              <label htmlFor="is_admin" className="text-sm font-medium text-foreground cursor-pointer">
+                Administrator Role
+              </label>
+            </div>
+            <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
+              <p className="text-xs text-foreground">
+                <strong>Note:</strong> Administrators can manage users, currencies, and all application settings.
+                Regular users can only manage their own data and change their password.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUserDialog(false)}>Cancel</Button>
+            <Button
+              onClick={handleSubmitUser}
+              disabled={createUserMutation.isPending}
+            >
+              Create User
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit User Dialog */}
+      <Dialog open={editUserDialog} onOpenChange={() => setEditUserDialog(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit User</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-foreground mb-2 block">Email</label>
+              <Input
+                type="email"
+                value={editUserForm.email}
+                onChange={(e) => setEditUserForm({ ...editUserForm, email: e.target.value })}
+                placeholder="user@example.com"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="edit_is_admin"
+                checked={editUserForm.is_admin}
+                onChange={(e) => setEditUserForm({ ...editUserForm, is_admin: e.target.checked })}
+                className="w-4 h-4"
+              />
+              <label htmlFor="edit_is_admin" className="text-sm font-medium text-foreground cursor-pointer">
+                Administrator Role
+              </label>
+            </div>
+            <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
+              <p className="text-xs text-foreground">
+                <strong>Note:</strong> You cannot edit the username. To change passwords, users must use the "Change Password" section.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditUserDialog(false)}>Cancel</Button>
+            <Button
+              onClick={handleSubmitUserUpdate}
+              disabled={updateUserMutation.isPending}
+            >
+              Update User
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete User Confirmation Dialog */}
+      <Dialog open={!!deleteUserConfirm} onOpenChange={() => setDeleteUserConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete User</DialogTitle>
+          </DialogHeader>
+
+          <div className="p-4 rounded-lg bg-warning/10 border border-warning/20 mb-4">
+            <p className="text-foreground">
+              Are you sure you want to delete user <strong>{deleteUserConfirm?.username}</strong>?
+            </p>
+          </div>
+          <p className="text-sm text-foreground-muted">
+            This action cannot be undone. All user data and sessions will be permanently removed.
+          </p>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteUserConfirm(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteUserMutation.mutate(deleteUserConfirm.id)}
+              disabled={deleteUserMutation.isPending}
+            >
+              Delete User
             </Button>
           </DialogFooter>
         </DialogContent>

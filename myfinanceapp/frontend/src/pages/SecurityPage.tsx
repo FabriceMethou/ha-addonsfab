@@ -57,23 +57,25 @@ export default function SecurityPage() {
   const [, setDeleteUserConfirm] = useState<any>(null);
 
   // Fetch users (admin only)
-  const { data: usersData } = useQuery({
+  const { data: usersData = { users: [] } } = useQuery({
     queryKey: ['users'],
     queryFn: async () => {
       if (!user?.is_admin) return { users: [] };
       const response = await authAPI.listUsers();
-      return response.data;
+      return { users: response.data.users || [] };
     },
     enabled: !!user?.is_admin,
+    initialData: { users: [] },
   });
 
   // Fetch login history
-  const { data: loginHistoryData } = useQuery({
+  const { data: loginHistoryData = [] } = useQuery({
     queryKey: ['login-history'],
     queryFn: async () => {
       const response = await authAPI.getLoginHistory();
-      return response.data.history;
+      return response.data.history || [];
     },
+    initialData: [],
   });
 
   // MFA Setup Mutation
@@ -266,7 +268,7 @@ export default function SecurityPage() {
               View recent login attempts and activity for your account
             </p>
 
-            {loginHistoryData && loginHistoryData.length > 0 ? (
+            {Array.isArray(loginHistoryData) && loginHistoryData.length > 0 ? (
               <Card className="overflow-hidden border border-border">
                 <Table>
                   <TableHeader>
@@ -279,7 +281,7 @@ export default function SecurityPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {loginHistoryData.map((log: any, index: number) => (
+                    {Array.isArray(loginHistoryData) && loginHistoryData.map((log: any, index: number) => (
                       <TableRow key={index}>
                         <TableCell>
                           {format(new Date(log.timestamp), 'MMM dd, yyyy HH:mm:ss')}
@@ -332,7 +334,7 @@ export default function SecurityPage() {
                 Manage system users and their permissions
               </p>
 
-              {usersData && usersData.users.length > 0 ? (
+              {usersData && Array.isArray(usersData.users) && usersData.users.length > 0 ? (
                 <Card className="overflow-hidden border border-border">
                   <Table>
                     <TableHeader>
@@ -347,7 +349,7 @@ export default function SecurityPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {usersData.users.map((u: any) => (
+                      {Array.isArray(usersData.users) && usersData.users.map((u: any) => (
                         <TableRow key={u.id}>
                           <TableCell className="font-semibold">{u.username}</TableCell>
                           <TableCell>{u.email}</TableCell>

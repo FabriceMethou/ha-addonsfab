@@ -194,7 +194,7 @@ export default function InvestmentsPage() {
   });
 
   // Fetch investment accounts
-  const { data: investmentAccounts, error: accountsError, isLoading: accountsLoading } = useQuery<any, any>({
+  const { data: investmentAccounts, error: accountsError, isLoading: accountsLoading } = useQuery({
     queryKey: ['investment-accounts'],
     queryFn: async () => {
       try {
@@ -215,16 +215,15 @@ export default function InvestmentsPage() {
         );
         
         return investmentAccounts;
-      } catch (error: any) {
-        const err = error as any;
-        console.error('Detailed error in accounts query:', {
-          message: err?.message,
-          stack: err?.stack,
-          response: err?.response?.data,
-          status: err?.response?.status
-        });
-        throw err;
-      }
+	      } catch (error: any) {
+	        console.error('Detailed error in accounts query:', {
+	          message: error.message,
+	          stack: error.stack,
+	          response: error.response?.data,
+	          status: error.response?.status
+	        });
+	        throw error;
+	      }
     },
     retry: 3, // Retry failed requests up to 3 times
   });
@@ -306,11 +305,11 @@ export default function InvestmentsPage() {
       setHoldingDialog(false);
       resetHoldingForm();
     },
-    onError: (error: any) => {
-      console.error('Failed to create holding:', error);
-      alert(`Failed to create holding: ${error?.response?.data?.detail || error?.message || 'Unknown error'}`);
-    }
-  });
+	    onError: (error: any) => {
+	      console.error('Failed to create holding:', error);
+	      alert(`Failed to create holding: ${error.response?.data?.detail || error.message || 'Unknown error'}`);
+	    }
+	  });
 
   // Update holding mutation
   const updateHoldingMutation = useMutation({
@@ -330,11 +329,11 @@ export default function InvestmentsPage() {
         setEditingHolding(null);
       }, 300);
     },
-    onError: (error: any) => {
-      console.error('Failed to update holding:', error);
-      alert(`Failed to update holding: ${error?.response?.data?.detail || error?.message || 'Unknown error'}`);
-    }
-  });
+	    onError: (error: any) => {
+	      console.error('Failed to update holding:', error);
+	      alert(`Failed to update holding: ${error.response?.data?.detail || error.message || 'Unknown error'}`);
+	    }
+	  });
 
   // Delete holding mutation
   const deleteHoldingMutation = useMutation({
@@ -1215,7 +1214,7 @@ export default function InvestmentsPage() {
                      accountsError.message.includes('401') ? 'Authentication failed - please log in again' : 
                      accountsError.message || 'Unknown error'}
                   </p>
-                  <p className="text-xs mt-1">Error code: {accountsError.response?.status || 'N/A'}</p>
+                  <p className="text-xs mt-1">Error code: {(accountsError as any)?.response?.status || 'N/A'}</p>
                 </div>
               ) : (!investmentAccounts || investmentAccounts.length === 0) ? (
                 <p className="text-sm text-warning mt-2">
