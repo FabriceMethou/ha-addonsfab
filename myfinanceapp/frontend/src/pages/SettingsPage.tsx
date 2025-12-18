@@ -116,7 +116,23 @@ export default function SettingsPage() {
       setTimeout(() => setSuccessMessage(''), 3000);
     },
     onError: (error: any) => {
-      setErrorMessage(error.response?.data?.detail || 'Failed to change password');
+      console.error('Failed to change password:', error);
+      let errorMsg = 'Failed to change password';
+
+      // Handle Pydantic validation errors (422) which return an array
+      if (error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        if (Array.isArray(detail)) {
+          // Extract error messages from Pydantic validation errors
+          errorMsg = detail.map((err: any) => err.msg || err.message || 'Validation error').join(', ');
+        } else if (typeof detail === 'string') {
+          errorMsg = detail;
+        }
+      } else if (error.message) {
+        errorMsg = error.message;
+      }
+
+      setErrorMessage(errorMsg);
       setTimeout(() => setErrorMessage(''), 3000);
     },
   });
@@ -258,8 +274,8 @@ export default function SettingsPage() {
     }
 
     changePasswordMutation.mutate({
-      old_password: passwordForm.oldPassword,
-      new_password: passwordForm.newPassword,
+      oldPassword: passwordForm.oldPassword,
+      newPassword: passwordForm.newPassword,
     });
   };
 
