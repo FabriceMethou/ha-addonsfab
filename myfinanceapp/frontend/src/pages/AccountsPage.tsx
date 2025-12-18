@@ -115,6 +115,7 @@ export default function AccountsPage() {
   });
 
   const [accountForm, setAccountForm] = useState({
+    name: '',
     bank_id: '',
     owner_id: '',
     account_type: '',
@@ -165,6 +166,7 @@ export default function AccountsPage() {
 
   const resetAccountForm = () => {
     setAccountForm({
+      name: '',
       bank_id: '',
       owner_id: '',
       account_type: '',
@@ -179,6 +181,7 @@ export default function AccountsPage() {
   const handleEditAccount = (account: any) => {
     setEditingItem(account);
     setAccountForm({
+      name: account.name || '',
       bank_id: account.bank_id.toString(),
       owner_id: account.owner_id.toString(),
       account_type: account.account_type,
@@ -192,7 +195,9 @@ export default function AccountsPage() {
   };
 
   const handleSaveAccount = () => {
+    const name = accountForm.name.trim();
     const data: any = {
+      name,
       bank_id: parseInt(accountForm.bank_id),
       owner_id: parseInt(accountForm.owner_id),
       account_type: accountForm.account_type,
@@ -615,6 +620,14 @@ export default function AccountsPage() {
             <DialogTitle>{editingItem ? 'Edit Account' : 'Add Account'}</DialogTitle>
           </DialogHeader>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label>Account Name</Label>
+              <Input
+                value={accountForm.name}
+                onChange={(e) => setAccountForm({ ...accountForm, name: e.target.value })}
+                placeholder="e.g., Main Checking"
+              />
+            </div>
             <div className="sm:col-span-2 space-y-1.5">
               <Label>Bank</Label>
               <Select value={accountForm.bank_id} onValueChange={(value) => setAccountForm({ ...accountForm, bank_id: value })}>

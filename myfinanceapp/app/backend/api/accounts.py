@@ -20,6 +20,7 @@ db = FinanceDatabase(db_path=DB_PATH)
 
 # Pydantic models
 class AccountCreate(BaseModel):
+    name: Optional[str] = None
     bank_id: int
     owner_id: int
     account_type: str
@@ -30,6 +31,7 @@ class AccountCreate(BaseModel):
     linked_account_id: Optional[int] = None
 
 class AccountUpdate(BaseModel):
+    name: Optional[str] = None
     bank_id: Optional[int] = None
     owner_id: Optional[int] = None
     account_type: Optional[str] = None
@@ -80,7 +82,12 @@ async def create_account(
     current_user: User = Depends(get_current_user)
 ):
     """Create new account"""
+    account_name = (account.name or "").strip()
+    if not account_name:
+        account_name = f"{account.account_type.title()} Account"
+
     account_data = {
+        'name': account_name,
         'bank_id': account.bank_id,
         'owner_id': account.owner_id,
         'account_type': account.account_type,
@@ -118,6 +125,14 @@ async def update_account(
 
     # Update fields
     update_data = account.dict(exclude_unset=True)
+    if 'name' in update_data:
+        update_data['name'] = update_data['name'].strip() if update_data['name'] else ''
+        if not update_data['name']:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Account name cannot be empty"
+            )
+
     if update_data:
         success = db.update_account(account_id, update_data)
         if not success:

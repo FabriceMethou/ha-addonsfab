@@ -109,6 +109,40 @@ class SimpleCRUD:
             logger.error(f"Failed to add {self.table}: {e}")
             raise
 
+    def update(self, item_id: int, name: str) -> bool:
+        """
+        Update a record's name.
+
+        Args:
+            item_id: ID of the record to update
+            name: New name for the record
+
+        Returns:
+            True if updated successfully, False if not found
+
+        Raises:
+            DatabaseIntegrityError: If name already exists
+        """
+        try:
+            with self.db.db_connection(commit=True) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"UPDATE {self.table} SET name = ? WHERE id = ?",
+                    (name, item_id)
+                )
+                success = cursor.rowcount > 0
+                if success:
+                    logger.info(f"Updated {self.table} {item_id}: {name}")
+                else:
+                    logger.warning(f"{self.table.capitalize()} {item_id} not found")
+                return success
+        except DatabaseIntegrityError as e:
+            logger.error(f"{self.table.capitalize()} update failed - duplicate name: {name}")
+            raise DatabaseIntegrityError(f"{self.table.capitalize()} '{name}' already exists") from e
+        except DatabaseError as e:
+            logger.error(f"Failed to update {self.table} {item_id}: {e}")
+            raise
+
     def delete(self, item_id: int) -> bool:
         """
         Delete a record if not referenced by foreign keys.
@@ -978,6 +1012,10 @@ class FinanceDatabase:
         """Add a new bank."""
         return self._bank_crud.add(name)
 
+    def update_bank(self, bank_id: int, name: str) -> bool:
+        """Update a bank's name."""
+        return self._bank_crud.update(bank_id, name)
+
     def delete_bank(self, bank_id: int) -> bool:
         """Delete a bank if not used."""
         return self._bank_crud.delete(bank_id)
@@ -991,6 +1029,10 @@ class FinanceDatabase:
     def add_owner(self, name: str) -> int:
         """Add a new owner."""
         return self._owner_crud.add(name)
+
+    def update_owner(self, owner_id: int, name: str) -> bool:
+        """Update an owner's name."""
+        return self._owner_crud.update(owner_id, name)
 
     def delete_owner(self, owner_id: int) -> bool:
         """Delete an owner if not used."""
@@ -1201,7 +1243,12 @@ class FinanceDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        opening_balance = account_data.get('balance', 0)
+        account_name = (account_data.get('name') or '').strip()
+        if not account_name:
+            account_type_label = account_data.get('account_type', 'Account')
+            account_name = f"{account_type_label.title()} Account"
+
+        opening_balance = account_data.get('opening_balance', account_data.get('balance', 0))
         opening_date = account_data.get('opening_date')
 
         cursor.execute("""
@@ -1209,7 +1256,7 @@ class FinanceDatabase:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             account_data.get('bank_id'),
-            account_data['name'],
+            account_name,
             account_data['account_type'],
             account_data['currency'],
             account_data['owner_id'],
@@ -1238,7 +1285,7 @@ class FinanceDatabase:
             self.add_balance_validation(validation_data)
             logger.info(f"Created initial balance validation checkpoint for account {account_id}: {opening_balance}")
 
-        logger.info(f"Added account: {account_data['name']} with opening balance: {opening_balance}")
+        logger.info(f"Added account: {account_name} with opening balance: {opening_balance}")
         return account_id
 
     def update_account(self, account_id: int, updates: Dict[str, Any]) -> bool:
