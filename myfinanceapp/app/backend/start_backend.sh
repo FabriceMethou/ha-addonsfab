@@ -1,4 +1,8 @@
 #!/bin/bash
+# Simple script to start the FastAPI backend for local/dev use
+
+set -e
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATA_DIR="${PROJECT_ROOT}/data"
@@ -6,7 +10,7 @@ DATA_DIR="${PROJECT_ROOT}/data"
 echo "🚀 Starting Finance Tracker Backend..."
 echo ""
 
-# Ensure local data directory exists for dev runs
+# Ensure local data directory exists
 mkdir -p "$DATA_DIR"
 if [ ! -w "$DATA_DIR" ]; then
     echo "⚠️  Data directory is not writable: $DATA_DIR"

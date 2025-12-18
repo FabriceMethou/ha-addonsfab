@@ -25,7 +25,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token")
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/data/myfinanceapp/data/finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/finance.db")
 auth_mgr = AuthManager(db_path=DB_PATH)
 
 # Pydantic models
@@ -43,8 +43,13 @@ class User(BaseModel):
 
 class UserCreate(BaseModel):
     username: str
+    email: Optional[str] = None
     password: str
     is_admin: bool = False
+
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+    is_admin: Optional[bool] = None
 
 class PasswordChange(BaseModel):
     old_password: str
@@ -88,7 +93,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     if user_data is None:
         raise credentials_exception
 
-    return User(username=user_data["username"], is_admin=user_data.get("is_admin", False))
+    # Map role to is_admin boolean
+    is_admin = user_data.get("role") == "admin"
+    return User(username=user_data["username"], is_admin=is_admin)
 
 @router.post("/token", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
@@ -133,7 +140,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         "token_type": "bearer",
         "user": {
             "username": user_data["username"],
-            "is_admin": user_data.get("is_admin", False),
+            "is_admin": user_data.get("role") == "admin",
             "mfa_enabled": user_data.get("mfa_enabled", False)
         }
     }
@@ -176,7 +183,7 @@ async def verify_mfa(mfa_data: MFAVerify, token: str = Depends(oauth2_scheme)):
             "token_type": "bearer",
             "user": {
                 "username": user_data["username"],
-                "is_admin": user_data.get("is_admin", False),
+                "is_admin": user_data.get("role") == "admin",
                 "mfa_enabled": True
             }
         }
@@ -201,11 +208,12 @@ async def register_user(user_create: UserCreate, current_user: User = Depends(ge
         )
 
     # Create user
-    # Note: email defaults to username, role is 'admin' if is_admin is True
+    # Note: email defaults to username@local.app if not provided
     role = 'admin' if user_create.is_admin else 'user'
+    email = user_create.email if user_create.email else f"{user_create.username}@local.app"
     success, message = auth_mgr.create_user(
         username=user_create.username,
-        email=f"{user_create.username}@local",  # Default email
+        email=email,
         password=user_create.password,
         role=role,
         requires_password_change=False
@@ -348,3 +356,70 @@ async def get_login_history(
 
     history = auth_mgr.get_login_history(user_id=user_id, limit=limit)
     return {"history": history}
+
+@router.put("/users/{user_id}")
+async def update_user(
+    user_id: int,
+    user_update: UserUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update a user (admin only)"""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can update users"
+        )
+
+    # Prevent admin from removing their own admin privileges
+    user_data = auth_mgr.get_user_by_username(current_user.username)
+    if user_data and user_data['id'] == user_id and user_update.is_admin is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot remove your own admin privileges"
+        )
+
+    # Update the user
+    role = 'admin' if user_update.is_admin else 'user' if user_update.is_admin is not None else None
+    success, message = auth_mgr.update_user(
+        user_id=user_id,
+        email=user_update.email,
+        role=role
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=message
+        )
+
+    return {"message": "User updated successfully"}
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a user (admin only)"""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can delete users"
+        )
+
+    # Prevent admin from deleting themselves
+    user_data = auth_mgr.get_user_by_username(current_user.username)
+    if user_data and user_data['id'] == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete your own account"
+        )
+
+    # Delete the user
+    success = auth_mgr.delete_user(user_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    return {"message": "User deleted successfully"}
