@@ -30,8 +30,7 @@ echo "=================================="
 echo ""
 
 # Change to frontend directory
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+cd /home/fab/Documents/Development/myfinanceapp/frontend
 
 # Install dependencies if needed
 if [ ! -d "node_modules" ]; then
@@ -49,7 +48,7 @@ echo "=================================="
 echo "🚀 Starting React Frontend..."
 echo "=================================="
 echo ""
-echo "Frontend will start at: http://localhost:3000"
+echo "Frontend will start at: http://localhost:5173"
 echo "Make sure backend is running at: http://localhost:8000"
 echo ""
 echo "Press Ctrl+C to stop the server"
