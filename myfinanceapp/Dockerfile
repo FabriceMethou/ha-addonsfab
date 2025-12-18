@@ -12,7 +12,7 @@ WORKDIR /frontend
 
 # Install dependencies
 COPY frontend/package.json frontend/package-lock.json ./
-ARG VITE_API_URL=/api
+ARG VITE_API_URL
 ENV VITE_API_URL=${VITE_API_URL}
 RUN npm ci
 
@@ -89,7 +89,7 @@ LABEL \
     io.hass.description="Personal finance management with transaction tracking and reporting" \
     io.hass.arch="armhf|armv7|aarch64|amd64|i386" \
     io.hass.type="addon" \
-    io.hass.version="2.0.2" \
+    io.hass.version="2.0.3" \
     maintainer="Fabrice Methou" \
     org.opencontainers.image.title="Finance Tracker" \
     org.opencontainers.image.description="Personal finance management application with React frontend and FastAPI backend" \
