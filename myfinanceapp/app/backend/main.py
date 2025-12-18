@@ -3,7 +3,10 @@ FastAPI Backend for Finance Tracker
 Main application file with JWT authentication
 """
 import sys, os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import logging
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +22,8 @@ from backup_manager import BackupManager
 from alerts import AlertManager
 from categorizer import TransactionCategorizer
 from predictions import SpendingPredictor
+
+logger = logging.getLogger(__name__)
 
 # Import API routers
 from api import auth, accounts, transactions, categories, envelopes, recurring, debts, investments, reports, backups, settings, currencies, work_profiles, budgets, alerts
@@ -45,7 +50,8 @@ app.add_middleware(
 )
 
 # Initialize services
-DB_PATH = os.getenv("DATABASE_PATH", "/data/myfinanceapp/data/finance.db")
+DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 db = FinanceDatabase(db_path=DB_PATH)
 backup_mgr = BackupManager(db_path=DB_PATH)
 alert_manager = AlertManager()
@@ -97,9 +103,9 @@ async def startup_event():
     if backup_mgr.should_auto_backup():
         backup_result = backup_mgr.create_backup('auto', 'Daily automatic backup')
         if backup_result:
-            print(f"✅ Auto backup created: {backup_result['filename']}")
+            logger.info("Auto backup created: %s", backup_result["filename"])
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Run on application shutdown"""
-    print("Shutting down Finance Tracker API...")
+    logger.info("Shutting down Finance Tracker API...")

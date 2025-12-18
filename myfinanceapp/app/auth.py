@@ -272,6 +272,52 @@ class AuthManager:
         conn.close()
         return [dict(row) for row in results]
 
+    def update_user(self, user_id: int, email: str = None, role: str = None) -> Tuple[bool, str]:
+        """Update user email and/or role."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Build update query dynamically based on what's provided
+        updates = []
+        params = []
+
+        if email is not None:
+            if '@' not in email or '.' not in email:
+                return False, "Invalid email format"
+            updates.append("email = ?")
+            params.append(email.lower())
+
+        if role is not None:
+            if role not in ['admin', 'user']:
+                return False, "Invalid role. Must be 'admin' or 'user'"
+            updates.append("role = ?")
+            params.append(role)
+
+        if not updates:
+            return False, "No fields to update"
+
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(user_id)
+
+        try:
+            cursor.execute(f"""
+                UPDATE users
+                SET {', '.join(updates)}
+                WHERE id = ?
+            """, params)
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+
+            if affected > 0:
+                return True, "User updated successfully"
+            return False, "User not found"
+        except sqlite3.IntegrityError as e:
+            conn.close()
+            if 'email' in str(e):
+                return False, "Email already exists"
+            return False, f"Database error: {str(e)}"
+
     def delete_user(self, user_id: int) -> bool:
         """Delete a user account."""
         conn = self._get_connection()

@@ -14,7 +14,7 @@ from api.auth import get_current_user, User
 router = APIRouter()
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/data/myfinanceapp/data/finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/finance.db")
 db = FinanceDatabase(db_path=DB_PATH)
 
 class WorkProfileCreate(BaseModel):
