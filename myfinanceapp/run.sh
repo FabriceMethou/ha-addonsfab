@@ -41,7 +41,7 @@ fi
 # Set Environment Variables
 # =============================================================================
 export PYTHONPATH="/app"
-export DATABASE_PATH="/data/myfinanceapp/data/finance.db"
+export DATABASE_PATH="/app/data/finance.db"
 
 # Get JWT secret from options or use default (not recommended for production)
 if bashio::config.has_value 'jwt_secret'; then
