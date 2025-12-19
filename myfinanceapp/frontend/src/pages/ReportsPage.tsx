@@ -44,7 +44,7 @@ import {
   Landmark,
   Tag,
 } from 'lucide-react';
-import { reportsAPI, transactionsAPI } from '../services/api';
+import { reportsAPI, settingsAPI, transactionsAPI } from '../services/api';
 import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns';
 
 // Color palette for charts
@@ -86,6 +86,16 @@ export default function ReportsPage() {
   const [netWorthMonths, setNetWorthMonths] = useState('12');
   const [summaryYear, setSummaryYear] = useState(new Date().getFullYear().toString());
   const [summaryMonth, setSummaryMonth] = useState((new Date().getMonth() + 1).toString());
+
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const response = await settingsAPI.getAll();
+      return response.data.settings || {};
+    },
+  });
+
+  const displayCurrency = (settings as any)?.display_currency || 'EUR';
 
   // Handle date range selection
   const handleDateRangeChange = (range: string) => {
@@ -200,10 +210,11 @@ export default function ReportsPage() {
     enabled: currentTab === 'networth',
   });
 
-  const formatCurrency = (amount: number) => {
+  const formatCurrency = (amount: number, currency?: string) => {
+    const currencyToUse = currency || displayCurrency;
     return new Intl.NumberFormat('de-DE', {
       style: 'currency',
-      currency: 'EUR',
+      currency: currencyToUse,
     }).format(amount);
   };
 
@@ -220,7 +231,7 @@ export default function ReportsPage() {
   const spendingChartData =
     spendingData?.categories?.map((cat: any) => ({
       name: cat.category,
-      value: cat.amount,
+      value: cat.total ?? cat.amount,
     })) || [];
 
   // Prepare data for cash flow line chart

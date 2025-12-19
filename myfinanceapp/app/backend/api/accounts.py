@@ -292,14 +292,21 @@ async def delete_owner(
 
 @router.get("/summary/balances")
 async def get_account_balances_summary(current_user: User = Depends(get_current_user)):
-    """Get summary of account balances by owner"""
+    """Get summary of account balances by owner in user's preferred currency"""
+    # Get user's preferred display currency
+    display_currency = db.get_preference('display_currency', 'EUR')
+
     accounts = db.get_accounts()
     owners = db.get_owners()
 
     summary = []
     for owner in owners:
         owner_accounts = [a for a in accounts if a['owner_id'] == owner['id']]
-        total_balance = sum(a['balance'] for a in owner_accounts)
+        # Convert each account balance to display currency
+        total_balance = sum(
+            db.convert_currency(a['balance'], a.get('currency', 'EUR'), display_currency)
+            for a in owner_accounts
+        )
         summary.append({
             "owner_id": owner['id'],
             "owner_name": owner['name'],
@@ -308,7 +315,7 @@ async def get_account_balances_summary(current_user: User = Depends(get_current_
             "accounts": owner_accounts
         })
 
-    return {"summary": summary}
+    return {"summary": summary, "currency": display_currency}
 
 # Balance Validation endpoints
 @router.post("/validations/")

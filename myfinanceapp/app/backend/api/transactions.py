@@ -320,7 +320,10 @@ async def get_transaction_summary(
     account_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get transaction statistics summary"""
+    """Get transaction statistics summary in user's preferred currency"""
+    # Get user's preferred display currency
+    display_currency = db.get_preference('display_currency', 'EUR')
+
     filters = {}
     if account_id:
         filters['account_id'] = account_id
@@ -331,8 +334,15 @@ async def get_transaction_summary(
 
     transactions = db.get_transactions(filters=filters if filters else None)
 
-    total_income = sum(t['amount'] for t in transactions if t['amount'] > 0)
-    total_expense = sum(abs(t['amount']) for t in transactions if t['amount'] < 0)
+    # Convert all transaction amounts to display currency
+    total_income = sum(
+        db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
+        for t in transactions if t['amount'] > 0
+    )
+    total_expense = sum(
+        db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+        for t in transactions if t['amount'] < 0
+    )
     net_change = total_income - total_expense
 
     return {
@@ -341,7 +351,8 @@ async def get_transaction_summary(
         "total_expense": total_expense,
         "net_change": net_change,
         "start_date": start_date,
-        "end_date": end_date
+        "end_date": end_date,
+        "currency": display_currency
     }
 
 @router.post("/auto-categorize")

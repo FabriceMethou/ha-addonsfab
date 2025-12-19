@@ -90,13 +90,15 @@ export default function AccountsPage() {
     },
   });
 
-  const { data: summaryData } = useQuery({
+  const { data: summaryResponse } = useQuery({
     queryKey: ['accounts-summary'],
     queryFn: async () => {
       const response = await accountsAPI.getSummary();
-      return response.data.summary;
+      return response.data;
     },
   });
+  const summaryData = summaryResponse?.summary;
+  const summaryCurrency = summaryResponse?.currency || 'EUR';
 
   const { data: currenciesData } = useQuery({
     queryKey: ['currencies'],
@@ -405,7 +407,7 @@ export default function AccountsPage() {
               <User className="w-5 h-5 text-primary" />
               <span className="text-lg font-semibold text-foreground">{owner.owner_name}</span>
             </div>
-            <p className="text-2xl font-bold text-primary">{formatCurrency(owner.total_balance)}</p>
+            <p className="text-2xl font-bold text-primary">{formatCurrency(owner.total_balance, summaryCurrency)}</p>
             <p className="text-sm text-foreground-muted">{owner.account_count} accounts</p>
           </Card>
         ))}
@@ -452,6 +454,7 @@ export default function AccountsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Account</TableHead>
                   <TableHead>Bank</TableHead>
                   <TableHead>Owner</TableHead>
                   <TableHead>Type</TableHead>
@@ -464,6 +467,7 @@ export default function AccountsPage() {
               <TableBody>
                 {accountsData?.map((account: any) => (
                   <TableRow key={account.id}>
+                    <TableCell className="font-medium">{account.name || '-'}</TableCell>
                     <TableCell>{account.bank_name}</TableCell>
                     <TableCell>{account.owner_name}</TableCell>
                     <TableCell>
@@ -710,7 +714,7 @@ export default function AccountsPage() {
                   <SelectItem value="">None</SelectItem>
                   {accountsData?.filter((a: any) => a.account_type !== 'investment' && a.id !== editingItem?.id).map((account: any) => (
                     <SelectItem key={account.id} value={account.id.toString()}>
-                      {account.bank_name} - {account.account_type} ({account.currency})
+                      {account.name || `${account.bank_name} - ${account.account_type}`} ({account.currency})
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -825,7 +829,9 @@ export default function AccountsPage() {
       <Dialog open={validationDialog} onOpenChange={setValidationDialog}>
         <DialogContent size="lg">
           <DialogHeader>
-            <DialogTitle>Validate Account Balance: {validatingAccount?.bank_name} - {validatingAccount?.account_type}</DialogTitle>
+            <DialogTitle>
+              Validate Account Balance: {validatingAccount?.name ? `${validatingAccount.name} (${validatingAccount.bank_name})` : `${validatingAccount?.bank_name} - ${validatingAccount?.account_type}`}
+            </DialogTitle>
           </DialogHeader>
           <div className="py-4 space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
