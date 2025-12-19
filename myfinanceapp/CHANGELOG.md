@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.7
+
+- Backup importation and downloads option
+
 ## 2.0.6
 
 - Add a display-currency preference and apply it across dashboard, reports, and account summaries.

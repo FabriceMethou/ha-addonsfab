@@ -37,6 +37,8 @@ import {
   Sparkles,
   AlertTriangle,
   CheckCircle,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { backupsAPI } from '../services/api';
 import { format } from 'date-fns';
@@ -46,6 +48,7 @@ export default function BackupPage() {
   const [description, setDescription] = useState('');
   const [restoreConfirm, setRestoreConfirm] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [backupSettings, setBackupSettings] = useState({
     auto_backup_enabled: true,
     retention_days: 30,
@@ -70,6 +73,20 @@ export default function BackupPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['backups'] });
       setDescription('');
+    },
+  });
+
+  // Upload backup mutation
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => backupsAPI.upload(file),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['backups'] });
+      setSelectedFile(null);
+    },
+    onError: (error: any) => {
+      console.error('Failed to upload backup:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      alert(`Failed to upload backup: ${errorMessage}`);
     },
   });
 
@@ -128,6 +145,25 @@ export default function BackupPage() {
     });
   };
 
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      // Validate file extension
+      if (file.name.endsWith('.db') || file.name.endsWith('.db.gz')) {
+        setSelectedFile(file);
+      } else {
+        alert('Invalid file type. Please select a .db or .db.gz file.');
+        event.target.value = '';
+      }
+    }
+  };
+
+  const handleUploadBackup = () => {
+    if (selectedFile) {
+      uploadMutation.mutate(selectedFile);
+    }
+  };
+
   const formatDate = (dateString: string) => {
     try {
       return format(new Date(dateString), 'MMM dd, yyyy HH:mm:ss');
@@ -140,6 +176,33 @@ export default function BackupPage() {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const handleDownloadBackup = async (backup: any) => {
+    try {
+      const response = await backupsAPI.download(backup.id);
+
+      // Create a blob from the response data
+      const blob = new Blob([response.data], { type: 'application/octet-stream' });
+
+      // Create a temporary URL for the blob
+      const url = window.URL.createObjectURL(blob);
+
+      // Create a temporary anchor element and trigger download
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `backup_${backup.id}_${formatDate(backup.timestamp).replace(/[,:]/g, '-')}.db${backup.compressed ? '.gz' : ''}`;
+      document.body.appendChild(link);
+      link.click();
+
+      // Clean up
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      console.error('Failed to download backup:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      alert(`Failed to download backup: ${errorMessage}`);
+    }
   };
 
   if (isLoading) {
@@ -228,6 +291,55 @@ export default function BackupPage() {
               </div>
             )}
           </Card>
+
+          <Card className="p-6 mt-6">
+            <h2 className="text-lg font-semibold text-foreground mb-2">Import Backup</h2>
+            <p className="text-sm text-foreground-muted mb-6">
+              Upload an existing backup file (.db or .db.gz) to import it into your backup list.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-2">
+                <label className="text-sm font-medium text-foreground mb-2 block">
+                  Select Backup File
+                </label>
+                <input
+                  type="file"
+                  accept=".db,.db.gz"
+                  onChange={handleFileSelect}
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 cursor-pointer"
+                />
+                {selectedFile && (
+                  <p className="text-sm text-foreground-muted mt-2">
+                    Selected: {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
+                  </p>
+                )}
+              </div>
+              <div className="flex items-start">
+                <Button
+                  onClick={handleUploadBackup}
+                  disabled={!selectedFile || uploadMutation.isPending}
+                  className="w-full"
+                  size="lg"
+                >
+                  <Upload className="w-4 h-4 mr-2" />
+                  {uploadMutation.isPending ? 'Uploading...' : 'Import Backup'}
+                </Button>
+              </div>
+            </div>
+
+            {uploadMutation.isSuccess && (
+              <div className="mt-4 p-4 rounded-lg bg-success/10 border border-success/20">
+                <div className="flex items-center gap-2 text-success">
+                  <CheckCircle className="w-5 h-5" />
+                  <span className="font-semibold">Backup Imported Successfully!</span>
+                </div>
+                <p className="text-sm text-foreground-muted mt-1">
+                  Your backup has been imported and is available in the Backup History tab.
+                </p>
+              </div>
+            )}
+          </Card>
         </TabsContent>
 
         {/* Restore Tab */}
@@ -275,14 +387,24 @@ export default function BackupPage() {
                           </span>
                         </TableCell>
                         <TableCell className="text-center">
-                          <Button
-                            size="sm"
-                            variant="warning"
-                            onClick={() => setRestoreConfirm(backup)}
-                          >
-                            <RotateCcw className="w-4 h-4 mr-1" />
-                            Restore
-                          </Button>
+                          <div className="flex items-center justify-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleDownloadBackup(backup)}
+                            >
+                              <Download className="w-4 h-4 mr-1" />
+                              Download
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="warning"
+                              onClick={() => setRestoreConfirm(backup)}
+                            >
+                              <RotateCcw className="w-4 h-4 mr-1" />
+                              Restore
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -348,14 +470,24 @@ export default function BackupPage() {
                           </span>
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setDeleteConfirm(backup)}
-                            className="text-error hover:text-error hover:bg-error/10"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleDownloadBackup(backup)}
+                              className="text-primary hover:text-primary hover:bg-primary/10"
+                            >
+                              <Download className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setDeleteConfirm(backup)}
+                              className="text-error hover:text-error hover:bg-error/10"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}

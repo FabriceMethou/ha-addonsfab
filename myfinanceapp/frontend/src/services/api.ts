@@ -213,6 +213,14 @@ export const backupsAPI = {
   create: (data: any) => api.post('/api/backups/', data),
   restore: (id: string) => api.post(`/api/backups/${id}/restore`),
   delete: (id: string) => api.delete(`/api/backups/${id}`),
+  download: (id: string) => api.get(`/api/backups/${id}/download`, { responseType: 'blob' }),
+  upload: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/api/backups/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
   getSettings: () => api.get('/api/backups/settings'),
   updateSettings: (data: any) => api.put('/api/backups/settings', data),
   cleanup: () => api.post('/api/backups/cleanup'),
