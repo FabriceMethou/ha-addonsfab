@@ -21,20 +21,28 @@ class SettingUpdate(BaseModel):
 
 @router.get("/")
 async def get_all_settings(current_user: User = Depends(get_current_user)):
-    """Get all user settings"""
-    settings = db.get_all_settings()
-    return {"settings": settings}
+    """Get all user settings - currently returns common settings"""
+    # Return common settings with their current values
+    display_currency = db.get_preference('display_currency', 'EUR')
+    return {
+        "settings": {
+            "display_currency": display_currency
+        }
+    }
 
 @router.get("/{key}")
 async def get_setting(key: str, current_user: User = Depends(get_current_user)):
     """Get specific setting"""
-    value = db.get_setting(key)
+    value = db.get_preference(key, "")
     return {"key": key, "value": value}
 
 @router.put("/{key}")
 async def update_setting(key: str, setting: SettingUpdate, current_user: User = Depends(get_current_user)):
     """Update setting"""
-    success = db.set_setting(key, setting.value)
-    if not success:
-        raise HTTPException(status_code=400, detail="Failed to update setting")
-    return {"message": "Setting updated", "key": key, "value": setting.value}
+    try:
+        # Convert value to string for storage
+        value_str = str(setting.value) if setting.value is not None else ""
+        db.set_preference(key, value_str)
+        return {"message": "Setting updated", "key": key, "value": setting.value}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to update setting: {str(e)}")

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.6
+
+- Add a display-currency preference and apply it across dashboard, reports, and account summaries.
+- Convert account summaries, transaction summaries, and key reports to the preferred display currency using the currencies table rates.
+- Keep spending-by-category payloads backward compatible and restore the add-on DB path default.
+- Show account names in the accounts list, selector, and balance validation dialog.
+
 ## 2.0.5
 
 - Sync frontend with latest app changes: drop unused MUI theme/dependencies and rely on the shadcn/Tailwind stack.

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { accountsAPI, transactionsAPI, reportsAPI, budgetsAPI, envelopesAPI } from '../services/api';
+import { accountsAPI, transactionsAPI, reportsAPI, budgetsAPI, envelopesAPI, settingsAPI } from '../services/api';
 import { format } from 'date-fns';
 import { Card, Badge, Progress, Spinner, Button } from '../components/shadcn';
 import {
@@ -41,6 +41,17 @@ function MetricCard({ title, value, icon, iconBgClass }: MetricCardProps) {
 }
 
 export default function DashboardPage() {
+  // Fetch user settings to get display currency
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const response = await settingsAPI.getAll();
+      return response.data.settings || {};
+    },
+  });
+
+  const displayCurrency = settings?.display_currency || 'EUR';
+
   const { data: accountsSummary, isLoading: accountsLoading } = useQuery({
     queryKey: ['accounts-summary'],
     queryFn: async () => {
@@ -125,10 +136,11 @@ export default function DashboardPage() {
     },
   });
 
-  const formatCurrency = (amount: number) => {
+  const formatCurrency = (amount: number, currency?: string) => {
+    const currencyToUse = currency || displayCurrency;
     return new Intl.NumberFormat('de-DE', {
       style: 'currency',
-      currency: 'EUR',
+      currency: currencyToUse,
     }).format(amount);
   };
 

@@ -1,5 +1,5 @@
 // Settings Page - User Preferences and Account Management
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Card,
@@ -35,7 +35,7 @@ import {
   Users,
   Shield,
 } from 'lucide-react';
-import { authAPI, backupsAPI, currenciesAPI, transactionsAPI } from '../services/api';
+import { authAPI, backupsAPI, currenciesAPI, transactionsAPI, settingsAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function SettingsPage() {
@@ -75,6 +75,23 @@ export default function SettingsPage() {
   const [deleteUserConfirm, setDeleteUserConfirm] = useState<any>(null);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [displayCurrency, setDisplayCurrency] = useState('EUR');
+
+  // Fetch settings
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const response = await settingsAPI.getAll();
+      return response.data.settings || {};
+    },
+  });
+
+  // Update display currency when settings change
+  useEffect(() => {
+    if (settings && (settings as any).display_currency) {
+      setDisplayCurrency((settings as any).display_currency);
+    }
+  }, [settings]);
 
   // Fetch currencies
   const { data: currenciesData = [], isLoading: currenciesLoading } = useQuery({
@@ -104,6 +121,20 @@ export default function SettingsPage() {
     queryFn: async () => {
       const response = await transactionsAPI.getCategorizerStatus();
       return response.data;
+    },
+  });
+
+  // Update display currency mutation
+  const updateDisplayCurrencyMutation = useMutation({
+    mutationFn: (currency: string) => settingsAPI.update('display_currency', currency),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      setSuccessMessage('Display currency updated successfully!');
+      setTimeout(() => setSuccessMessage(''), 3000);
+    },
+    onError: (error: any) => {
+      setErrorMessage(error.response?.data?.detail || 'Failed to update display currency');
+      setTimeout(() => setErrorMessage(''), 3000);
     },
   });
 
@@ -423,6 +454,47 @@ export default function SettingsPage() {
             <div>
               <p className="text-sm text-foreground-muted">Role</p>
               <p className="font-semibold text-foreground">{user?.is_admin ? 'Administrator' : 'User'}</p>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Display Currency Preference */}
+      <Card className="p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Euro className="w-5 h-5 text-primary" />
+          <h2 className="text-lg font-semibold text-foreground">Display Currency</h2>
+        </div>
+        <div className="border-t border-border pt-4">
+          <p className="text-sm text-foreground-muted mb-4">
+            Select the currency to use for displaying all amounts in the dashboard and reports.
+            All amounts will be automatically converted from their original currency to your selected display currency.
+          </p>
+          <div className="flex items-center gap-4">
+            <div className="flex-1">
+              <label className="text-sm font-medium text-foreground mb-2 block">Display Currency</label>
+              <select
+                value={displayCurrency}
+                onChange={(e) => setDisplayCurrency(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {currenciesData
+                  .filter((c: any) => c.is_active)
+                  .map((currency: any) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.code} - {currency.name} {currency.symbol ? `(${currency.symbol})` : ''}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div className="pt-7">
+              <Button
+                onClick={() => updateDisplayCurrencyMutation.mutate(displayCurrency)}
+                disabled={updateDisplayCurrencyMutation.isPending || displayCurrency === (settings as any)?.display_currency}
+              >
+                <Save className="w-4 h-4 mr-2" />
+                {updateDisplayCurrencyMutation.isPending ? 'Saving...' : 'Save'}
+              </Button>
             </div>
           </div>
         </div>

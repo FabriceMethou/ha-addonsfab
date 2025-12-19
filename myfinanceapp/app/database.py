@@ -968,39 +968,41 @@ class FinanceDatabase:
             raise
 
     def convert_currency(self, amount: float, from_currency: str, to_currency: str) -> float:
-        """Convert amount from one currency to another using stored exchange rates."""
+        """Convert amount from one currency to another using stored exchange rates from currencies table."""
         if from_currency == to_currency:
             return amount
 
-        # Get exchange rates (relative to EUR = 1.0)
-        rates_json = self.get_preference('exchange_rates', '{}')
         try:
-            stored_rates = json.loads(rates_json)
-        except:
-            stored_rates = {}
+            with self.db_connection(commit=False) as conn:
+                cursor = conn.cursor()
 
-        # Default rates
-        default_rates = {
-            'EUR': 1.0,
-            'DKK': 7.45,
-            'SEK': 11.50,
-            'USD': 1.10,
-            'GBP': 0.85,
-            'CHF': 0.95
-        }
+                # Get exchange rate for from_currency
+                cursor.execute(
+                    "SELECT exchange_rate_to_eur FROM currencies WHERE code = ? AND is_active = 1",
+                    (from_currency,)
+                )
+                from_result = cursor.fetchone()
+                from_rate = from_result['exchange_rate_to_eur'] if from_result else 1.0
 
-        # Merge with stored rates
-        rates = {**default_rates, **stored_rates}
+                # Get exchange rate for to_currency
+                cursor.execute(
+                    "SELECT exchange_rate_to_eur FROM currencies WHERE code = ? AND is_active = 1",
+                    (to_currency,)
+                )
+                to_result = cursor.fetchone()
+                to_rate = to_result['exchange_rate_to_eur'] if to_result else 1.0
 
-        # Get rates for both currencies (default to 1.0 if not found)
-        from_rate = float(rates.get(from_currency, 1.0))
-        to_rate = float(rates.get(to_currency, 1.0))
+            # Convert: amount -> EUR -> target currency
+            # If rate is 0.134, it means 1 currency_unit = 0.134 EUR
+            # So to convert to EUR: amount * rate
+            # And from EUR to target: amount_in_eur / target_rate
+            amount_in_eur = amount * from_rate
+            amount_in_target = amount_in_eur / to_rate
 
-        # Convert: amount -> EUR -> target currency
-        amount_in_eur = amount / from_rate
-        amount_in_target = amount_in_eur * to_rate
-
-        return amount_in_target
+            return amount_in_target
+        except Exception as e:
+            logger.error(f"Failed to convert currency from {from_currency} to {to_currency}: {e}")
+            return amount  # Return original amount if conversion fails
 
     # ==================== BANKS ====================
 

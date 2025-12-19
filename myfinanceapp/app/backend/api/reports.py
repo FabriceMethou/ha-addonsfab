@@ -20,19 +20,32 @@ db = FinanceDatabase(db_path=DB_PATH)
 
 @router.get("/net-worth")
 async def net_worth(current_user: User = Depends(get_current_user)):
-    """Calculate total net worth"""
+    """Calculate total net worth in user's preferred currency"""
+    # Get user's preferred display currency
+    display_currency = db.get_preference('display_currency', 'EUR')
+
     accounts = db.get_accounts()
     debts = db.get_debts()
 
-    total_assets = sum(a['balance'] for a in accounts)
-    total_debts = sum(d['current_balance'] for d in debts)
+    # Convert all account balances to display currency
+    total_assets = sum(
+        db.convert_currency(a['balance'], a.get('currency', 'EUR'), display_currency)
+        for a in accounts
+    )
+
+    # Convert all debt balances to display currency
+    total_debts = sum(
+        db.convert_currency(d['current_balance'], d.get('currency', 'EUR'), display_currency)
+        for d in debts
+    )
 
     return {
         "total_assets": total_assets,
         "total_debts": total_debts,
         "net_worth": total_assets - total_debts,
         "account_count": len(accounts),
-        "debt_count": len(debts)
+        "debt_count": len(debts),
+        "currency": display_currency
     }
 
 @router.get("/spending-by-category")
@@ -41,7 +54,10 @@ async def spending_by_category(
     end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get spending breakdown by category"""
+    """Get spending breakdown by category in user's preferred currency"""
+    # Get user's preferred display currency
+    display_currency = db.get_preference('display_currency', 'EUR')
+
     filters = {}
     if start_date:
         filters['start_date'] = start_date
@@ -56,14 +72,18 @@ async def spending_by_category(
             category = t.get('type_name', 'Uncategorized')
             if category not in category_spending:
                 category_spending[category] = 0
-            category_spending[category] += abs(t['amount'])
+            # Convert transaction amount to display currency
+            account_currency = t.get('account_currency', 'EUR')
+            converted_amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
+            category_spending[category] += converted_amount
 
     return {
         "categories": [
-            {"category": cat, "amount": amt}
+            {"category": cat, "amount": amt, "total": amt}
             for cat, amt in category_spending.items()
         ],
-        "total": sum(category_spending.values())
+        "total": sum(category_spending.values()),
+        "currency": display_currency
     }
 
 @router.get("/income-vs-expenses")
@@ -72,7 +92,10 @@ async def income_vs_expenses(
     end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get income vs expenses comparison"""
+    """Get income vs expenses comparison in user's preferred currency"""
+    # Get user's preferred display currency
+    display_currency = db.get_preference('display_currency', 'EUR')
+
     filters = {}
     if start_date:
         filters['start_date'] = start_date
@@ -80,15 +103,38 @@ async def income_vs_expenses(
         filters['end_date'] = end_date
     transactions = db.get_transactions(filters=filters if filters else None)
 
-    income = sum(t['amount'] for t in transactions if t['amount'] > 0)
-    expenses = sum(abs(t['amount']) for t in transactions if t['amount'] < 0)
+    # Convert all transactions to display currency
+    income = sum(
+        db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
+        for t in transactions if t['amount'] > 0
+    )
+    expenses = sum(
+        db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+        for t in transactions if t['amount'] < 0
+    )
+
+    # Also group income by category
+    income_categories = {}
+    for t in transactions:
+        if t['amount'] > 0:  # Only income
+            category = t.get('type_name', 'Uncategorized')
+            if category not in income_categories:
+                income_categories[category] = 0
+            account_currency = t.get('account_currency', 'EUR')
+            converted_amount = db.convert_currency(t['amount'], account_currency, display_currency)
+            income_categories[category] += converted_amount
 
     return {
         "income": income,
         "expenses": expenses,
         "net": income - expenses,
+        "income_categories": [
+            {"category": cat, "total": amt}
+            for cat, amt in income_categories.items()
+        ],
         "start_date": start_date,
-        "end_date": end_date
+        "end_date": end_date,
+        "currency": display_currency
     }
 
 @router.get("/spending-prediction")

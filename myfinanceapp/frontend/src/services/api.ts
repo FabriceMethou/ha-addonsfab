@@ -220,8 +220,9 @@ export const backupsAPI = {
 
 // Settings API
 export const settingsAPI = {
-  getPreferences: () => api.get('/api/settings/preferences'),
-  updatePreferences: (data: any) => api.put('/api/settings/preferences', data),
+  getAll: () => api.get('/api/settings/'),
+  get: (key: string) => api.get(`/api/settings/${key}`),
+  update: (key: string, value: any) => api.put(`/api/settings/${key}`, { value }),
 };
 
 // Budgets API
