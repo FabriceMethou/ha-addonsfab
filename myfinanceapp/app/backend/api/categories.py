@@ -92,7 +92,7 @@ async def update_type(
             detail="No fields to update"
         )
 
-    success = db.update_type(type_id, **update_data)
+    success = db.update_type(type_id, update_data)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -171,7 +171,7 @@ async def update_subtype(
             detail="No fields to update"
         )
 
-    success = db.update_subtype(subtype_id, **update_data)
+    success = db.update_subtype(subtype_id, update_data)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

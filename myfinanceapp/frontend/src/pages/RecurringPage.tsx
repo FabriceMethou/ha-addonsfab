@@ -588,7 +588,7 @@ export default function RecurringPage() {
                   <SelectContent>
                     {accountsData?.map((account: any) => (
                       <SelectItem key={account.id} value={account.id.toString()}>
-                        {account.bank_name} - {account.account_type}
+                        {account.name} - {account.bank_name} ({account.currency})
                       </SelectItem>
                     ))}
                   </SelectContent>

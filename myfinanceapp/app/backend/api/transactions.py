@@ -30,6 +30,7 @@ class TransactionCreate(BaseModel):
     type_id: int
     subtype_id: Optional[int] = None
     description: str
+    destinataire: Optional[str] = None  # Recipient/payee
     transfer_account_id: Optional[int] = None
     transfer_amount: Optional[float] = None
     is_pending: bool = False
@@ -43,6 +44,7 @@ class TransactionUpdate(BaseModel):
     type_id: Optional[int] = None
     subtype_id: Optional[int] = None
     description: Optional[str] = None
+    destinataire: Optional[str] = None  # Recipient/payee
     transfer_account_id: Optional[int] = None
     transfer_amount: Optional[float] = None
     is_pending: Optional[bool] = None
@@ -131,9 +133,9 @@ async def create_transaction(
     cursor = conn.cursor()
     cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (transaction.type_id,))
     result = cursor.fetchone()
-    conn.close()
 
     if not result:
+        conn.close()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid transaction type"
@@ -149,6 +151,21 @@ async def create_transaction(
         amount = abs(amount)  # Income is positive
     # Transfers keep the sign as entered
 
+    # Determine destinataire - priority: explicit destinataire > transfer account name > description
+    if transaction.destinataire:
+        destinataire = transaction.destinataire
+    elif category == 'transfer' and transaction.transfer_account_id:
+        cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
+        account_result = cursor.fetchone()
+        if account_result:
+            destinataire = account_result['name']
+        else:
+            destinataire = transaction.description
+    else:
+        destinataire = transaction.description
+
+    conn.close()
+
     # Add transaction - map API fields to database fields
     transaction_data = {
         'account_id': transaction.account_id,
@@ -157,9 +174,10 @@ async def create_transaction(
         'type_id': transaction.type_id,
         'subtype_id': transaction.subtype_id,
         'description': transaction.description,
-        'destinataire': transaction.description,  # Use description as destinataire
+        'destinataire': destinataire,
         'currency': 'EUR',  # Default currency
         'transfer_account_id': transaction.transfer_account_id,
+        'transfer_amount': transaction.transfer_amount,  # For cross-currency transfers
         'confirmed': not transaction.is_pending,  # Inverted: pending=True means confirmed=False
         'tags': transaction.tags,
     }
@@ -192,9 +210,9 @@ async def create_transactions_bulk(
             cursor = conn.cursor()
             cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (transaction.type_id,))
             result = cursor.fetchone()
-            conn.close()
 
             if not result:
+                conn.close()
                 errors.append({
                     "index": idx,
                     "error": "Invalid transaction type"
@@ -210,6 +228,21 @@ async def create_transactions_bulk(
             elif category == 'income':
                 amount = abs(amount)  # Income is positive
 
+            # Determine destinataire - priority: explicit destinataire > transfer account name > description
+            if transaction.destinataire:
+                destinataire = transaction.destinataire
+            elif category == 'transfer' and transaction.transfer_account_id:
+                cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
+                account_result = cursor.fetchone()
+                if account_result:
+                    destinataire = account_result['name']
+                else:
+                    destinataire = transaction.description
+            else:
+                destinataire = transaction.description
+
+            conn.close()
+
             # Add transaction - map API fields to database fields
             transaction_data = {
                 'account_id': transaction.account_id,
@@ -218,9 +251,10 @@ async def create_transactions_bulk(
                 'type_id': transaction.type_id,
                 'subtype_id': transaction.subtype_id,
                 'description': transaction.description,
-                'destinataire': transaction.description,  # Use description as destinataire
+                'destinataire': destinataire,
                 'currency': 'EUR',  # Default currency
                 'transfer_account_id': transaction.transfer_account_id,
+                'transfer_amount': transaction.transfer_amount,  # For cross-currency transfers
                 'confirmed': not transaction.is_pending,  # Inverted: pending=True means confirmed=False
                 'tags': transaction.tags,
             }
@@ -264,8 +298,60 @@ async def update_transaction(
 
     # Update fields
     update_data = transaction.dict(exclude_unset=True)
+
+    # Determine the transaction type category (use new type_id if provided, otherwise existing)
+    type_id = update_data.get('type_id', existing.get('type_id'))
+
+    # Get category from type_id to determine amount sign
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (type_id,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid transaction type"
+        )
+
+    category = result['category']
+
+    # Adjust amount sign based on category if amount is being updated
+    if 'amount' in update_data:
+        amount = update_data['amount']
+        if category == 'expense':
+            update_data['amount'] = -abs(amount)  # Expenses are negative
+        elif category == 'income':
+            update_data['amount'] = abs(amount)  # Income is positive
+        # Transfers keep the sign as entered
+
+    # Map API field names to database column names
+    if 'date' in update_data:
+        update_data['transaction_date'] = update_data.pop('date')
+
+    if 'is_pending' in update_data:
+        update_data['confirmed'] = not update_data.pop('is_pending')
+
+    # Set destinataire - for transfers, use the receiving account name
+    if 'description' in update_data or 'transfer_account_id' in update_data:
+        if category == 'transfer':
+            # Use the new transfer_account_id if provided, otherwise existing
+            transfer_account_id = update_data.get('transfer_account_id', existing.get('transfer_account_id'))
+            if transfer_account_id:
+                conn = db._get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM accounts WHERE id = ?", (transfer_account_id,))
+                account_result = cursor.fetchone()
+                conn.close()
+                if account_result:
+                    update_data['destinataire'] = account_result['name']
+        elif 'description' in update_data:
+            # For non-transfers, use description as destinataire
+            update_data['destinataire'] = update_data['description']
+
     if update_data:
-        success = db.update_transaction(transaction_id, **update_data)
+        success = db.update_transaction(transaction_id, update_data)
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -335,13 +421,14 @@ async def get_transaction_summary(
     transactions = db.get_transactions(filters=filters if filters else None)
 
     # Convert all transaction amounts to display currency
+    # Exclude transfers from income/expense calculations
     total_income = sum(
         db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
-        for t in transactions if t['amount'] > 0
+        for t in transactions if t['amount'] > 0 and t.get('category') != 'transfer'
     )
     total_expense = sum(
         db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
-        for t in transactions if t['amount'] < 0
+        for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
     )
     net_change = total_income - total_expense
 
@@ -368,17 +455,39 @@ async def auto_categorize_transaction(
         if not is_trained:
             transactions = db.get_transactions()  # Fixed: get_all_transactions doesn't exist
             if len(transactions) > 10:  # Need minimum transactions to train
-                categorizer.train(transactions)
+                categorizer.train_model(transactions)
 
-        # Predict category
-        predicted = categorizer.predict(request.description)
+        # Predict category - returns (type_id, subtype_id, confidence)
+        type_id, subtype_id, confidence = categorizer.predict(request.description)
+
+        if type_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Categorizer model not trained. Need at least 10 categorized transactions."
+            )
+
+        # Get category names from database
+        conn = db._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT name FROM transaction_types WHERE id = ?", (type_id,))
+        type_result = cursor.fetchone()
+        type_name = type_result['name'] if type_result else None
+
+        subtype_name = None
+        if subtype_id:
+            cursor.execute("SELECT name FROM transaction_subtypes WHERE id = ?", (subtype_id,))
+            subtype_result = cursor.fetchone()
+            subtype_name = subtype_result['name'] if subtype_result else None
+
+        conn.close()
 
         return {
-            "type_id": predicted['type_id'],
-            "type_name": predicted['type_name'],
-            "subtype_id": predicted.get('subtype_id'),
-            "subtype_name": predicted.get('subtype_name'),
-            "confidence": predicted.get('confidence', 0)
+            "type_id": type_id,
+            "type_name": type_name,
+            "subtype_id": subtype_id,
+            "subtype_name": subtype_name,
+            "confidence": confidence
         }
 
     except Exception as e:

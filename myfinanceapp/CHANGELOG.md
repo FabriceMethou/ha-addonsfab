@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.8
+
+- Improve transaction and transfer handling (cross-currency transfers, recipient fields, and balance recalculation fixes).
+- Expand investment tracking with taxes/fees and more resilient price updates.
+- Refine reporting and dashboard calculations to exclude transfers from income/expense totals.
+- Update UI flows for transactions, investments, and account selectors.
+- Add database concurrency safeguards (WAL + busy timeout) and new schema migrations.
+
 ## 2.0.7
 
 - Backup importation and downloads option

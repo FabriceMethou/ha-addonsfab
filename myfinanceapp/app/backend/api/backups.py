@@ -39,17 +39,36 @@ async def create_backup(backup: BackupCreate, current_user: User = Depends(get_c
 @router.post("/{backup_id}/restore")
 async def restore_backup(backup_id: str, current_user: User = Depends(get_current_user)):
     """Restore from backup"""
-    success = backup_mgr.restore_backup(backup_id)
-    if not success:
-        raise HTTPException(status_code=400, detail="Failed to restore backup")
-    return {"message": "Backup restored successfully"}
+    # Convert backup_id to int
+    try:
+        backup_id_int = int(backup_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid backup ID")
+
+    try:
+        success = backup_mgr.restore_backup(backup_id_int)
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to restore backup")
+        return {"message": "Backup restored successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error restoring backup: {str(e)}")
 
 @router.delete("/{backup_id}")
 async def delete_backup(backup_id: str, current_user: User = Depends(get_current_user)):
     """Delete backup"""
-    success = backup_mgr.delete_backup(backup_id)
+    # Convert backup_id to int
+    try:
+        backup_id_int = int(backup_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid backup ID")
+
+    success = backup_mgr.delete_backup(backup_id_int)
     if not success:
-        raise HTTPException(status_code=400, detail="Failed to delete backup")
+        raise HTTPException(status_code=404, detail="Backup not found or failed to delete")
     return {"message": "Backup deleted"}
 
 @router.get("/{backup_id}/download")

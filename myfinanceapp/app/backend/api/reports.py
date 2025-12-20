@@ -65,10 +65,10 @@ async def spending_by_category(
         filters['end_date'] = end_date
     transactions = db.get_transactions(filters=filters if filters else None)
 
-    # Group by category
+    # Group by category (exclude transfers)
     category_spending = {}
     for t in transactions:
-        if t['amount'] < 0:  # Only expenses
+        if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
             category = t.get('type_name', 'Uncategorized')
             if category not in category_spending:
                 category_spending[category] = 0
@@ -104,19 +104,20 @@ async def income_vs_expenses(
     transactions = db.get_transactions(filters=filters if filters else None)
 
     # Convert all transactions to display currency
+    # Exclude transfers from income/expense calculations
     income = sum(
         db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
-        for t in transactions if t['amount'] > 0
+        for t in transactions if t['amount'] > 0 and t.get('category') != 'transfer'
     )
     expenses = sum(
         db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
-        for t in transactions if t['amount'] < 0
+        for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
     )
 
     # Also group income by category
     income_categories = {}
     for t in transactions:
-        if t['amount'] > 0:  # Only income
+        if t['amount'] > 0 and t.get('category') != 'transfer':  # Only income, exclude transfers
             category = t.get('type_name', 'Uncategorized')
             if category not in income_categories:
                 income_categories[category] = 0
@@ -178,8 +179,11 @@ async def net_worth_trend(
     months: int = 12,
     current_user: User = Depends(get_current_user)
 ):
-    """Get net worth trend over time"""
+    """Get net worth trend over time in user's preferred currency"""
     try:
+        # Get user's preferred display currency
+        display_currency = db.get_preference('display_currency', 'EUR')
+
         # Calculate net worth for each month
         end_date = datetime.now()
         trends = []
@@ -196,9 +200,17 @@ async def net_worth_trend(
             accounts = db.get_accounts()
             debts = db.get_debts()
 
-            # Simple calculation - in production would need proper historical balance tracking
-            total_assets = sum(a['balance'] for a in accounts)
-            total_debts = sum(d['current_balance'] for d in debts if d.get('is_active', True))
+            # Convert all account balances to display currency
+            total_assets = sum(
+                db.convert_currency(a['balance'], a.get('currency', 'EUR'), display_currency)
+                for a in accounts
+            )
+
+            # Convert all debt balances to display currency
+            total_debts = sum(
+                db.convert_currency(d['current_balance'], d.get('currency', 'EUR'), display_currency)
+                for d in debts if d.get('is_active', True)
+            )
             net_worth = total_assets - total_debts
 
             trends.append({
@@ -212,8 +224,18 @@ async def net_worth_trend(
         # Add current month
         current_accounts = db.get_accounts()
         current_debts = db.get_debts()
-        current_assets = sum(a['balance'] for a in current_accounts)
-        current_debt_total = sum(d['current_balance'] for d in current_debts if d.get('is_active', True))
+
+        # Convert all account balances to display currency
+        current_assets = sum(
+            db.convert_currency(a['balance'], a.get('currency', 'EUR'), display_currency)
+            for a in current_accounts
+        )
+
+        # Convert all debt balances to display currency
+        current_debt_total = sum(
+            db.convert_currency(d['current_balance'], d.get('currency', 'EUR'), display_currency)
+            for d in current_debts if d.get('is_active', True)
+        )
 
         trends.append({
             "date": end_date.strftime('%Y-%m-%d'),
@@ -226,7 +248,8 @@ async def net_worth_trend(
         return {
             "months": months,
             "trend": trends,
-            "current_net_worth": current_assets - current_debt_total
+            "current_net_worth": current_assets - current_debt_total,
+            "currency": display_currency
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trend calculation failed: {str(e)}")
@@ -251,17 +274,17 @@ async def monthly_summary(
         filters = {'start_date': start_date, 'end_date': end_date}
         transactions = db.get_transactions(filters=filters)
 
-        # Calculate totals
-        income = sum(t['amount'] for t in transactions if t['amount'] > 0)
-        expenses = sum(abs(t['amount']) for t in transactions if t['amount'] < 0)
+        # Calculate totals (exclude transfers)
+        income = sum(t['amount'] for t in transactions if t['amount'] > 0 and t.get('category') != 'transfer')
+        expenses = sum(abs(t['amount']) for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer')
 
         # Get budget vs actual
         budget_data = db.get_budget_vs_actual(year, month)
 
-        # Spending by category
+        # Spending by category (exclude transfers)
         category_spending = {}
         for t in transactions:
-            if t['amount'] < 0:  # Only expenses
+            if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
                 category = t.get('type_name', 'Uncategorized')
                 if category not in category_spending:
                     category_spending[category] = 0
@@ -321,14 +344,14 @@ async def tag_report(
                 "monthly_trend": []
             }
 
-        # Calculate summary metrics
-        total_income = sum(t['amount'] for t in tagged_transactions if t['amount'] > 0)
-        total_expenses = sum(abs(t['amount']) for t in tagged_transactions if t['amount'] < 0)
+        # Calculate summary metrics (exclude transfers)
+        total_income = sum(t['amount'] for t in tagged_transactions if t['amount'] > 0 and t.get('category') != 'transfer')
+        total_expenses = sum(abs(t['amount']) for t in tagged_transactions if t['amount'] < 0 and t.get('category') != 'transfer')
 
-        # Spending by category
+        # Spending by category (exclude transfers)
         category_spending = {}
         for t in tagged_transactions:
-            if t['amount'] < 0:  # Only expenses
+            if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
                 category = t.get('type_name', 'Uncategorized')
                 if category not in category_spending:
                     category_spending[category] = 0
@@ -342,10 +365,12 @@ async def tag_report(
                 account_distribution[account] = 0
             account_distribution[account] += abs(t['amount'])
 
-        # Monthly trend
+        # Monthly trend (exclude transfers)
         from collections import defaultdict
         monthly_data = defaultdict(lambda: {'income': 0, 'expenses': 0})
         for t in tagged_transactions:
+            if t.get('category') == 'transfer':
+                continue
             month_key = t['transaction_date'][:7]  # YYYY-MM
             if t['amount'] > 0:
                 monthly_data[month_key]['income'] += t['amount']
@@ -416,7 +441,7 @@ async def spending_trends(
 
             total_expenses = 0
             for t in transactions:
-                if t['amount'] < 0:  # Only expenses
+                if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
                     cat = t.get('type_name', 'Uncategorized')
                     categories_set.add(cat)
 
@@ -448,7 +473,7 @@ async def spending_trends(
 
         total_expenses = 0
         for t in transactions:
-            if t['amount'] < 0:
+            if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
                 cat = t.get('type_name', 'Uncategorized')
                 categories_set.add(cat)
 

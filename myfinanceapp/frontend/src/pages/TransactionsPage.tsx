@@ -84,6 +84,7 @@ export default function TransactionsPage() {
     type_id: '',
     subtype_id: '',
     description: '',
+    recipient: '',
     transfer_account_id: '',
     transfer_amount: '',
     tags: '',
@@ -168,7 +169,10 @@ export default function TransactionsPage() {
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
       queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
-      setOpenDialog(false);
+      queryClient.invalidateQueries({ queryKey: ['recipients'] });
+      queryClient.invalidateQueries({ queryKey: ['tags'] });
+      // Don't close dialog - allow adding multiple transactions
+      // setOpenDialog(false);
       resetForm();
     },
   });
@@ -179,9 +183,11 @@ export default function TransactionsPage() {
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
       queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['recipients'] });
+      queryClient.invalidateQueries({ queryKey: ['tags'] });
       setOpenDialog(false);
       setEditingTransaction(null);
-      resetForm();
+      resetFormCompletely();
     },
   });
 
@@ -197,6 +203,21 @@ export default function TransactionsPage() {
   });
 
   const resetForm = () => {
+    // Only reset amount, category, description, and recipient fields
+    // Keep account, date, and tags for easier multiple transaction entry
+    setFormData((prev) => ({
+      ...prev,
+      amount: '',
+      type_id: '',
+      subtype_id: '',
+      description: '',
+      recipient: '',
+      transfer_account_id: '',
+      transfer_amount: '',
+    }));
+  };
+
+  const resetFormCompletely = () => {
     setFormData({
       account_id: '',
       date: format(new Date(), 'yyyy-MM-dd'),
@@ -205,6 +226,7 @@ export default function TransactionsPage() {
       type_id: '',
       subtype_id: '',
       description: '',
+      recipient: '',
       transfer_account_id: '',
       transfer_amount: '',
       tags: '',
@@ -234,6 +256,7 @@ export default function TransactionsPage() {
       type_id: transaction.type_id.toString(),
       subtype_id: transaction.subtype_id?.toString() || '',
       description: transaction.description || '',
+      recipient: transaction.destinataire || '',
       transfer_account_id: transaction.transfer_account_id?.toString() || '',
       transfer_amount: transaction.transfer_amount?.toString() || '',
       tags: transaction.tags || '',
@@ -250,11 +273,13 @@ export default function TransactionsPage() {
                               sourceAccount.currency !== destinationAccount.currency;
 
   const handleAutoCategorize = async () => {
-    if (!formData.description.trim()) return;
+    // Prioritize recipient for auto-categorization as it's more indicative of category
+    const textToAnalyze = formData.recipient.trim() || formData.description.trim();
+    if (!textToAnalyze) return;
 
     setAutoCategorizingDescription(true);
     try {
-      const response = await transactionsAPI.autoCategorize(formData.description);
+      const response = await transactionsAPI.autoCategorize(textToAnalyze);
       const data = response.data;
 
       if (data.type_id) {
@@ -279,7 +304,8 @@ export default function TransactionsPage() {
       amount: parseFloat(formData.amount),
       type_id: parseInt(formData.type_id),
       subtype_id: formData.subtype_id ? parseInt(formData.subtype_id) : null,
-      description: formData.description,
+      description: formData.description || null,
+      destinataire: formData.recipient || null,
       transfer_account_id: isTransfer && formData.transfer_account_id
         ? parseInt(formData.transfer_account_id)
         : null,
@@ -424,7 +450,7 @@ export default function TransactionsPage() {
                   <SelectItem value="">All Accounts</SelectItem>
                   {accountsData?.map((account: any) => (
                     <SelectItem key={account.id} value={account.id.toString()}>
-                      {account.bank_name} - {account.account_type} ({account.currency})
+                      {account.name} - {account.bank_name} ({account.currency})
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -551,9 +577,18 @@ export default function TransactionsPage() {
       {/* Transactions List */}
       <div className="space-y-2">
         {paginatedTransactions.map((transaction: any) => {
+          const isTransfer = transaction.category === 'transfer';
           const isIncome = transaction.amount >= 0;
           const isExpanded = expandedRow === transaction.id;
           const amountDisplay = formatCurrency(transaction.amount, transaction.account_currency || 'EUR');
+
+          // Determine amount color and sign
+          let amountColor = isIncome ? 'text-success' : 'text-error';
+          let amountSign = isIncome ? '+' : '-';
+          if (isTransfer) {
+            amountColor = 'text-foreground-muted';
+            amountSign = '';
+          }
 
           return (
             <Card
@@ -565,21 +600,19 @@ export default function TransactionsPage() {
                 className="p-4 cursor-pointer hover:bg-surface-hover transition-colors"
                 onClick={() => toggleExpandRow(transaction.id)}
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4 flex-1 min-w-0">
-                    <div className="text-sm text-foreground-muted w-24 flex-shrink-0">
-                      {formatTransactionDate(transaction.date)}
-                    </div>
-                    <Badge variant="outline" size="sm" className="flex-shrink-0">
-                      {transaction.type_name}
-                    </Badge>
-                    <span className="text-foreground truncate flex-1">
-                      {transaction.description || transaction.destinataire || '-'}
-                    </span>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="text-sm text-foreground-muted w-24 flex-shrink-0">
+                    {formatTransactionDate(transaction.date)}
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`font-bold ${isIncome ? 'text-success' : 'text-error'}`}>
-                      {isIncome ? '+' : '-'}{amountDisplay}
+                  <Badge variant="outline" size="sm" className="flex-shrink-0">
+                    {transaction.type_name}
+                  </Badge>
+                  <span className="text-foreground truncate flex-1 min-w-0">
+                    {transaction.destinataire || transaction.description || '-'}
+                  </span>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <span className={`font-bold ${amountColor}`}>
+                      {amountSign}{amountDisplay}
                     </span>
                     {isExpanded ? (
                       <ChevronUp className="w-5 h-5 text-foreground-muted" />
@@ -592,12 +625,30 @@ export default function TransactionsPage() {
 
               {/* Expanded View */}
               {isExpanded && (
-                <div className="border-t border-border px-4 py-4 bg-surface/50">
+                <div className="border-t border-border px-4 py-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                    <div>
+                      <p className="text-xs text-foreground-muted mb-1">Date</p>
+                      <p className="text-sm font-medium text-foreground">
+                        {formatTransactionDate(transaction.date)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-foreground-muted mb-1">Amount</p>
+                      <p className={`text-sm font-bold ${amountColor}`}>
+                        {amountSign}{amountDisplay}
+                      </p>
+                    </div>
                     <div>
                       <p className="text-xs text-foreground-muted mb-1">Account</p>
                       <p className="text-sm font-medium text-foreground">
-                        {transaction.bank_name || transaction.account_name}
+                        {transaction.account_name} - {transaction.bank_name}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-foreground-muted mb-1">Currency</p>
+                      <p className="text-sm font-medium text-foreground">
+                        {transaction.account_currency || 'EUR'}
                       </p>
                     </div>
                     <div>
@@ -609,23 +660,43 @@ export default function TransactionsPage() {
                         )}
                       </div>
                     </div>
-                    <div>
-                      <p className="text-xs text-foreground-muted mb-1">Recipient</p>
-                      <p className="text-sm font-medium text-foreground">
-                        {transaction.destinataire || transaction.description || '-'}
-                      </p>
-                    </div>
+                    {transaction.destinataire && (
+                      <div>
+                        <p className="text-xs text-foreground-muted mb-1">Recipient</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {transaction.destinataire}
+                        </p>
+                      </div>
+                    )}
+                    {transaction.description && (
+                      <div className="sm:col-span-2">
+                        <p className="text-xs text-foreground-muted mb-1">Description</p>
+                        <p className="text-sm font-medium text-foreground">
+                          {transaction.description}
+                        </p>
+                      </div>
+                    )}
                     <div>
                       <p className="text-xs text-foreground-muted mb-1">Transaction ID</p>
                       <p className="text-sm font-medium text-foreground">#{transaction.id}</p>
                     </div>
                     {transaction.transfer_account_name && (
-                      <div>
-                        <p className="text-xs text-foreground-muted mb-1">Transfer To</p>
-                        <p className="text-sm font-medium text-foreground">
-                          {transaction.transfer_bank_name || transaction.transfer_account_name}
-                        </p>
-                      </div>
+                      <>
+                        <div>
+                          <p className="text-xs text-foreground-muted mb-1">Transfer To</p>
+                          <p className="text-sm font-medium text-foreground">
+                            {transaction.transfer_account_name} - {transaction.transfer_bank_name || ''}
+                          </p>
+                        </div>
+                        {transaction.transfer_amount && (
+                          <div>
+                            <p className="text-xs text-foreground-muted mb-1">Transfer Amount</p>
+                            <p className="text-sm font-medium text-foreground">
+                              {formatCurrency(transaction.transfer_amount, transaction.transfer_currency || 'EUR')}
+                            </p>
+                          </div>
+                        )}
+                      </>
                     )}
                     {transaction.due_date && (
                       <div>
@@ -726,10 +797,10 @@ export default function TransactionsPage() {
         if (!open) {
           setOpenDialog(false);
           setEditingTransaction(null);
-          resetForm();
+          resetFormCompletely();
         }
       }}>
-        <DialogContent size="lg">
+        <DialogContent size="2xl" className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingTransaction ? 'Edit Transaction' : 'Add Transaction'}</DialogTitle>
           </DialogHeader>
@@ -746,7 +817,7 @@ export default function TransactionsPage() {
                 <SelectContent>
                   {accountsData?.map((account: any) => (
                     <SelectItem key={account.id} value={account.id.toString()}>
-                      {account.bank_name} - {account.account_type} ({account.currency})
+                      {account.name} - {account.bank_name} ({account.currency})
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -832,7 +903,7 @@ export default function TransactionsPage() {
                       ?.filter((account: any) => account.id !== parseInt(formData.account_id))
                       ?.map((account: any) => (
                         <SelectItem key={account.id} value={account.id.toString()}>
-                          {account.bank_name} - {account.account_type} ({account.currency})
+                          {account.name} - {account.bank_name} ({account.currency})
                         </SelectItem>
                       ))}
                   </SelectContent>
@@ -854,29 +925,39 @@ export default function TransactionsPage() {
                 </p>
               </div>
             )}
-            <div className="sm:col-span-2 space-y-1.5">
-              <Label>Description / Recipient</Label>
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <Autocomplete
-                    options={recipientsData || []}
-                    value={formData.description}
-                    onChange={(value) => setFormData({ ...formData, description: value })}
-                    placeholder="Start typing or select from previous recipients"
-                    freeSolo
-                    helperText="Start typing or select from previous recipients"
-                  />
+            {!isTransfer && (
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label>Recipient</Label>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <Autocomplete
+                      options={recipientsData || []}
+                      value={formData.recipient}
+                      onChange={(value) => setFormData({ ...formData, recipient: value })}
+                      placeholder="Select or enter recipient"
+                      freeSolo
+                      helperText="Select from previous recipients or enter a new one"
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={handleAutoCategorize}
+                    disabled={!formData.recipient.trim() || autoCategorizingDescription}
+                    className="shrink-0"
+                  >
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    {autoCategorizingDescription ? 'Analyzing...' : 'Auto-Categorize'}
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  onClick={handleAutoCategorize}
-                  disabled={!formData.description.trim() || autoCategorizingDescription}
-                  className="shrink-0"
-                >
-                  <Sparkles className="w-4 h-4 mr-2" />
-                  {autoCategorizingDescription ? 'Analyzing...' : 'Auto-Categorize'}
-                </Button>
               </div>
+            )}
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label>Description (Optional)</Label>
+              <Input
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                placeholder="Additional notes or description"
+              />
             </div>
             <div className="sm:col-span-2 space-y-1.5">
               <Label>Tags (Optional)</Label>

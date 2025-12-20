@@ -19,6 +19,97 @@ DB_PATH = os.getenv("DATABASE_PATH", "/app/data/finance.db")
 db = FinanceDatabase(db_path=DB_PATH)
 isin_lookup = ISINLookup()
 
+def _get_latest_price(symbol: str) -> Optional[float]:
+    """Get latest price with minimal rate-limit risk."""
+    import logging
+    logger = logging.getLogger("uvicorn")
+
+    symbol = symbol.strip()
+    ticker = yf.Ticker(symbol)
+
+    try:
+        fast_info = ticker.fast_info
+        for key in ("last_price", "regular_market_price", "previous_close"):
+            if hasattr(fast_info, "get"):
+                price = fast_info.get(key)
+            else:
+                price = getattr(fast_info, key, None)
+            if price:
+                return float(price)
+    except Exception as e:
+        logger.warning(f"Failed to fetch fast info for {symbol}: {e}")
+
+    for period, interval in (("5d", "1d"), ("1mo", "1d"), ("1d", "1m")):
+        try:
+            history = ticker.history(period=period, interval=interval, auto_adjust=False)
+        except Exception as e:
+            logger.warning(f"Failed history fetch for {symbol} ({period}/{interval}): {e}")
+            continue
+
+        if history is None or history.empty:
+            logger.warning(f"History is empty for {symbol} ({period}/{interval})")
+            continue
+
+        if "Close" in history.columns:
+            closes = history["Close"].dropna()
+        elif "Adj Close" in history.columns:
+            closes = history["Adj Close"].dropna()
+        else:
+            logger.warning(f"No Close or Adj Close column for {symbol} ({period}/{interval})")
+            continue
+
+        if closes.empty:
+            logger.warning(f"No close prices available for {symbol} ({period}/{interval})")
+            continue
+
+        return float(closes.iloc[-1])
+
+    try:
+        proxy_prefix = os.getenv("YAHOO_PROXY_PREFIX", "https://r.jina.ai/http://").strip()
+        if proxy_prefix:
+            import json
+            import requests
+            from urllib.parse import quote
+
+            encoded_symbol = quote(symbol, safe="")
+            url = (
+                f"{proxy_prefix}query2.finance.yahoo.com/v8/finance/chart/"
+                f"{encoded_symbol}?interval=1d&range=5d"
+            )
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            text = response.text
+            start_idx = text.find("{")
+            if start_idx != -1:
+                data = json.loads(text[start_idx:])
+                result = (data.get("chart") or {}).get("result") or []
+                if result:
+                    closes = (
+                        (result[0].get("indicators") or {})
+                        .get("quote", [{}])[0]
+                        .get("close", [])
+                    )
+                    for price in reversed(closes):
+                        if price is not None:
+                            return float(price)
+    except Exception as e:
+        logger.warning(f"Proxy price fetch failed for {symbol}: {e}")
+
+    try:
+        info = ticker.info
+        price = (
+            info.get("regularMarketPrice")
+            or info.get("currentPrice")
+            or info.get("regularMarketPreviousClose")
+            or info.get("previousClose")
+        )
+        if price is not None:
+            return float(price)
+    except Exception as e:
+        logger.warning(f"Failed to fetch info for {symbol}: {e}")
+
+    return None
+
 class SecurityCreate(BaseModel):
     symbol: str
     name: str
@@ -64,6 +155,7 @@ class InvestmentTransactionCreate(BaseModel):
     price: float
     transaction_date: str
     fees: float = 0.0
+    tax: float = 0.0
     notes: str = ''
 
 @router.get("/securities")
@@ -184,7 +276,8 @@ async def create_holding(holding: InvestmentHoldingCreate, current_user: User = 
             'price_per_share': holding.purchase_price,
             'total_amount': holding.quantity * holding.purchase_price,
             'fees': 0,
-            'currency': security['currency'],
+            'tax': 0,
+            'currency': account_currency,
             'notes': holding.notes or 'Initial purchase'
         }
 
@@ -244,12 +337,66 @@ async def get_current_price(holding_id: int, current_user: User = Depends(get_cu
         raise HTTPException(status_code=404, detail="Holding not found")
 
     try:
-        ticker = yf.Ticker(holding['symbol'])
-        info = ticker.info
-        current_price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
-        return {"symbol": holding['symbol'], "current_price": current_price, "currency": info.get('currency', 'USD')}
+        current_price = _get_latest_price(holding['symbol'])
+        if current_price is None:
+            raise HTTPException(status_code=400, detail=f"Could not fetch price for {holding['symbol']}")
+        return {
+            "symbol": holding['symbol'],
+            "current_price": current_price,
+            "currency": holding.get('currency') or 'USD'
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch price: {str(e)}")
+
+@router.get("/test-price/{symbol}")
+async def test_price(symbol: str, current_user: User = Depends(get_current_user)):
+    """Test price fetching for debugging - shows detailed info"""
+    import logging
+    logger = logging.getLogger("uvicorn")
+
+    try:
+        ticker = yf.Ticker(symbol)
+
+        # Test 1: Try getting info
+        try:
+            info = ticker.info
+            logger.info(f"Successfully got info for {symbol}")
+            logger.info(f"Info keys: {list(info.keys())[:20]}")  # First 20 keys
+
+            price_data = {
+                'regularMarketPrice': info.get('regularMarketPrice'),
+                'currentPrice': info.get('currentPrice'),
+                'regularMarketPreviousClose': info.get('regularMarketPreviousClose'),
+                'previousClose': info.get('previousClose')
+            }
+        except Exception as e:
+            logger.error(f"Failed to get info: {str(e)}")
+            price_data = {"error": str(e)}
+            info = {}
+
+        # Test 2: Try getting history
+        try:
+            history = ticker.history(period="5d", interval="1d", auto_adjust=False)
+            logger.info(f"History shape: {history.shape if not history.empty else 'empty'}")
+            history_data = {
+                'empty': history.empty,
+                'columns': list(history.columns) if not history.empty else [],
+                'last_close': float(history['Close'].iloc[-1]) if not history.empty and 'Close' in history.columns else None
+            }
+        except Exception as e:
+            logger.error(f"Failed to get history: {str(e)}")
+            history_data = {"error": str(e)}
+
+        return {
+            "symbol": symbol,
+            "price_from_info": price_data,
+            "history": history_data,
+            "final_price": _get_latest_price(symbol)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/lookup/isin/{isin_code}")
 async def lookup_isin(isin_code: str, current_user: User = Depends(get_current_user)):
@@ -283,6 +430,23 @@ async def create_transaction(
     current_user: User = Depends(get_current_user)
 ):
     """Add investment transaction (buy/sell/dividend)"""
+    # Get the holding to find the account and its currency
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT a.currency
+        FROM investment_holdings h
+        JOIN accounts a ON h.account_id = a.id
+        WHERE h.id = ?
+    """, (transaction.holding_id,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Holding not found")
+
+    account_currency = result['currency'] or 'EUR'
+
     transaction_data = {
         'holding_id': transaction.holding_id,
         'transaction_type': transaction.transaction_type,
@@ -291,7 +455,8 @@ async def create_transaction(
         'price_per_share': transaction.price,
         'total_amount': transaction.quantity * transaction.price,
         'fees': transaction.fees,
-        'currency': 'EUR',
+        'tax': transaction.tax,
+        'currency': account_currency,
         'notes': transaction.notes
     }
 
@@ -309,9 +474,11 @@ async def get_summary(current_user: User = Depends(get_current_user)):
     total_value = 0
     total_cost = 0
     total_dividends = 0
+    total_fees = 0
+    total_tax = 0
     allocation_by_type = {}
 
-    # Get all transactions to calculate dividends
+    # Get all transactions to calculate dividends, fees, and tax
     all_transactions = db.get_investment_transactions()
 
     for holding in holdings:
@@ -331,10 +498,12 @@ async def get_summary(current_user: User = Depends(get_current_user)):
             allocation_by_type[inv_type] = 0
         allocation_by_type[inv_type] += current_value
 
-    # Calculate total dividends
+    # Calculate total dividends, fees, and tax
     for trans in all_transactions:
         if trans.get('transaction_type') == 'dividend':
             total_dividends += trans.get('total_amount', 0)
+        total_fees += trans.get('fees', 0) or 0
+        total_tax += trans.get('tax', 0) or 0
 
     # Calculate dividend yield (annual dividends / current value)
     from datetime import datetime, timedelta
@@ -358,6 +527,8 @@ async def get_summary(current_user: User = Depends(get_current_user)):
         "total_dividends": total_dividends,
         "recent_dividends_12m": recent_dividends,
         "dividend_yield": dividend_yield,
+        "total_fees": total_fees,
+        "total_tax": total_tax,
         "holdings_count": len(holdings),
         "allocation_by_type": allocation_data
     }
@@ -368,6 +539,9 @@ async def update_holding_price(
     current_user: User = Depends(get_current_user)
 ):
     """Update price for a single holding using Yahoo Finance"""
+    import logging
+    logger = logging.getLogger("uvicorn")
+
     try:
         # Get holding details
         holdings = db.get_investment_holdings()
@@ -377,15 +551,12 @@ async def update_holding_price(
             raise HTTPException(status_code=404, detail="Holding not found")
 
         symbol = holding.get('symbol')
+        logger.info(f"Updating price for {symbol}...")
 
-        # Fetch current price from Yahoo Finance
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
-
-        # Try different price fields
-        current_price = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
+        current_price = _get_latest_price(symbol)
 
         if current_price is None:
+            logger.warning(f"No price data available for {symbol}")
             raise HTTPException(status_code=400, detail=f"Could not fetch price for {symbol}")
 
         # Update in database
@@ -400,23 +571,32 @@ async def update_holding_price(
         conn.commit()
         conn.close()
 
+        logger.info(f"Price updated for {symbol}: {current_price}")
+
         return {
             "message": "Price updated successfully",
             "symbol": symbol,
             "current_price": current_price,
             "updated_at": datetime.now().isoformat()
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Failed to update price: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update price: {str(e)}")
 
 @router.post("/holdings/update-all-prices")
 async def update_all_prices(current_user: User = Depends(get_current_user)):
     """Update prices for all holdings using Yahoo Finance"""
+    import logging
+    logger = logging.getLogger("uvicorn")
+
     holdings = db.get_investment_holdings()
 
     if not holdings:
         return {"message": "No holdings to update", "updated_count": 0, "failed": []}
 
+    logger.info(f"Starting bulk price update for {len(holdings)} holdings...")
     updated_count = 0
     failed = []
 
@@ -425,18 +605,16 @@ async def update_all_prices(current_user: User = Depends(get_current_user)):
     cursor = conn.cursor()
 
     for holding in holdings:
+        symbol = holding.get('symbol')
+        holding_id = holding.get('id')
+
         try:
-            symbol = holding.get('symbol')
-            holding_id = holding.get('id')
+            logger.info(f"Fetching price for {symbol}...")
 
-            # Fetch current price from Yahoo Finance
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-
-            # Try different price fields
-            current_price = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
+            current_price = _get_latest_price(symbol)
 
             if current_price is None:
+                logger.warning(f"No price data available for {symbol}")
                 failed.append({"symbol": symbol, "error": "No price data available"})
                 continue
 
@@ -447,13 +625,17 @@ async def update_all_prices(current_user: User = Depends(get_current_user)):
                 WHERE id = ?
             """, (current_price, datetime.now().isoformat(), holding_id))
 
+            logger.info(f"✓ {symbol}: {current_price}")
             updated_count += 1
 
         except Exception as e:
-            failed.append({"symbol": holding.get('symbol'), "error": str(e)})
+            logger.error(f"✗ {symbol}: {str(e)}")
+            failed.append({"symbol": symbol, "error": str(e)})
 
     conn.commit()
     conn.close()
+
+    logger.info(f"Bulk update complete: {updated_count}/{len(holdings)} succeeded, {len(failed)} failed")
 
     return {
         "message": f"Updated {updated_count} of {len(holdings)} holdings",
