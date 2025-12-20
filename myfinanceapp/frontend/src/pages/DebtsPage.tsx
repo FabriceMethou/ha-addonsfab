@@ -809,7 +809,7 @@ export default function DebtsPage() {
                   <SelectItem value="">None</SelectItem>
                   {accountsData?.map((account: any) => (
                     <SelectItem key={account.id} value={account.id.toString()}>
-                      {account.bank_name} - {account.account_type} ({account.currency})
+                      {account.name} - {account.bank_name} ({account.currency})
                     </SelectItem>
                   ))}
                 </SelectContent>

@@ -122,8 +122,14 @@ export default function DashboardPage() {
     queryFn: async () => {
       const now = new Date();
       const response = await budgetsAPI.getVsActual(now.getFullYear(), now.getMonth() + 1);
-      // API returns { budgets: [...] } or an array directly
-      return response.data.budgets || response.data || [];
+      // API returns { categories: [...] } - map field names to match frontend expectations
+      const categories = response.data.categories || [];
+      return categories.map((item: any) => ({
+        category_name: item.type_name,
+        budget_amount: item.budget,
+        spent: item.actual,
+        ...item, // Include all other fields
+      }));
     },
   });
 
@@ -243,7 +249,7 @@ export default function DashboardPage() {
                 <XAxis type="number" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} tick={{ fill: '#9fb0c8' }} />
                 <YAxis dataKey="name" type="category" width={100} tick={{ fill: '#9fb0c8', fontSize: 12 }} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }}
+                  contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#ffffff' }}
                   formatter={(value: any) => formatCurrency(value)}
                 />
                 <Legend />
@@ -360,7 +366,7 @@ export default function DashboardPage() {
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(value: any) => formatCurrency(value)} contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }} />
+                <Tooltip formatter={(value: any) => formatCurrency(value)} contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#ffffff' }} />
                 <Legend />
               </PieChart>
             </ResponsiveContainer>
@@ -385,7 +391,7 @@ export default function DashboardPage() {
                     <Cell key={`cell-${index}`} fill={INCOME_COLORS[index % INCOME_COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(value: any) => formatCurrency(value)} contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }} />
+                <Tooltip formatter={(value: any) => formatCurrency(value)} contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#ffffff' }} />
                 <Legend />
               </PieChart>
             </ResponsiveContainer>

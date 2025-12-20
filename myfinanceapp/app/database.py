@@ -209,8 +209,11 @@ class FinanceDatabase:
 
     def _get_connection(self):
         """Get database connection."""
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)  # Increased timeout for concurrent access
         conn.row_factory = sqlite3.Row
+        # Enable WAL mode and set busy timeout for better concurrency
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")  # 30 second timeout
         return conn
 
     @contextmanager
@@ -317,6 +320,10 @@ class FinanceDatabase:
         """Create database tables if they don't exist."""
         conn = self._get_connection()
         cursor = conn.cursor()
+
+        # Enable WAL mode for better concurrency
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")  # 30 second timeout
 
         # Banks table
         cursor.execute("""
@@ -727,6 +734,7 @@ class FinanceDatabase:
                 price_per_share REAL,
                 total_amount REAL NOT NULL,
                 fees REAL DEFAULT 0,
+                tax REAL DEFAULT 0,
                 currency TEXT NOT NULL,
                 notes TEXT,
                 linked_transaction_id INTEGER,
@@ -816,6 +824,20 @@ class FinanceDatabase:
         if 'tags' not in columns:
             cursor.execute("ALTER TABLE envelopes ADD COLUMN tags TEXT")
             logger.info("Added tags column to envelopes table")
+
+        # Migration: Add transfer_amount column to transactions if it doesn't exist
+        cursor.execute("PRAGMA table_info(transactions)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'transfer_amount' not in columns:
+            cursor.execute("ALTER TABLE transactions ADD COLUMN transfer_amount REAL")
+            logger.info("Added transfer_amount column to transactions table")
+
+        # Migration: Add tax column to investment_transactions if it doesn't exist
+        cursor.execute("PRAGMA table_info(investment_transactions)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'tax' not in columns:
+            cursor.execute("ALTER TABLE investment_transactions ADD COLUMN tax REAL DEFAULT 0")
+            logger.info("Added tax column to investment_transactions table")
 
         conn.commit()
 
@@ -1348,9 +1370,10 @@ class FinanceDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # Get all accounts with their opening balances
+        # Get all accounts with their opening balances and dates
         cursor.execute("SELECT id, opening_balance, opening_date FROM accounts")
         accounts = cursor.fetchall()
+        account_opening_dates = {acc['id']: acc['opening_date'] for acc in accounts}
 
         # Reset all account balances to their opening_balance
         for acc in accounts:
@@ -1360,9 +1383,9 @@ class FinanceDatabase:
 
         logger.info(f"Reset {len(accounts)} account balances to their opening balances")
 
-        # Get all confirmed NON-HISTORICAL transactions ordered by date
+        # Get all confirmed transactions ordered by date
         cursor.execute("""
-            SELECT t.id, t.account_id, t.amount, t.is_transfer, t.transfer_account_id, t.is_historical, tt.category
+            SELECT t.id, t.account_id, t.amount, t.is_transfer, t.transfer_account_id, t.is_historical, t.transaction_date, tt.category
             FROM transactions t
             JOIN transaction_types tt ON t.type_id = tt.id
             WHERE t.confirmed = 1
@@ -1382,24 +1405,49 @@ class FinanceDatabase:
                 historical_skipped += 1
                 continue
 
+            # Skip transactions that occur before the account's opening date
+            account_id = trans_dict['account_id']
+            account_opening_date = account_opening_dates.get(account_id)
+            if account_opening_date and trans_dict['transaction_date'] < account_opening_date:
+                historical_skipped += 1
+                logger.info(f"Skipping transaction {trans_dict['id']} dated {trans_dict['transaction_date']} for account {account_id} - before opening date {account_opening_date}")
+                continue
+
             # Update primary account balance
-            self._update_account_balance(
-                cursor,
-                trans_dict['account_id'],
-                trans_dict['amount'],
-                trans_dict['category']
-            )
+            if trans_dict['category'] == 'transfer' and trans_dict['is_transfer']:
+                # For transfers, the amount should be negative for the source account
+                source_amount = -abs(trans_dict['amount'])
+                self._update_account_balance(
+                    cursor,
+                    trans_dict['account_id'],
+                    source_amount,
+                    trans_dict['category']
+                )
+            else:
+                self._update_account_balance(
+                    cursor,
+                    trans_dict['account_id'],
+                    trans_dict['amount'],
+                    trans_dict['category']
+                )
 
             # Handle same-currency transfers (update destination account too)
             if trans_dict['is_transfer'] and trans_dict['transfer_account_id'] and trans_dict['category'] == 'transfer':
-                amount = trans_dict['amount']
+                amount = abs(trans_dict['amount'])  # Use absolute value for destination
                 trans_id = trans_dict['id']
 
                 # For same-currency transfers, check if it's already been processed
                 # (to avoid double-counting when both source and dest transactions exist)
-                if amount > 0 and trans_id not in processed_transfers:
-                    self._update_account_balance(cursor, trans_dict['transfer_account_id'], amount, 'transfer')
-                    processed_transfers.add(trans_id)
+                # Also ensure we don't process historical transfers
+                if amount > 0 and trans_id not in processed_transfers and not trans_dict.get('is_historical', False):
+                    # Check if transfer transaction is before destination account's opening date
+                    dest_account_id = trans_dict['transfer_account_id']
+                    dest_opening_date = account_opening_dates.get(dest_account_id)
+                    if dest_opening_date and trans_dict['transaction_date'] < dest_opening_date:
+                        logger.info(f"Skipping transfer to account {dest_account_id} dated {trans_dict['transaction_date']} - before opening date {dest_opening_date}")
+                    else:
+                        self._update_account_balance(cursor, trans_dict['transfer_account_id'], amount, 'transfer')
+                        processed_transfers.add(trans_id)
 
             transactions_processed += 1
 
@@ -1995,7 +2043,7 @@ class FinanceDatabase:
         # Calculate statistics
         total_transactions = len(transactions) + len(envelope_transactions)
         total_income = sum(t['amount'] for t in transactions if t['category'] == 'income')
-        total_expenses = sum(t['amount'] for t in transactions if t['category'] == 'expense')
+        total_expenses = sum(abs(t['amount']) for t in transactions if t['category'] == 'expense')
 
         # Envelope allocations are treated as expenses (money moved to savings)
         envelope_allocations = sum(et['amount'] for et in envelope_transactions)
@@ -2028,7 +2076,7 @@ class FinanceDatabase:
             if t['category'] == 'income':
                 by_month[month_key]['income'] += t['amount']
             elif t['category'] == 'expense':
-                by_month[month_key]['expenses'] += t['amount']
+                by_month[month_key]['expenses'] += abs(t['amount'])
 
         # Process envelope transactions
         for et in envelope_transactions:
@@ -2147,18 +2195,16 @@ class FinanceDatabase:
 
     def update_subtype(self, subtype_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing subtype."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
-        values = list(updates.values()) + [subtype_id]
+            set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
+            values = list(updates.values()) + [subtype_id]
 
-        cursor.execute(f"UPDATE transaction_subtypes SET {set_clause} WHERE id = ?", values)
-        
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+            cursor.execute(f"UPDATE transaction_subtypes SET {set_clause} WHERE id = ?", values)
+
+            success = cursor.rowcount > 0
+            return success
 
     def delete_subtype(self, subtype_id: int) -> bool:
         """Delete a subtype if not used."""
@@ -2255,8 +2301,8 @@ class FinanceDatabase:
             INSERT INTO transactions
             (account_id, transaction_date, due_date, amount, currency, description,
              destinataire, type_id, subtype_id, tags, transfer_account_id,
-             is_transfer, is_duplicate_flag, recurring_template_id, confirmed, is_historical)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             is_transfer, is_duplicate_flag, recurring_template_id, confirmed, is_historical, transfer_amount)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             transaction_data['account_id'],
             transaction_data['transaction_date'],
@@ -2273,7 +2319,8 @@ class FinanceDatabase:
             is_duplicate,
             transaction_data.get('recurring_template_id'),
             transaction_data.get('confirmed', True),
-            is_historical
+            is_historical,
+            transaction_data.get('transfer_amount')
         ))
 
         transaction_id = cursor.lastrowid
@@ -2295,21 +2342,26 @@ class FinanceDatabase:
                     category
                 )
 
-                # Handle same-currency transfers (update destination account too)
+                # Handle transfers (update destination account too)
                 is_transfer = transaction_data.get('is_transfer', False)
                 transfer_account_id = transaction_data.get('transfer_account_id')
+                transfer_amount = transaction_data.get('transfer_amount')
 
                 if is_transfer and transfer_account_id and category == 'transfer':
-                    # For same-currency transfers, the amount is positive
-                    # Source account gets negative, destination gets positive
+                    # Determine the amount to add to destination account
+                    # If transfer_amount is provided, use it (cross-currency transfer)
+                    # Otherwise use the source amount (same-currency transfer)
                     amount = transaction_data['amount']
 
-                    # If amount is already negative, this is a currency conversion source transaction
-                    # If amount is positive and we have transfer_account_id, this is same-currency transfer
-                    if amount > 0:
-                        # Same-currency transfer: subtract from source, add to destination
+                    if transfer_amount is not None:
+                        # Cross-currency transfer: use specified transfer_amount for destination
+                        destination_amount = abs(transfer_amount)
+                        self._update_account_balance(cursor, transfer_account_id, destination_amount, 'transfer')
+                        logger.info(f"Cross-currency transfer: Updated destination account {transfer_account_id} with +{destination_amount}")
+                    elif amount > 0:
+                        # Same-currency transfer: use source amount for destination
                         self._update_account_balance(cursor, transfer_account_id, amount, 'transfer')
-                        logger.info(f"Transfer: Updated destination account {transfer_account_id} with +{amount}")
+                        logger.info(f"Same-currency transfer: Updated destination account {transfer_account_id} with +{amount}")
 
         conn.commit()
         conn.close()
@@ -2438,7 +2490,12 @@ class FinanceDatabase:
 
             # Reverse transfer destination if applicable
             if old_transaction['is_transfer'] and old_transaction['transfer_account_id'] and old_transaction['category'] == 'transfer':
-                if old_transaction['amount'] > 0:  # Same-currency transfer
+                # Check if this was a cross-currency transfer with transfer_amount
+                if old_transaction.get('transfer_amount') is not None:
+                    # Reverse cross-currency transfer using stored transfer_amount
+                    self._update_account_balance(cursor, old_transaction['transfer_account_id'], -abs(old_transaction['transfer_amount']), 'transfer')
+                elif old_transaction['amount'] > 0:
+                    # Reverse same-currency transfer
                     self._update_account_balance(cursor, old_transaction['transfer_account_id'], -old_transaction['amount'], 'transfer')
 
         # Apply updates
@@ -2469,7 +2526,12 @@ class FinanceDatabase:
 
                 # Apply transfer destination if applicable
                 if new_transaction['is_transfer'] and new_transaction['transfer_account_id'] and new_transaction['category'] == 'transfer':
-                    if new_transaction['amount'] > 0:  # Same-currency transfer
+                    # Check if this is a cross-currency transfer with transfer_amount
+                    if new_transaction.get('transfer_amount') is not None:
+                        # Apply cross-currency transfer using transfer_amount
+                        self._update_account_balance(cursor, new_transaction['transfer_account_id'], abs(new_transaction['transfer_amount']), 'transfer')
+                    elif new_transaction['amount'] > 0:
+                        # Apply same-currency transfer
                         self._update_account_balance(cursor, new_transaction['transfer_account_id'], new_transaction['amount'], 'transfer')
 
         conn.commit()
@@ -2499,8 +2561,8 @@ class FinanceDatabase:
 
         transaction = dict(transaction)
 
-        # Reverse balance if transaction was confirmed
-        if transaction['confirmed']:
+        # Reverse balance if transaction was confirmed AND not historical
+        if transaction['confirmed'] and not transaction.get('is_historical', False):
             # Reverse the balance change (negate the amount)
             self._update_account_balance(
                 cursor,
@@ -2511,7 +2573,12 @@ class FinanceDatabase:
 
             # Reverse transfer destination if applicable
             if transaction['is_transfer'] and transaction['transfer_account_id'] and transaction['category'] == 'transfer':
-                if transaction['amount'] > 0:  # Same-currency transfer
+                # Check if this was a cross-currency transfer with transfer_amount
+                if transaction.get('transfer_amount') is not None:
+                    # Reverse cross-currency transfer using stored transfer_amount
+                    self._update_account_balance(cursor, transaction['transfer_account_id'], -abs(transaction['transfer_amount']), 'transfer')
+                elif transaction['amount'] > 0:
+                    # Reverse same-currency transfer
                     self._update_account_balance(cursor, transaction['transfer_account_id'], -transaction['amount'], 'transfer')
 
         # Delete the transaction
@@ -3832,7 +3899,7 @@ class FinanceDatabase:
         })
         
         income = sum(t['amount'] for t in transactions if t['category'] == 'income')
-        expenses = sum(t['amount'] for t in transactions if t['category'] == 'expense')
+        expenses = sum(abs(t['amount']) for t in transactions if t['category'] == 'expense')
 
         # By category
         income_by_cat = {}
@@ -3845,7 +3912,7 @@ class FinanceDatabase:
             if t['category'] == 'income':
                 income_by_cat[t['type_name']] = income_by_cat.get(t['type_name'], 0) + t['amount']
             elif t['category'] == 'expense':
-                expense_by_cat[t['type_name']] = expense_by_cat.get(t['type_name'], 0) + t['amount']
+                expense_by_cat[t['type_name']] = expense_by_cat.get(t['type_name'], 0) + abs(t['amount'])
 
                 # Build detailed subcategory structure
                 type_name = t['type_name']
@@ -3857,9 +3924,9 @@ class FinanceDatabase:
                         'subcategories': {}
                     }
 
-                expense_by_cat_detailed[type_name]['total'] += t['amount']
+                expense_by_cat_detailed[type_name]['total'] += abs(t['amount'])
                 expense_by_cat_detailed[type_name]['subcategories'][subtype_name] = \
-                    expense_by_cat_detailed[type_name]['subcategories'].get(subtype_name, 0) + t['amount']
+                    expense_by_cat_detailed[type_name]['subcategories'].get(subtype_name, 0) + abs(t['amount'])
 
         return {
             'year': year,
@@ -3903,9 +3970,9 @@ class FinanceDatabase:
             if period_key not in trends:
                 trends[period_key] = {'total': 0, 'by_category': {}}
             
-            trends[period_key]['total'] += t['amount']
+            trends[period_key]['total'] += abs(t['amount'])
             cat = t['type_name']
-            trends[period_key]['by_category'][cat] = trends[period_key]['by_category'].get(cat, 0) + t['amount']
+            trends[period_key]['by_category'][cat] = trends[period_key]['by_category'].get(cat, 0) + abs(t['amount'])
         
         return {
             'start_date': start_date,
@@ -3937,7 +4004,7 @@ class FinanceDatabase:
         actual_by_type = {}
         for t in transactions:
             if t['category'] == 'expense':
-                actual_by_type[t['type_id']] = actual_by_type.get(t['type_id'], 0) + t['amount']
+                actual_by_type[t['type_id']] = actual_by_type.get(t['type_id'], 0) + abs(t['amount'])
         
         # Compare
         results = []
@@ -3993,7 +4060,7 @@ class FinanceDatabase:
             if t['category'] == 'income':
                 trends[period_key]['income'] += t['amount']
             elif t['category'] == 'expense':
-                trends[period_key]['expenses'] += t['amount']
+                trends[period_key]['expenses'] += abs(t['amount'])
             
             trends[period_key]['net'] = trends[period_key]['income'] - trends[period_key]['expenses']
         
@@ -4779,6 +4846,7 @@ class FinanceDatabase:
         transaction_type = trans_data['transaction_type']
         total_amount = trans_data['total_amount']
         fees = trans_data.get('fees', 0)
+        tax = trans_data.get('tax', 0)
 
         # Determine transaction type and subtype for the regular transaction
         # and calculate cash impact
@@ -4796,7 +4864,7 @@ class FinanceDatabase:
                 raise ValueError("Transaction type 'Investments - Securities Purchase' not found in database")
 
             # Cash impact: negative (money leaving linked account)
-            cash_impact = -(total_amount + fees)
+            cash_impact = -(total_amount + fees + tax)
             description = f"Purchase of {trans_data.get('shares', 0)} shares of {symbol}"
             destinataire = holding_name
 
@@ -4814,7 +4882,7 @@ class FinanceDatabase:
                 raise ValueError("Transaction type 'Investment Income - Sale Proceeds' not found in database")
 
             # Cash impact: positive (money coming into linked account)
-            cash_impact = total_amount - fees
+            cash_impact = total_amount - fees - tax
             description = f"Sale of {trans_data.get('shares', 0)} shares of {symbol}"
             destinataire = holding_name
 
@@ -4871,8 +4939,8 @@ class FinanceDatabase:
         cursor.execute("""
             INSERT INTO investment_transactions
             (holding_id, transaction_type, transaction_date, shares, price_per_share,
-             total_amount, fees, currency, notes, linked_transaction_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             total_amount, fees, tax, currency, notes, linked_transaction_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trans_data['holding_id'],
             transaction_type,
@@ -4881,6 +4949,7 @@ class FinanceDatabase:
             trans_data.get('price_per_share'),
             total_amount,
             fees,
+            tax,
             trans_data['currency'],
             trans_data.get('notes'),
             linked_transaction_id
@@ -5157,7 +5226,7 @@ class FinanceDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT COALESCE(SUM(t.amount), 0) as total
+            SELECT COALESCE(SUM(ABS(t.amount)), 0) as total
             FROM transactions t
             JOIN transaction_types tt ON t.type_id = tt.id
             WHERE transaction_date = date('now')

@@ -76,6 +76,8 @@ interface TransactionFormData {
   quantity: string;
   price: string;
   transaction_date: string;
+  fees: string;
+  tax: string;
   notes: string;
 }
 
@@ -129,6 +131,8 @@ export default function InvestmentsPage() {
     quantity: '',
     price: '',
     transaction_date: format(new Date(), 'yyyy-MM-dd'),
+    fees: '0',
+    tax: '0',
     notes: '',
   });
 
@@ -366,18 +370,37 @@ export default function InvestmentsPage() {
   // Update single holding price mutation
   const updateHoldingPriceMutation = useMutation({
     mutationFn: (holdingId: number) => investmentsAPI.updateHoldingPrice(holdingId),
-    onSuccess: () => {
+    onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
       queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
+      console.log(`[Investment] Price updated: ${response.data.symbol} = ${formatCurrency(response.data.current_price)}`);
+    },
+    onError: (error: any) => {
+      console.error('[Investment] Failed to update holding price:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error(`[Investment] Error details: ${errorMessage}`);
     },
   });
 
   // Update all prices mutation
   const updateAllPricesMutation = useMutation({
     mutationFn: () => investmentsAPI.updateAllPrices(),
-    onSuccess: () => {
+    onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
       queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
+      const data = response.data;
+      console.log(`[Investment] Bulk update complete: ${data.updated_count}/${data.total_holdings} holdings updated`);
+
+      if (data.failed && data.failed.length > 0) {
+        data.failed.forEach((f: any) => {
+          console.error(`[Investment] Failed to update ${f.symbol}: ${f.error}`);
+        });
+      }
+    },
+    onError: (error: any) => {
+      console.error('[Investment] Failed to update prices:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error(`[Investment] Error details: ${errorMessage}`);
     },
   });
 
@@ -413,6 +436,8 @@ export default function InvestmentsPage() {
       quantity: '',
       price: '',
       transaction_date: format(new Date(), 'yyyy-MM-dd'),
+      fees: '0',
+      tax: '0',
       notes: '',
     });
   };
@@ -520,6 +545,8 @@ export default function InvestmentsPage() {
       quantity: parseFloat(transactionForm.quantity),
       price: parseFloat(transactionForm.price),
       transaction_date: transactionForm.transaction_date,
+      fees: parseFloat(transactionForm.fees) || 0,
+      tax: parseFloat(transactionForm.tax) || 0,
       notes: transactionForm.notes,
     };
 
@@ -632,6 +659,22 @@ export default function InvestmentsPage() {
           </div>
           <p className="text-xl font-bold text-info">{(summaryData?.dividend_yield || 0).toFixed(2)}%</p>
           <span className="text-xs text-foreground-muted">Annual yield</span>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle className="h-5 w-5 text-warning" />
+            <span className="text-sm text-foreground-muted">Total Fees</span>
+          </div>
+          <p className="text-xl font-bold text-warning">{formatCurrency(summaryData?.total_fees || 0)}</p>
+          <span className="text-xs text-foreground-muted">All transactions</span>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle className="h-5 w-5 text-error" />
+            <span className="text-sm text-foreground-muted">Total Tax</span>
+          </div>
+          <p className="text-xl font-bold text-error">{formatCurrency(summaryData?.total_tax || 0)}</p>
+          <span className="text-xs text-foreground-muted">All transactions</span>
         </Card>
       </div>
 
@@ -828,89 +871,141 @@ export default function InvestmentsPage() {
           {/* Holdings Tab */}
           <TabsContent value={1}>
             {holdingsData && holdingsData.length > 0 ? (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Symbol</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Account</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead className="text-right">Quantity</TableHead>
-                      <TableHead className="text-right">Avg Cost</TableHead>
-                      <TableHead className="text-right">Current Price</TableHead>
-                      <TableHead className="text-right">Current Value</TableHead>
-                      <TableHead className="text-right">Gain/Loss</TableHead>
-                      <TableHead>Last Updated</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {holdingsData.map((holding: any) => {
-                      const currentValue = holding.quantity * (holding.current_price || holding.average_cost);
-                      const costBasis = holding.quantity * holding.average_cost;
-                      const gainLoss = currentValue - costBasis;
-                      const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+              <div className="space-y-6">
+                {(() => {
+                  // Group holdings by account
+                  const holdingsByAccount = holdingsData.reduce((acc: any, holding: any) => {
+                    const accountKey = holding.account_id || 'unknown';
+                    const accountName = holding.account_name || 'Unknown Account';
 
-                      return (
-                        <TableRow key={holding.id}>
-                          <TableCell className="font-semibold">{holding.symbol}</TableCell>
-                          <TableCell>{holding.name}</TableCell>
-                          <TableCell>{holding.account_name}</TableCell>
-                          <TableCell>
-                            <Badge variant="secondary">{holding.investment_type}</Badge>
-                          </TableCell>
-                          <TableCell className="text-right">{holding.quantity}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(holding.average_cost)}</TableCell>
-                          <TableCell className="text-right">
-                            {formatCurrency(holding.current_price || holding.average_cost)}
-                          </TableCell>
-                          <TableCell className="text-right font-semibold">{formatCurrency(currentValue)}</TableCell>
-                          <TableCell className={`text-right font-semibold ${gainLoss >= 0 ? 'text-success' : 'text-error'}`}>
-                            {formatCurrency(gainLoss)}
-                            <span className="block text-xs">
-                              ({gainLossPercent >= 0 ? '+' : ''}
-                              {gainLossPercent.toFixed(2)}%)
-                            </span>
-                          </TableCell>
-                          <TableCell>
-                            {holding.last_price_update ? (
-                              <span className="text-xs text-foreground-muted">
-                                {format(parseISO(holding.last_price_update), 'MMM dd, yyyy HH:mm')}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-foreground-muted">Never</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => updateHoldingPriceMutation.mutate(holding.id)}
-                                disabled={updateHoldingPriceMutation.isPending}
-                                className="text-success hover:text-success"
-                              >
-                                <RefreshCw className="h-4 w-4" />
-                              </Button>
-                              <Button variant="ghost" size="sm" onClick={() => handleEditHolding(holding)}>
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleteConfirm(holding)}
-                                className="text-error hover:text-error"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
+                    if (!acc[accountKey]) {
+                      acc[accountKey] = {
+                        accountName,
+                        holdings: [],
+                        totalValue: 0,
+                        totalCost: 0,
+                      };
+                    }
+
+                    const currentValue = holding.quantity * (holding.current_price || holding.average_cost);
+                    const costBasis = holding.quantity * holding.average_cost;
+
+                    acc[accountKey].holdings.push(holding);
+                    acc[accountKey].totalValue += currentValue;
+                    acc[accountKey].totalCost += costBasis;
+
+                    return acc;
+                  }, {});
+
+                  return Object.entries(holdingsByAccount).map(([accountKey, accountData]: [string, any]) => {
+                    const accountGainLoss = accountData.totalValue - accountData.totalCost;
+                    const accountGainLossPercent = accountData.totalCost > 0
+                      ? (accountGainLoss / accountData.totalCost) * 100
+                      : 0;
+
+                    return (
+                      <Card key={accountKey} className="p-6">
+                        <div className="flex justify-between items-center mb-4">
+                          <div>
+                            <h3 className="text-lg font-semibold text-foreground">{accountData.accountName}</h3>
+                            <p className="text-sm text-foreground-muted">
+                              {accountData.holdings.length} holding{accountData.holdings.length !== 1 ? 's' : ''}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-2xl font-bold text-foreground">{formatCurrency(accountData.totalValue)}</p>
+                            <p className={`text-sm font-semibold ${accountGainLoss >= 0 ? 'text-success' : 'text-error'}`}>
+                              {accountGainLoss >= 0 ? '+' : ''}{formatCurrency(accountGainLoss)} ({accountGainLossPercent >= 0 ? '+' : ''}{accountGainLossPercent.toFixed(2)}%)
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Symbol</TableHead>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Type</TableHead>
+                                <TableHead className="text-right">Quantity</TableHead>
+                                <TableHead className="text-right">Avg Cost</TableHead>
+                                <TableHead className="text-right">Current Price</TableHead>
+                                <TableHead className="text-right">Current Value</TableHead>
+                                <TableHead className="text-right">Gain/Loss</TableHead>
+                                <TableHead>Last Updated</TableHead>
+                                <TableHead className="text-right">Actions</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {accountData.holdings.map((holding: any) => {
+                                const currentValue = holding.quantity * (holding.current_price || holding.average_cost);
+                                const costBasis = holding.quantity * holding.average_cost;
+                                const gainLoss = currentValue - costBasis;
+                                const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+
+                                return (
+                                  <TableRow key={holding.id}>
+                                    <TableCell className="font-semibold">{holding.symbol}</TableCell>
+                                    <TableCell>{holding.name}</TableCell>
+                                    <TableCell>
+                                      <Badge variant="secondary">{holding.investment_type}</Badge>
+                                    </TableCell>
+                                    <TableCell className="text-right">{holding.quantity}</TableCell>
+                                    <TableCell className="text-right">{formatCurrency(holding.average_cost)}</TableCell>
+                                    <TableCell className="text-right">
+                                      {formatCurrency(holding.current_price || holding.average_cost)}
+                                    </TableCell>
+                                    <TableCell className="text-right font-semibold">{formatCurrency(currentValue)}</TableCell>
+                                    <TableCell className={`text-right font-semibold ${gainLoss >= 0 ? 'text-success' : 'text-error'}`}>
+                                      {formatCurrency(gainLoss)}
+                                      <span className="block text-xs">
+                                        ({gainLossPercent >= 0 ? '+' : ''}
+                                        {gainLossPercent.toFixed(2)}%)
+                                      </span>
+                                    </TableCell>
+                                    <TableCell>
+                                      {holding.last_price_update ? (
+                                        <span className="text-xs text-foreground-muted">
+                                          {format(parseISO(holding.last_price_update), 'MMM dd, yyyy HH:mm')}
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs text-foreground-muted">Never</span>
+                                      )}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                      <div className="flex justify-end gap-1">
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => updateHoldingPriceMutation.mutate(holding.id)}
+                                          disabled={updateHoldingPriceMutation.isPending}
+                                          className="text-success hover:text-success"
+                                        >
+                                          <RefreshCw className="h-4 w-4" />
+                                        </Button>
+                                        <Button variant="ghost" size="sm" onClick={() => handleEditHolding(holding)}>
+                                          <Pencil className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => setDeleteConfirm(holding)}
+                                          className="text-error hover:text-error"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </Card>
+                    );
+                  });
+                })()}
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center min-h-[300px]">
@@ -958,6 +1053,8 @@ export default function InvestmentsPage() {
                       <TableHead className="text-right">Quantity</TableHead>
                       <TableHead className="text-right">Price</TableHead>
                       <TableHead className="text-right">Total</TableHead>
+                      <TableHead className="text-right">Fees</TableHead>
+                      <TableHead className="text-right">Tax</TableHead>
                       <TableHead>Notes</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -975,6 +1072,12 @@ export default function InvestmentsPage() {
                         <TableCell className="text-right">{formatCurrency(transaction.price)}</TableCell>
                         <TableCell className="text-right font-semibold">
                           {formatCurrency(transaction.quantity * transaction.price)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {transaction.fees > 0 ? formatCurrency(transaction.fees) : '-'}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {transaction.tax > 0 ? formatCurrency(transaction.tax) : '-'}
                         </TableCell>
                         <TableCell>{transaction.notes || '-'}</TableCell>
                       </TableRow>
@@ -1364,6 +1467,31 @@ export default function InvestmentsPage() {
                 value={transactionForm.price}
                 onChange={(e) => setTransactionForm({ ...transactionForm, price: e.target.value })}
               />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="txFees">Fees (Optional)</Label>
+                <Input
+                  id="txFees"
+                  type="number"
+                  step="0.01"
+                  value={transactionForm.fees}
+                  onChange={(e) => setTransactionForm({ ...transactionForm, fees: e.target.value })}
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="txTax">Tax (Optional)</Label>
+                <Input
+                  id="txTax"
+                  type="number"
+                  step="0.01"
+                  value={transactionForm.tax}
+                  onChange={(e) => setTransactionForm({ ...transactionForm, tax: e.target.value })}
+                  placeholder="0.00"
+                />
+              </div>
             </div>
 
             <div className="space-y-2">
