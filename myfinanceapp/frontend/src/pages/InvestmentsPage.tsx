@@ -1,6 +1,7 @@
 // Investments Page - Portfolio Tracking and Real-Time Prices
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '../contexts/ToastContext';
 import {
   Plus,
   Pencil,
@@ -11,6 +12,7 @@ import {
   Landmark,
   RefreshCw,
   AlertTriangle,
+  DollarSign,
 } from 'lucide-react';
 import {
   Button,
@@ -100,6 +102,7 @@ export default function InvestmentsPage() {
   const [securityDialog, setSecurityDialog] = useState(false);
   const [editingHolding, setEditingHolding] = useState<any>(null);
   const [editingSecurity, setEditingSecurity] = useState<any>(null);
+  const [editingTransaction, setEditingTransaction] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
 
   const [holdingForm, setHoldingForm] = useState<HoldingFormData>({
@@ -125,6 +128,11 @@ export default function InvestmentsPage() {
   
   const [lookingUpISIN, setLookingUpISIN] = useState(false);
 
+  // Manual price update state
+  const [manualPriceDialog, setManualPriceDialog] = useState(false);
+  const [manualPriceHolding, setManualPriceHolding] = useState<any>(null);
+  const [manualPrice, setManualPrice] = useState('');
+
   const [transactionForm, setTransactionForm] = useState<TransactionFormData>({
     holding_id: '',
     transaction_type: 'buy',
@@ -136,17 +144,20 @@ export default function InvestmentsPage() {
     notes: '',
   });
 
+  const queryClient = useQueryClient();
+  const toast = useToast();
+
   const handleSecurityISINLookup = async () => {
     const isin = securityForm.isin.trim();
-    
+
     if (!isin) {
-      alert('Please enter an ISIN code');
+      toast.error('Please enter an ISIN code');
       return;
     }
 
     // Validate ISIN format (12 alphanumeric characters)
     if (!/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(isin)) {
-      alert('Invalid ISIN format. ISIN should be 12 characters: 2 letters + 9 alphanumeric + 1 digit');
+      toast.error('Invalid ISIN format. ISIN should be 12 characters: 2 letters + 9 alphanumeric + 1 digit');
       return;
     }
 
@@ -164,29 +175,29 @@ export default function InvestmentsPage() {
           exchange: data.exchange || securityForm.exchange,
           currency: data.currency || securityForm.currency,
         });
-        alert('✅ ISIN lookup successful! Security details have been filled in.');
+        toast.success('ISIN lookup successful! Security details have been filled in.');
       } else {
-        alert('❌ ISIN lookup failed: No data found for this ISIN');
+        toast.error('ISIN lookup failed: No data found for this ISIN');
       }
     } catch (error: any) {
       console.error('ISIN lookup failed:', error);
-      
+
       // Provide more specific error messages
+      let errorText = 'ISIN lookup failed: ';
       if (error.response?.status === 400) {
-        alert('❌ ISIN lookup failed: ' + (error.response?.data?.detail || 'Invalid ISIN or API error'));
+        errorText += error.response?.data?.detail || 'Invalid ISIN or API error';
       } else if (error.response?.status === 401) {
-        alert('❌ ISIN lookup failed: Authentication required. Please login.');
+        errorText += 'Authentication required. Please login.';
       } else if (error.response?.status === 429) {
-        alert('❌ ISIN lookup failed: API rate limit exceeded. Please try again later.');
+        errorText += 'API rate limit exceeded. Please try again later.';
       } else {
-        alert('❌ ISIN lookup failed: ' + (error.response?.data?.detail || 'Unknown error occurred'));
+        errorText += error.response?.data?.detail || 'Unknown error occurred';
       }
+      toast.error(errorText);
     } finally {
       setLookingUpISIN(false);
     }
   };
-
-  const queryClient = useQueryClient();
 
   // Fetch securities
   const { data: securitiesData } = useQuery({
@@ -287,12 +298,13 @@ export default function InvestmentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['investments-securities'] });
       setDeleteConfirm(null);
-      alert('Security deleted successfully!');
+      toast.success( 'Security deleted successfully!');
     },
     onError: (error: any) => {
       console.error('Failed to delete security:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      alert(`Failed to delete security: ${errorMessage}`);
+      setDeleteConfirm(null);
+      toast.error( `Failed to delete security: ${errorMessage}`);
     },
   });
 
@@ -302,16 +314,18 @@ export default function InvestmentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
       queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
-      
+
       // Show success message
-      alert('Holding created successfully!');
-      
+      toast.success('Holding created successfully!');
+
+      // Close dialog immediately
       setHoldingDialog(false);
       resetHoldingForm();
     },
 	    onError: (error: any) => {
 	      console.error('Failed to create holding:', error);
-	      alert(`Failed to create holding: ${error.response?.data?.detail || error.message || 'Unknown error'}`);
+	      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+	      toast.error(`Failed to create holding: ${errorMessage}`);
 	    }
 	  });
 
@@ -322,20 +336,19 @@ export default function InvestmentsPage() {
       // Invalidate and refetch the queries
       queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
       queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
-      
+
       // Show success message
-      alert('Holding updated successfully!');
-      
-      // Give a brief moment for the data to refresh before closing
-      setTimeout(() => {
-        setHoldingDialog(false);
-        resetHoldingForm();
-        setEditingHolding(null);
-      }, 300);
+      toast.success('Holding updated successfully!');
+
+      // Close dialog immediately
+      setHoldingDialog(false);
+      resetHoldingForm();
+      setEditingHolding(null);
     },
 	    onError: (error: any) => {
 	      console.error('Failed to update holding:', error);
-	      alert(`Failed to update holding: ${error.response?.data?.detail || error.message || 'Unknown error'}`);
+	      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+	      toast.error(`Failed to update holding: ${errorMessage}`);
 	    }
 	  });
 
@@ -346,12 +359,13 @@ export default function InvestmentsPage() {
       queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
       queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
       setDeleteConfirm(null);
-      alert('Holding deleted successfully!');
+      toast.success( 'Holding deleted successfully!');
     },
     onError: (error: any) => {
       console.error('Failed to delete holding:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      alert(`Failed to delete holding: ${errorMessage}`);
+      setDeleteConfirm(null);
+      toast.error( `Failed to delete holding: ${errorMessage}`);
     },
   });
 
@@ -362,8 +376,97 @@ export default function InvestmentsPage() {
       queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
       queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
       queryClient.invalidateQueries({ queryKey: ['investments-transactions'] });
+
+      // Show success message
+      toast.success('Transaction added successfully!');
+
+      // Keep holding and date, but reset other fields for next transaction
+      setTransactionForm(prev => ({
+        ...prev,
+        // Keep: holding_id, transaction_date
+        // Reset: quantity, price, fees, tax, notes, but keep transaction_type
+        quantity: '',
+        price: '',
+        fees: '0',
+        tax: '0',
+        notes: '',
+      }));
+    },
+    onError: (error: any) => {
+      console.error('Failed to create transaction:', error);
+      // Handle Pydantic validation errors (array of error objects)
+      let errorMessage = 'Unknown error';
+      if (error.response?.data?.detail) {
+        if (Array.isArray(error.response.data.detail)) {
+          // Pydantic validation error format
+          errorMessage = error.response.data.detail
+            .map((err: any) => `${err.loc?.join('.')||'field'}: ${err.msg}`)
+            .join(', ');
+        } else if (typeof error.response.data.detail === 'string') {
+          errorMessage = error.response.data.detail;
+        } else {
+          errorMessage = JSON.stringify(error.response.data.detail);
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      toast.error(`Failed to create transaction: ${errorMessage}`);
+    },
+  });
+
+  // Update transaction mutation
+  const updateTransactionMutation = useMutation({
+    mutationFn: ({ id, data }: any) => investmentsAPI.updateTransaction(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
+      queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['investments-transactions'] });
+
+      // Show success message
+      toast.success('Transaction updated successfully!');
+
+      // Close dialog immediately
       setTransactionDialog(false);
       resetTransactionForm();
+      setEditingTransaction(null);
+    },
+    onError: (error: any) => {
+      console.error('Failed to update transaction:', error);
+      // Handle Pydantic validation errors (array of error objects)
+      let errorMessage = 'Unknown error';
+      if (error.response?.data?.detail) {
+        if (Array.isArray(error.response.data.detail)) {
+          // Pydantic validation error format
+          errorMessage = error.response.data.detail
+            .map((err: any) => `${err.loc?.join('.')||'field'}: ${err.msg}`)
+            .join(', ');
+        } else if (typeof error.response.data.detail === 'string') {
+          errorMessage = error.response.data.detail;
+        } else {
+          errorMessage = JSON.stringify(error.response.data.detail);
+        }
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      toast.error(`Failed to update transaction: ${errorMessage}`);
+    },
+  });
+
+  // Delete transaction mutation
+  const deleteTransactionMutation = useMutation({
+    mutationFn: (id: number) => investmentsAPI.deleteTransaction(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
+      queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['investments-transactions'] });
+      setDeleteConfirm(null);
+      toast.success( 'Transaction deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete transaction:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      setDeleteConfirm(null);
+      toast.error( `Failed to delete transaction: ${errorMessage}`);
     },
   });
 
@@ -391,9 +494,22 @@ export default function InvestmentsPage() {
       const data = response.data;
       console.log(`[Investment] Bulk update complete: ${data.updated_count}/${data.total_holdings} holdings updated`);
 
+      // Show success message with details
+      let message = `Successfully updated ${data.updated_count} holding${data.updated_count !== 1 ? 's' : ''}`;
+      if (data.skipped_count && data.skipped_count > 0) {
+        message += `. ${data.skipped_count} skipped (bonds/crypto require manual entry)`;
+      }
       if (data.failed && data.failed.length > 0) {
+        message += `. ${data.failed.length} failed`;
         data.failed.forEach((f: any) => {
           console.error(`[Investment] Failed to update ${f.symbol}: ${f.error}`);
+        });
+      }
+      toast.success( message);
+
+      if (data.skipped && data.skipped.length > 0) {
+        data.skipped.forEach((s: any) => {
+          console.log(`[Investment] Skipped ${s.symbol} (${s.type}): ${s.reason}`);
         });
       }
     },
@@ -401,6 +517,26 @@ export default function InvestmentsPage() {
       console.error('[Investment] Failed to update prices:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
       console.error(`[Investment] Error details: ${errorMessage}`);
+      toast.error( `Failed to update prices: ${errorMessage}`);
+    },
+  });
+
+  // Manual price update mutation
+  const updateManualPriceMutation = useMutation({
+    mutationFn: ({ holding_id, price }: { holding_id: number; price: number }) =>
+      investmentsAPI.updateHolding(holding_id, { current_price: price }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
+      queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
+      toast.success( 'Price updated successfully!');
+      setManualPriceDialog(false);
+      setManualPrice('');
+      setManualPriceHolding(null);
+    },
+    onError: (error: any) => {
+      console.error('Failed to update price:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error( `Failed to update price: ${errorMessage}`);
     },
   });
 
@@ -471,6 +607,21 @@ export default function InvestmentsPage() {
     setHoldingDialog(true);
   };
 
+  const handleEditTransaction = (transaction: any) => {
+    setEditingTransaction(transaction);
+    setTransactionForm({
+      holding_id: transaction.holding_id.toString(),
+      transaction_type: transaction.transaction_type,
+      quantity: transaction.quantity?.toString() || '',
+      price: transaction.price?.toString() || '',
+      transaction_date: transaction.transaction_date || format(new Date(), 'yyyy-MM-dd'),
+      fees: transaction.fees?.toString() || '0',
+      tax: transaction.tax?.toString() || '0',
+      notes: transaction.notes || '',
+    });
+    setTransactionDialog(true);
+  };
+
   const handleSubmitSecurity = () => {
     const data = {
       symbol: securityForm.symbol,
@@ -494,27 +645,27 @@ export default function InvestmentsPage() {
   const handleSubmitHolding = () => {
     // Validate required fields
     if (!holdingForm.account_id) {
-      alert('Please select an investment account');
+      toast.error('Please select an investment account');
       return;
     }
-    
+
     if (!holdingForm.security_id) {
-      alert('Please select a security');
+      toast.error('Please select a security');
       return;
     }
-    
+
     if (!holdingForm.quantity || isNaN(parseFloat(holdingForm.quantity))) {
-      alert('Please enter a valid quantity');
+      toast.error('Please enter a valid quantity');
       return;
     }
-    
+
     if (!holdingForm.purchase_price || isNaN(parseFloat(holdingForm.purchase_price))) {
-      alert('Please enter a valid purchase price');
+      toast.error('Please enter a valid purchase price');
       return;
     }
-    
+
     if (!holdingForm.purchase_date) {
-      alert('Please enter a purchase date');
+      toast.error('Please enter a purchase date');
       return;
     }
 
@@ -542,7 +693,8 @@ export default function InvestmentsPage() {
     const data = {
       holding_id: parseInt(transactionForm.holding_id),
       transaction_type: transactionForm.transaction_type,
-      quantity: parseFloat(transactionForm.quantity),
+      // For dividend transactions, quantity is not used (set to 0)
+      quantity: transactionForm.transaction_type === 'dividend' ? 0 : parseFloat(transactionForm.quantity),
       price: parseFloat(transactionForm.price),
       transaction_date: transactionForm.transaction_date,
       fees: parseFloat(transactionForm.fees) || 0,
@@ -550,7 +702,11 @@ export default function InvestmentsPage() {
       notes: transactionForm.notes,
     };
 
-    createTransactionMutation.mutate(data);
+    if (editingTransaction) {
+      updateTransactionMutation.mutate({ id: editingTransaction.id, data });
+    } else {
+      createTransactionMutation.mutate(data);
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -583,9 +739,20 @@ export default function InvestmentsPage() {
             variant="outline"
             onClick={() => updateAllPricesMutation.mutate()}
             disabled={updateAllPricesMutation.isPending}
+            title="Auto-updates prices for stocks, ETFs, and mutual funds via Yahoo Finance. Bonds and crypto require manual price entry."
           >
             <RefreshCw className={`h-4 w-4 mr-2 ${updateAllPricesMutation.isPending ? 'animate-spin' : ''}`} />
             {updateAllPricesMutation.isPending ? 'Updating...' : 'Update All Prices'}
+          </Button>
+          <Button
+            onClick={() => {
+              setEditingTransaction(null);
+              resetTransactionForm();
+              setTransactionDialog(true);
+            }}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Transaction
           </Button>
           <Button
             onClick={() => {
@@ -681,7 +848,7 @@ export default function InvestmentsPage() {
       {/* Portfolio Allocation Charts */}
       {holdingsData && holdingsData.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Card className="p-6">
+          <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
             <h2 className="text-lg font-semibold text-foreground mb-4">Allocation by Symbol</h2>
             <ResponsiveContainer width="100%" height={350}>
               <PieChart>
@@ -707,7 +874,7 @@ export default function InvestmentsPage() {
               </PieChart>
             </ResponsiveContainer>
           </Card>
-          <Card className="p-6">
+          <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
             <h2 className="text-lg font-semibold text-foreground mb-4">Allocation by Type</h2>
             {summaryData?.allocation_by_type && summaryData.allocation_by_type.length > 0 ? (
               <ResponsiveContainer width="100%" height={350}>
@@ -738,7 +905,7 @@ export default function InvestmentsPage() {
 
       {/* Top Holdings */}
       {holdingsData && holdingsData.length > 0 && (
-        <Card className="p-6">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <h2 className="text-lg font-semibold text-foreground mb-4">Top Holdings</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
             {holdingsData
@@ -775,7 +942,7 @@ export default function InvestmentsPage() {
       )}
 
       {/* Tabs */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <Tabs value={tabValue} onValueChange={setTabValue}>
           <TabsList>
             <TabsTrigger value={0}>Securities</TabsTrigger>
@@ -980,8 +1147,22 @@ export default function InvestmentsPage() {
                                           onClick={() => updateHoldingPriceMutation.mutate(holding.id)}
                                           disabled={updateHoldingPriceMutation.isPending}
                                           className="text-success hover:text-success"
+                                          title="Auto-update price from Yahoo Finance"
                                         >
                                           <RefreshCw className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => {
+                                            setManualPriceHolding(holding);
+                                            setManualPrice((holding.current_price || holding.average_cost || 0).toString());
+                                            setManualPriceDialog(true);
+                                          }}
+                                          className="text-primary hover:text-primary"
+                                          title="Manually set price"
+                                        >
+                                          <DollarSign className="h-4 w-4" />
                                         </Button>
                                         <Button variant="ghost" size="sm" onClick={() => handleEditHolding(holding)}>
                                           <Pencil className="h-4 w-4" />
@@ -1033,6 +1214,7 @@ export default function InvestmentsPage() {
             <div className="flex justify-end mb-4">
               <Button
                 onClick={() => {
+                  setEditingTransaction(null);
                   resetTransactionForm();
                   setTransactionDialog(true);
                 }}
@@ -1056,6 +1238,7 @@ export default function InvestmentsPage() {
                       <TableHead className="text-right">Fees</TableHead>
                       <TableHead className="text-right">Tax</TableHead>
                       <TableHead>Notes</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1068,10 +1251,10 @@ export default function InvestmentsPage() {
                             {transaction.transaction_type}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-right">{transaction.quantity}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(transaction.price)}</TableCell>
+                        <TableCell className="text-right">{transaction.quantity || '-'}</TableCell>
+                        <TableCell className="text-right">{transaction.price ? formatCurrency(transaction.price) : '-'}</TableCell>
                         <TableCell className="text-right font-semibold">
-                          {formatCurrency(transaction.quantity * transaction.price)}
+                          {transaction.total_amount ? formatCurrency(transaction.total_amount) : formatCurrency((transaction.quantity || 0) * (transaction.price || 0))}
                         </TableCell>
                         <TableCell className="text-right">
                           {transaction.fees > 0 ? formatCurrency(transaction.fees) : '-'}
@@ -1080,6 +1263,21 @@ export default function InvestmentsPage() {
                           {transaction.tax > 0 ? formatCurrency(transaction.tax) : '-'}
                         </TableCell>
                         <TableCell>{transaction.notes || '-'}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button variant="ghost" size="sm" onClick={() => handleEditTransaction(transaction)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setDeleteConfirm({ ...transaction, isTransaction: true })}
+                              className="text-error hover:text-error"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -1137,9 +1335,9 @@ export default function InvestmentsPage() {
                   <SelectContent>
                     <SelectItem value="stock">Stock</SelectItem>
                     <SelectItem value="etf">ETF</SelectItem>
+                    <SelectItem value="mutual_fund">Mutual Fund</SelectItem>
                     <SelectItem value="bond">Bond</SelectItem>
-                    <SelectItem value="crypto">Cryptocurrency</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
+                    <SelectItem value="crypto">Crypto</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1166,6 +1364,10 @@ export default function InvestmentsPage() {
                     {lookingUpISIN ? <Spinner size="sm" /> : 'Lookup'}
                   </Button>
                 </div>
+                <p className="text-xs text-foreground-muted mt-1">
+                  ISIN lookup works best for stocks, ETFs, and some mutual funds.
+                  For bonds and crypto, enter details manually.
+                </p>
               </div>
             </div>
 
@@ -1300,7 +1502,7 @@ export default function InvestmentsPage() {
                 <SelectContent>
                   {investmentAccounts?.map((account: any) => (
                     <SelectItem key={account.id} value={account.id.toString()}>
-                      {account.name} ({account.currency})
+                      {account.bank_name ? `${account.bank_name} - ` : ''}{account.name} ({account.currency})
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1389,11 +1591,25 @@ export default function InvestmentsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Add Transaction Dialog */}
-      <Dialog open={transactionDialog} onOpenChange={setTransactionDialog}>
+      {/* Add/Edit Transaction Dialog */}
+      <Dialog
+        open={transactionDialog}
+        onOpenChange={(open) => {
+          setTransactionDialog(open);
+          if (!open) {
+            setEditingTransaction(null);
+            resetTransactionForm();
+          }
+        }}
+      >
         <DialogContent size="md">
           <DialogHeader>
-            <DialogTitle>Add Transaction</DialogTitle>
+            <DialogTitle>{editingTransaction ? 'Edit Transaction' : 'Add Transaction'}</DialogTitle>
+            <DialogDescription>
+              {editingTransaction
+                ? 'Update the transaction details.'
+                : 'Add multiple transactions in a row. The holding and date will be preserved for quick entry.'}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
@@ -1505,11 +1721,24 @@ export default function InvestmentsPage() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTransactionDialog(false)}>
-              Cancel
+            <Button
+              variant="outline"
+              onClick={() => {
+                setTransactionDialog(false);
+                resetTransactionForm();
+              }}
+            >
+              Close
             </Button>
-            <Button onClick={handleSubmitTransaction} disabled={createTransactionMutation.isPending}>
-              Add Transaction
+            <Button onClick={handleSubmitTransaction} disabled={createTransactionMutation.isPending || updateTransactionMutation.isPending}>
+              {(createTransactionMutation.isPending || updateTransactionMutation.isPending) ? (
+                <>
+                  <Spinner size="sm" className="mr-2" />
+                  {editingTransaction ? 'Updating...' : 'Adding...'}
+                </>
+              ) : (
+                editingTransaction ? 'Update Transaction' : 'Add Transaction'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1526,7 +1755,9 @@ export default function InvestmentsPage() {
             <div className="flex items-start gap-3 p-4 rounded-lg bg-warning/10 text-warning">
               <AlertTriangle className="h-5 w-5 flex-shrink-0 mt-0.5" />
               <p className="text-sm">
-                {deleteConfirm?.security_id ? (
+                {deleteConfirm?.isTransaction ? (
+                  <>Are you sure you want to delete this {deleteConfirm?.transaction_type} transaction for "{deleteConfirm?.symbol}"?</>
+                ) : deleteConfirm?.security_id ? (
                   <>Are you sure you want to delete the holding "{deleteConfirm?.symbol}"? This will also delete all related transactions.</>
                 ) : (
                   <>Are you sure you want to delete the security "{deleteConfirm?.symbol}"? This will prevent you from creating new holdings for this security.</>
@@ -1542,7 +1773,10 @@ export default function InvestmentsPage() {
             <Button
               variant="destructive"
               onClick={() => {
-                if (deleteConfirm?.security_id) {
+                if (deleteConfirm?.isTransaction) {
+                  // Delete transaction
+                  deleteTransactionMutation.mutate(deleteConfirm.id);
+                } else if (deleteConfirm?.security_id) {
                   // Items with security_id are holdings (it's a foreign key)
                   deleteHoldingMutation.mutate(deleteConfirm.id);
                 } else {
@@ -1550,9 +1784,68 @@ export default function InvestmentsPage() {
                   deleteSecurityMutation.mutate(deleteConfirm.id);
                 }
               }}
-              disabled={deleteSecurityMutation.isPending || deleteHoldingMutation.isPending}
+              disabled={deleteSecurityMutation.isPending || deleteHoldingMutation.isPending || deleteTransactionMutation.isPending}
             >
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual Price Update Dialog */}
+      <Dialog open={manualPriceDialog} onOpenChange={setManualPriceDialog}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Set Manual Price</DialogTitle>
+            <DialogDescription>
+              Update the current price for {manualPriceHolding?.symbol} ({manualPriceHolding?.name})
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="manualPrice">
+                Current Price ({manualPriceHolding?.currency || 'EUR'})
+              </Label>
+              <Input
+                id="manualPrice"
+                type="number"
+                step="0.01"
+                min="0"
+                value={manualPrice}
+                onChange={(e) => setManualPrice(e.target.value)}
+                placeholder="Enter price"
+                autoFocus
+              />
+              <p className="text-xs text-foreground-muted">
+                Use this for bonds and crypto, or when automatic price updates are unavailable.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setManualPriceDialog(false);
+                setManualPrice('');
+                setManualPriceHolding(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (manualPriceHolding && manualPrice) {
+                  updateManualPriceMutation.mutate({
+                    holding_id: manualPriceHolding.id,
+                    price: parseFloat(manualPrice),
+                  });
+                }
+              }}
+              disabled={!manualPrice || parseFloat(manualPrice) <= 0 || updateManualPriceMutation.isPending}
+            >
+              {updateManualPriceMutation.isPending ? <Spinner size="sm" /> : 'Update Price'}
             </Button>
           </DialogFooter>
         </DialogContent>

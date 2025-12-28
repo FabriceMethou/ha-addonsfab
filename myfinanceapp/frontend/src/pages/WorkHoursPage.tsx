@@ -189,7 +189,7 @@ export default function WorkHoursPage() {
         {/* Calculator Tab */}
         <TabsContent value={0}>
           {profilesData && profilesData.length > 0 ? (
-            <Card className="p-6">
+            <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
                   <Label>Select Owner</Label>

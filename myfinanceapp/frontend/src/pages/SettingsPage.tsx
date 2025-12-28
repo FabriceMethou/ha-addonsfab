@@ -18,6 +18,8 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  Switch,
+  Label,
 } from '../components/shadcn';
 import {
   Save,
@@ -34,6 +36,8 @@ import {
   LogOut,
   Users,
   Shield,
+  Bug,
+  Terminal,
 } from 'lucide-react';
 import { authAPI, backupsAPI, currenciesAPI, transactionsAPI, settingsAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -93,6 +97,20 @@ export default function SettingsPage() {
     }
   }, [settings]);
 
+  // Sync debug settings to localStorage for API interceptor
+  useEffect(() => {
+    if (settings) {
+      const debugSettings = {
+        debug_mode: (settings as any).debug_mode,
+        debug_auto_recalculate: (settings as any).debug_auto_recalculate,
+        debug_show_logs: (settings as any).debug_show_logs,
+        debug_log_api_calls: (settings as any).debug_log_api_calls,
+        debug_log_transactions: (settings as any).debug_log_transactions,
+      };
+      localStorage.setItem('debug_settings', JSON.stringify(debugSettings));
+    }
+  }, [settings]);
+
   // Fetch currencies
   const { data: currenciesData = [], isLoading: currenciesLoading } = useQuery({
     queryKey: ['currencies'],
@@ -134,6 +152,19 @@ export default function SettingsPage() {
     },
     onError: (error: any) => {
       setErrorMessage(error.response?.data?.detail || 'Failed to update display currency');
+      setTimeout(() => setErrorMessage(''), 3000);
+    },
+  });
+
+  // Update debug setting mutation
+  const updateDebugSettingMutation = useMutation({
+    mutationFn: ({ key, value }: { key: string; value: boolean }) =>
+      settingsAPI.update(key, value),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+    },
+    onError: (error: any) => {
+      setErrorMessage(error.response?.data?.detail || 'Failed to update debug setting');
       setTimeout(() => setErrorMessage(''), 3000);
     },
   });
@@ -443,7 +474,7 @@ export default function SettingsPage() {
       )}
 
       {/* Account Information */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <h2 className="text-lg font-semibold text-foreground mb-4">Account Information</h2>
         <div className="border-t border-border pt-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -460,7 +491,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Display Currency Preference */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-2 mb-4">
           <Euro className="w-5 h-5 text-primary" />
           <h2 className="text-lg font-semibold text-foreground">Display Currency</h2>
@@ -502,7 +533,7 @@ export default function SettingsPage() {
 
       {/* User Management (Admin Only) */}
       {user?.is_admin && (
-        <Card className="p-6">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Users className="w-5 h-5 text-primary" />
@@ -601,7 +632,7 @@ export default function SettingsPage() {
       )}
 
       {/* Change Password */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-2 mb-4">
           <Lock className="w-5 h-5 text-primary" />
           <h2 className="text-lg font-semibold text-foreground">Change Password</h2>
@@ -644,7 +675,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Backup & Data Management */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-2 mb-4">
           <HardDrive className="w-5 h-5 text-primary" />
           <h2 className="text-lg font-semibold text-foreground">Backup & Data Management</h2>
@@ -670,7 +701,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Currency Management */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Euro className="w-5 h-5 text-primary" />
@@ -763,7 +794,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* ML Model Training */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-2 mb-4">
           <Brain className="w-5 h-5 text-primary" />
           <h2 className="text-lg font-semibold text-foreground">Auto-Categorization ML Model</h2>
@@ -839,7 +870,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Application Information */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <h2 className="text-lg font-semibold text-foreground mb-4">Application Information</h2>
         <div className="border-t border-border pt-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -860,6 +891,101 @@ export default function SettingsPage() {
               <p className="font-semibold text-foreground">FastAPI + Python</p>
             </div>
           </div>
+        </div>
+      </Card>
+
+      {/* Debug Settings */}
+      <Card className="p-6 rounded-xl border border-warning/50 bg-card/50 backdrop-blur-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <Bug className="w-5 h-5 text-warning" />
+          <h2 className="text-lg font-semibold text-foreground">Debug Settings</h2>
+          <Badge variant="outline" className="ml-auto border-warning text-warning">Development</Badge>
+        </div>
+        <div className="border-t border-border pt-4 space-y-4">
+          <div className="p-4 rounded-lg bg-warning/10 border border-warning/20">
+            <p className="text-sm text-foreground-muted">
+              Debug settings are intended for development and troubleshooting.
+              Enable the master debug mode to access individual debug options.
+            </p>
+          </div>
+
+          {/* Master Debug Toggle */}
+          <div className="flex items-center justify-between py-3 px-4 rounded-lg bg-card hover:bg-muted/50 transition-colors">
+            <div className="flex items-center gap-3">
+              <Terminal className="w-5 h-5 text-warning" />
+              <div>
+                <Label className="text-base font-medium text-foreground">Enable Debug Mode</Label>
+                <p className="text-sm text-foreground-muted">Master toggle for all debug features</p>
+              </div>
+            </div>
+            <Switch
+              checked={!!settings?.debug_mode}
+              onChange={(checked) => {
+                updateDebugSettingMutation.mutate({ key: 'debug_mode', value: checked });
+              }}
+            />
+          </div>
+
+          {/* Debug Options - Only visible when debug mode is enabled */}
+          {settings?.debug_mode && (
+            <div className="ml-4 pl-4 border-l-2 border-warning/30 space-y-3">
+              {/* Auto-recalculate balances */}
+              <div className="flex items-center justify-between py-2">
+                <div>
+                  <Label className="text-sm font-medium text-foreground">Auto-Recalculate Balances</Label>
+                  <p className="text-xs text-foreground-muted">Automatically recalculate account balances on page load</p>
+                </div>
+                <Switch
+                  checked={!!settings?.debug_auto_recalculate}
+                  onChange={(checked) => {
+                    updateDebugSettingMutation.mutate({ key: 'debug_auto_recalculate', value: checked });
+                  }}
+                />
+              </div>
+
+              {/* Show debug logs */}
+              <div className="flex items-center justify-between py-2">
+                <div>
+                  <Label className="text-sm font-medium text-foreground">Show Debug Logs</Label>
+                  <p className="text-xs text-foreground-muted">Display debug information in browser console</p>
+                </div>
+                <Switch
+                  checked={!!settings?.debug_show_logs}
+                  onChange={(checked) => {
+                    updateDebugSettingMutation.mutate({ key: 'debug_show_logs', value: checked });
+                  }}
+                />
+              </div>
+
+              {/* Log API calls */}
+              <div className="flex items-center justify-between py-2">
+                <div>
+                  <Label className="text-sm font-medium text-foreground">Log API Calls</Label>
+                  <p className="text-xs text-foreground-muted">Log all API requests and responses to console</p>
+                </div>
+                <Switch
+                  checked={!!settings?.debug_log_api_calls}
+                  onChange={(checked) => {
+                    updateDebugSettingMutation.mutate({ key: 'debug_log_api_calls', value: checked });
+                  }}
+                />
+              </div>
+
+              {/* Log transaction operations */}
+              <div className="flex items-center justify-between py-2">
+                <div>
+                  <Label className="text-sm font-medium text-foreground">Log Transaction Operations</Label>
+                  <p className="text-xs text-foreground-muted">Log transaction create/update/delete operations</p>
+                </div>
+                <Switch
+                  checked={!!settings?.debug_log_transactions}
+                  onChange={(checked) => {
+                    updateDebugSettingMutation.mutate({ key: 'debug_log_transactions', value: checked });
+                  }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </Card>
 

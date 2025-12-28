@@ -69,7 +69,7 @@ export default function EnvelopesPage() {
   const [formData, setFormData] = useState<EnvelopeFormData>({
     name: '',
     target_amount: '',
-    deadline: format(new Date(), 'yyyy-MM-dd'),
+    deadline: '',
     description: '',
     tags: '',
     color: '#4ECDC4',
@@ -148,7 +148,7 @@ export default function EnvelopesPage() {
     setFormData({
       name: '',
       target_amount: '',
-      deadline: format(new Date(), 'yyyy-MM-dd'),
+      deadline: '',
       description: '',
       tags: '',
       color: '#4ECDC4',
@@ -160,7 +160,7 @@ export default function EnvelopesPage() {
     setFormData({
       name: envelope.name,
       target_amount: envelope.target_amount.toString(),
-      deadline: envelope.deadline || format(new Date(), 'yyyy-MM-dd'),
+      deadline: envelope.deadline || '',
       description: envelope.description || '',
       tags: envelope.tags || '',
       color: envelope.color || '#4ECDC4',
@@ -172,7 +172,7 @@ export default function EnvelopesPage() {
     const data = {
       name: formData.name,
       target_amount: parseFloat(formData.target_amount),
-      deadline: formData.deadline,
+      deadline: formData.deadline || null,
       description: formData.description,
       tags: formData.tags || null,
       color: formData.color,
@@ -558,7 +558,7 @@ export default function EnvelopesPage() {
           })}
         </div>
       ) : (
-        <Card className="p-6">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex flex-col items-center justify-center min-h-[300px]">
             <PiggyBank className="h-20 w-20 text-foreground-muted mb-4" />
             <h2 className="text-xl font-semibold text-foreground-muted mb-2">
@@ -614,7 +614,7 @@ export default function EnvelopesPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="deadline">Deadline</Label>
+                <Label htmlFor="deadline">Deadline (Optional)</Label>
                 <Input
                   id="deadline"
                   type="date"

@@ -44,7 +44,7 @@ import {
   Landmark,
   Tag,
 } from 'lucide-react';
-import { reportsAPI, settingsAPI, transactionsAPI } from '../services/api';
+import { reportsAPI, transactionsAPI } from '../services/api';
 import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns';
 
 // Color palette for charts
@@ -53,20 +53,32 @@ const COLORS = [
   '#82CA9D', '#FFC658', '#FF6B9D', '#A4DE6C', '#D0ED57',
 ];
 
-// Metric Card Component
+// Modern Metric Card Component
 function MetricCard({ title, value, icon, colorClass, subtitle }: any) {
+  const bgClass = colorClass.includes('success')
+    ? 'bg-success'
+    : colorClass.includes('error')
+    ? 'bg-error'
+    : 'bg-primary';
+
   return (
-    <Card className="p-4">
-      <div className="flex justify-between items-start">
+    <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+      {/* Background gradient effect */}
+      <div className={`absolute top-0 right-0 w-32 h-32 ${bgClass} opacity-5 blur-3xl rounded-full`} />
+
+      <div className="relative">
+        <div className="flex items-start justify-between mb-4">
+          <div className={`p-3 rounded-lg ${bgClass} bg-opacity-10`}>
+            {icon}
+          </div>
+        </div>
+
         <div>
           <p className="text-sm text-foreground-muted mb-1">{title}</p>
           <p className={`text-2xl font-bold ${colorClass}`}>{value}</p>
           {subtitle && (
-            <p className="text-sm text-foreground-muted mt-1">{subtitle}</p>
+            <p className="text-xs text-foreground-muted mt-2">{subtitle}</p>
           )}
-        </div>
-        <div className={`p-3 rounded-lg ${colorClass.includes('success') ? 'bg-success/20' : colorClass.includes('error') ? 'bg-error/20' : 'bg-primary/20'}`}>
-          {icon}
         </div>
       </div>
     </Card>
@@ -86,16 +98,6 @@ export default function ReportsPage() {
   const [netWorthMonths, setNetWorthMonths] = useState('12');
   const [summaryYear, setSummaryYear] = useState(new Date().getFullYear().toString());
   const [summaryMonth, setSummaryMonth] = useState((new Date().getMonth() + 1).toString());
-
-  const { data: settings } = useQuery({
-    queryKey: ['settings'],
-    queryFn: async () => {
-      const response = await settingsAPI.getAll();
-      return response.data.settings || {};
-    },
-  });
-
-  const displayCurrency = (settings as any)?.display_currency || 'EUR';
 
   // Handle date range selection
   const handleDateRangeChange = (range: string) => {
@@ -210,11 +212,10 @@ export default function ReportsPage() {
     enabled: currentTab === 'networth',
   });
 
-  const formatCurrency = (amount: number, currency?: string) => {
-    const currencyToUse = currency || displayCurrency;
+  const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('de-DE', {
       style: 'currency',
-      currency: currencyToUse,
+      currency: 'EUR',
     }).format(amount);
   };
 
@@ -231,7 +232,7 @@ export default function ReportsPage() {
   const spendingChartData =
     spendingData?.categories?.map((cat: any) => ({
       name: cat.category,
-      value: cat.total ?? cat.amount,
+      value: Math.abs(cat.amount),
     })) || [];
 
   // Prepare data for cash flow line chart
@@ -378,15 +379,34 @@ export default function ReportsPage() {
             {/* Charts Row 1 */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Income vs Expenses Bar Chart */}
-              <Card className="p-6">
+              <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                 <h3 className="text-lg font-semibold text-foreground mb-4">Income vs Expenses</h3>
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={incomeExpensesChartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" />
-                    <YAxis />
-                    <Tooltip formatter={(value: any) => formatCurrency(value)} />
-                    <Bar dataKey="amount" fill="#8884d8">
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} horizontal={true} vertical={false} />
+                    <XAxis
+                      dataKey="name"
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#0a0a0a',
+                        border: '1px solid #2a2a2a',
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                      }}
+                      formatter={(value: any) => formatCurrency(value)}
+                    />
+                    <Bar dataKey="amount" fill="#8884d8" radius={[6, 6, 0, 0]}>
                       {incomeExpensesChartData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.fill} />
                       ))}
@@ -396,7 +416,7 @@ export default function ReportsPage() {
               </Card>
 
               {/* Spending by Category Pie Chart */}
-              <Card className="p-6">
+              <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                 <h3 className="text-lg font-semibold text-foreground mb-4">Spending by Category</h3>
                 {spendingChartData.length > 0 ? (
                   <ResponsiveContainer width="100%" height={300}>
@@ -415,7 +435,15 @@ export default function ReportsPage() {
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(value: any) => formatCurrency(value)} />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#0a0a0a',
+                          border: '1px solid #2a2a2a',
+                          borderRadius: '8px',
+                          fontSize: '12px',
+                        }}
+                        formatter={(value: any) => formatCurrency(value)}
+                      />
                     </PieChart>
                   </ResponsiveContainer>
                 ) : (
@@ -427,18 +455,37 @@ export default function ReportsPage() {
             </div>
 
             {/* Cash Flow Chart */}
-            <Card className="p-6">
+            <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
               <h3 className="text-lg font-semibold text-foreground mb-4">Cash Flow Over Time</h3>
               {cashFlowData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
                   <LineChart data={cashFlowData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" />
-                    <YAxis />
-                    <Tooltip formatter={(value: any) => formatCurrency(value)} />
-                    <Legend />
-                    <Line type="monotone" dataKey="income" stroke="#00C49F" strokeWidth={2} name="Income" />
-                    <Line type="monotone" dataKey="expenses" stroke="#FF8042" strokeWidth={2} name="Expenses" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} horizontal={true} vertical={false} />
+                    <XAxis
+                      dataKey="date"
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#0a0a0a',
+                        border: '1px solid #2a2a2a',
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                      }}
+                      formatter={(value: any) => formatCurrency(value)}
+                    />
+                    <Legend iconType="circle" wrapperStyle={{ paddingTop: '10px' }} />
+                    <Line type="monotone" dataKey="income" stroke="#10b981" strokeWidth={2} name="Income" />
+                    <Line type="monotone" dataKey="expenses" stroke="#ef4444" strokeWidth={2} name="Expenses" />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
@@ -449,15 +496,15 @@ export default function ReportsPage() {
             </Card>
 
             {/* Summary Statistics */}
-            <Card className="p-6">
+            <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
               <h3 className="text-lg font-semibold text-foreground mb-4">Summary Statistics</h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
                 <div>
-                  <p className="text-sm text-foreground-muted">Total Transactions</p>
+                  <p className="text-sm text-foreground-muted mb-1">Total Transactions</p>
                   <p className="text-xl font-bold text-foreground">{transactionsData?.length || 0}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-foreground-muted">Average Transaction</p>
+                  <p className="text-sm text-foreground-muted mb-1">Average Transaction</p>
                   <p className="text-xl font-bold text-foreground">
                     {transactionsData?.length
                       ? formatCurrency(
@@ -468,7 +515,7 @@ export default function ReportsPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-foreground-muted">Savings Rate</p>
+                  <p className="text-sm text-foreground-muted mb-1">Savings Rate</p>
                   <p className={`text-xl font-bold ${incomeExpensesData?.net >= 0 ? 'text-success' : 'text-error'}`}>
                     {incomeExpensesData?.income > 0
                       ? `${((incomeExpensesData.net / incomeExpensesData.income) * 100).toFixed(1)}%`
@@ -476,7 +523,7 @@ export default function ReportsPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-foreground-muted">Net Change</p>
+                  <p className="text-sm text-foreground-muted mb-1">Net Change</p>
                   <p className={`text-xl font-bold ${incomeExpensesData?.net >= 0 ? 'text-success' : 'text-error'}`}>
                     {formatCurrency(incomeExpensesData?.net || 0)}
                   </p>
@@ -519,17 +566,36 @@ export default function ReportsPage() {
             ) : spendingTrendsData ? (
               <>
                 {/* Stacked Bar Chart */}
-                <Card className="p-6">
+                <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                   <h3 className="text-lg font-semibold text-foreground mb-4">Spending Trends by Category</h3>
                   <ResponsiveContainer width="100%" height={400}>
                     <BarChart data={spendingTrendsData.trends}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="month" />
-                      <YAxis />
-                      <Tooltip formatter={(value: any) => formatCurrency(value)} />
-                      <Legend />
+                      <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} horizontal={true} vertical={false} />
+                      <XAxis
+                        dataKey="month"
+                        stroke="#888888"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        stroke="#888888"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#0a0a0a',
+                          border: '1px solid #2a2a2a',
+                          borderRadius: '8px',
+                          fontSize: '12px',
+                        }}
+                        formatter={(value: any) => formatCurrency(value)}
+                      />
+                      <Legend iconType="circle" wrapperStyle={{ paddingTop: '10px' }} />
                       {spendingTrendsData.all_categories.map((cat: string, idx: number) => (
-                        <Bar key={cat} dataKey={`categories.${cat}`} stackId="a" fill={COLORS[idx % COLORS.length]} name={cat} />
+                        <Bar key={cat} dataKey={`categories.${cat}`} stackId="a" fill={COLORS[idx % COLORS.length]} name={cat} radius={[6, 6, 0, 0]} />
                       ))}
                     </BarChart>
                   </ResponsiveContainer>
@@ -537,9 +603,9 @@ export default function ReportsPage() {
 
                 {/* Trend Analysis */}
                 {spendingTrendsData.trend_analysis && Object.keys(spendingTrendsData.trend_analysis).length > 0 && (
-                  <Card className="p-6">
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                     <h3 className="text-lg font-semibold text-foreground mb-4">Trend Analysis</h3>
-                    <Card className="overflow-hidden border border-border">
+                    <Card className="overflow-hidden border border-border rounded-lg">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -629,9 +695,9 @@ export default function ReportsPage() {
                 {/* Spending by Category */}
                 {monthlySummaryData.spending_by_category?.length > 0 && (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <Card className="p-6">
+                    <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                       <h3 className="text-lg font-semibold text-foreground mb-4">Top Spending Categories</h3>
-                      <Card className="overflow-hidden border border-border">
+                      <Card className="overflow-hidden border border-border rounded-lg">
                         <Table>
                           <TableHeader>
                             <TableRow>
@@ -653,12 +719,12 @@ export default function ReportsPage() {
                       </Card>
                     </Card>
 
-                    <Card className="p-6">
+                    <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                       <h3 className="text-lg font-semibold text-foreground mb-4">Category Distribution</h3>
                       <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
                           <Pie
-                            data={monthlySummaryData.spending_by_category.slice(0, 8).map((cat: any) => ({ name: cat.category, value: cat.amount }))}
+                            data={monthlySummaryData.spending_by_category.slice(0, 8).map((cat: any) => ({ name: cat.category, value: Math.abs(cat.amount) }))}
                             cx="50%"
                             cy="50%"
                             labelLine={false}
@@ -671,7 +737,15 @@ export default function ReportsPage() {
                               <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                             ))}
                           </Pie>
-                          <Tooltip formatter={(value: any) => formatCurrency(value)} />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: '#0a0a0a',
+                              border: '1px solid #2a2a2a',
+                              borderRadius: '8px',
+                              fontSize: '12px',
+                            }}
+                            formatter={(value: any) => formatCurrency(value)}
+                          />
                         </PieChart>
                       </ResponsiveContainer>
                     </Card>
@@ -712,27 +786,46 @@ export default function ReportsPage() {
             ) : extendedNetWorthData ? (
               <>
                 {/* Net Worth Trend Chart */}
-                <Card className="p-6">
+                <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                   <h3 className="text-lg font-semibold text-foreground mb-4">Net Worth Trend</h3>
                   <ResponsiveContainer width="100%" height={400}>
                     <LineChart data={extendedNetWorthData.trend}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="month" />
-                      <YAxis />
-                      <Tooltip formatter={(value: any) => formatCurrency(value)} />
-                      <Legend />
-                      <Line type="monotone" dataKey="assets" stroke="#00C49F" strokeWidth={2} name="Assets" />
-                      <Line type="monotone" dataKey="debts" stroke="#FF8042" strokeWidth={2} name="Debts" />
-                      <Line type="monotone" dataKey="net_worth" stroke="#0088FE" strokeWidth={3} name="Net Worth" />
+                      <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} horizontal={true} vertical={false} />
+                      <XAxis
+                        dataKey="month"
+                        stroke="#888888"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        stroke="#888888"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#0a0a0a',
+                          border: '1px solid #2a2a2a',
+                          borderRadius: '8px',
+                          fontSize: '12px',
+                        }}
+                        formatter={(value: any) => formatCurrency(value)}
+                      />
+                      <Legend iconType="circle" wrapperStyle={{ paddingTop: '10px' }} />
+                      <Line type="monotone" dataKey="assets" stroke="#10b981" strokeWidth={2} name="Assets" />
+                      <Line type="monotone" dataKey="debts" stroke="#ef4444" strokeWidth={2} name="Debts" />
+                      <Line type="monotone" dataKey="net_worth" stroke="#3b82f6" strokeWidth={3} name="Net Worth" />
                     </LineChart>
                   </ResponsiveContainer>
                 </Card>
 
                 {/* Net Worth History Table */}
-                <Card className="p-6">
+                <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                   <h3 className="text-lg font-semibold text-foreground mb-4">Monthly Breakdown</h3>
                   <div className="max-h-[400px] overflow-auto">
-                    <Card className="overflow-hidden border border-border">
+                    <Card className="overflow-hidden border border-border rounded-lg">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -832,7 +925,7 @@ export default function ReportsPage() {
                 {/* Charts Row */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Spending by Category */}
-                  <Card className="p-6">
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                     <h3 className="text-lg font-semibold text-foreground mb-4">Spending by Category</h3>
                     {tagReportData.spending_by_category?.length > 0 ? (
                       <ResponsiveContainer width="100%" height={300}>
@@ -851,7 +944,15 @@ export default function ReportsPage() {
                               <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                             ))}
                           </Pie>
-                          <Tooltip formatter={(value: any) => formatCurrency(value)} />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: '#0a0a0a',
+                              border: '1px solid #2a2a2a',
+                              borderRadius: '8px',
+                              fontSize: '12px',
+                            }}
+                            formatter={(value: any) => formatCurrency(value)}
+                          />
                         </PieChart>
                       </ResponsiveContainer>
                     ) : (
@@ -862,7 +963,7 @@ export default function ReportsPage() {
                   </Card>
 
                   {/* Distribution by Account */}
-                  <Card className="p-6">
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                     <h3 className="text-lg font-semibold text-foreground mb-4">Distribution by Account</h3>
                     {tagReportData.distribution_by_account?.length > 0 ? (
                       <ResponsiveContainer width="100%" height={300}>
@@ -881,7 +982,15 @@ export default function ReportsPage() {
                               <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                             ))}
                           </Pie>
-                          <Tooltip formatter={(value: any) => formatCurrency(value)} />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: '#0a0a0a',
+                              border: '1px solid #2a2a2a',
+                              borderRadius: '8px',
+                              fontSize: '12px',
+                            }}
+                            formatter={(value: any) => formatCurrency(value)}
+                          />
                         </PieChart>
                       </ResponsiveContainer>
                     ) : (
@@ -894,17 +1003,36 @@ export default function ReportsPage() {
 
                 {/* Monthly Trend */}
                 {tagReportData.monthly_trend?.length > 0 && (
-                  <Card className="p-6">
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                     <h3 className="text-lg font-semibold text-foreground mb-4">Monthly Trend</h3>
                     <ResponsiveContainer width="100%" height={300}>
                       <LineChart data={tagReportData.monthly_trend}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="month" />
-                        <YAxis />
-                        <Tooltip formatter={(value: any) => formatCurrency(value)} />
-                        <Legend />
-                        <Line type="monotone" dataKey="income" stroke="#00C49F" strokeWidth={2} name="Income" />
-                        <Line type="monotone" dataKey="expenses" stroke="#FF8042" strokeWidth={2} name="Expenses" />
+                        <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} horizontal={true} vertical={false} />
+                        <XAxis
+                          dataKey="month"
+                          stroke="#888888"
+                          fontSize={12}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <YAxis
+                          stroke="#888888"
+                          fontSize={12}
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: '#0a0a0a',
+                            border: '1px solid #2a2a2a',
+                            borderRadius: '8px',
+                            fontSize: '12px',
+                          }}
+                          formatter={(value: any) => formatCurrency(value)}
+                        />
+                        <Legend iconType="circle" wrapperStyle={{ paddingTop: '10px' }} />
+                        <Line type="monotone" dataKey="income" stroke="#10b981" strokeWidth={2} name="Income" />
+                        <Line type="monotone" dataKey="expenses" stroke="#ef4444" strokeWidth={2} name="Expenses" />
                       </LineChart>
                     </ResponsiveContainer>
                   </Card>
@@ -912,10 +1040,10 @@ export default function ReportsPage() {
 
                 {/* Transactions Table */}
                 {tagReportData.transactions?.length > 0 && (
-                  <Card className="p-6">
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                     <h3 className="text-lg font-semibold text-foreground mb-4">Transactions ({tagReportData.transactions.length})</h3>
                     <div className="max-h-[400px] overflow-auto">
-                      <Card className="overflow-hidden border border-border">
+                      <Card className="overflow-hidden border border-border rounded-lg">
                         <Table>
                           <TableHeader>
                             <TableRow>

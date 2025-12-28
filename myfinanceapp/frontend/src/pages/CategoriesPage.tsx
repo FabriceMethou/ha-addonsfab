@@ -369,7 +369,7 @@ export default function CategoriesPage() {
       </Tabs>
 
       {/* Categories List */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         {filteredCategories && filteredCategories.length > 0 ? (
           <Accordion>
             {filteredCategories.map((category: any) => (

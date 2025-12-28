@@ -14,6 +14,11 @@ import {
   TableHead,
   TableRow,
   TableCell,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
 } from '../components/shadcn';
 import {
   Mail,
@@ -31,6 +36,7 @@ export default function NotificationsPage() {
   const queryClient = useQueryClient();
   const [testEmail, setTestEmail] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [disableEmailConfirm, setDisableEmailConfirm] = useState(false);
 
   // Fetch alert configuration
   const { data: config, isLoading } = useQuery({
@@ -131,9 +137,12 @@ export default function NotificationsPage() {
   };
 
   const handleDisableEmail = () => {
-    if (window.confirm('Are you sure you want to disable email notifications?')) {
-      disableEmailMutation.mutate();
-    }
+    setDisableEmailConfirm(true);
+  };
+
+  const confirmDisableEmail = () => {
+    disableEmailMutation.mutate();
+    setDisableEmailConfirm(false);
   };
 
   if (isLoading) {
@@ -162,7 +171,7 @@ export default function NotificationsPage() {
       </div>
 
       {/* Email Configuration */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-2 mb-4">
           <Mail className="w-5 h-5 text-primary" />
           <h2 className="text-lg font-semibold text-foreground">Email Configuration</h2>
@@ -276,7 +285,7 @@ export default function NotificationsPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Alert Thresholds */}
-        <Card className="p-6">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex items-center gap-2 mb-4">
             <Bell className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold text-foreground">Alert Thresholds</h2>
@@ -347,7 +356,7 @@ export default function NotificationsPage() {
         </Card>
 
         {/* Test Email */}
-        <Card className="p-6">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex items-center gap-2 mb-4">
             <Send className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold text-foreground">Test Email</h2>
@@ -394,7 +403,7 @@ export default function NotificationsPage() {
       </div>
 
       {/* Alert History */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-2 mb-4">
           <History className="w-5 h-5 text-primary" />
           <h2 className="text-lg font-semibold text-foreground">Alert History</h2>
@@ -442,7 +451,7 @@ export default function NotificationsPage() {
       </Card>
 
       {/* Help Information */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-2 mb-4">
           <Shield className="w-5 h-5 text-primary" />
           <h2 className="text-lg font-semibold text-foreground">Email Setup Guide</h2>
@@ -468,6 +477,34 @@ export default function NotificationsPage() {
           </div>
         </div>
       </Card>
+
+      {/* Disable Email Confirmation Dialog */}
+      <Dialog open={disableEmailConfirm} onOpenChange={() => setDisableEmailConfirm(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disable Email Notifications</DialogTitle>
+          </DialogHeader>
+
+          <div className="py-4">
+            <p className="text-foreground-muted">
+              Are you sure you want to disable email notifications? You will no longer receive alerts about your finances.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDisableEmailConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDisableEmail}
+              disabled={disableEmailMutation.isPending}
+            >
+              {disableEmailMutation.isPending ? 'Disabling...' : 'Disable Notifications'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -825,13 +825,6 @@ class FinanceDatabase:
             cursor.execute("ALTER TABLE envelopes ADD COLUMN tags TEXT")
             logger.info("Added tags column to envelopes table")
 
-        # Migration: Add transfer_amount column to transactions if it doesn't exist
-        cursor.execute("PRAGMA table_info(transactions)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'transfer_amount' not in columns:
-            cursor.execute("ALTER TABLE transactions ADD COLUMN transfer_amount REAL")
-            logger.info("Added transfer_amount column to transactions table")
-
         # Migration: Add tax column to investment_transactions if it doesn't exist
         cursor.execute("PRAGMA table_info(investment_transactions)")
         columns = [col[1] for col in cursor.fetchall()]
@@ -1414,22 +1407,16 @@ class FinanceDatabase:
                 continue
 
             # Update primary account balance
-            if trans_dict['category'] == 'transfer' and trans_dict['is_transfer']:
-                # For transfers, the amount should be negative for the source account
-                source_amount = -abs(trans_dict['amount'])
-                self._update_account_balance(
-                    cursor,
-                    trans_dict['account_id'],
-                    source_amount,
-                    trans_dict['category']
-                )
-            else:
-                self._update_account_balance(
-                    cursor,
-                    trans_dict['account_id'],
-                    trans_dict['amount'],
-                    trans_dict['category']
-                )
+            # All amounts are already correctly signed:
+            # - Income: positive
+            # - Expense: negative
+            # - Transfer: negative (money leaving source account)
+            self._update_account_balance(
+                cursor,
+                trans_dict['account_id'],
+                trans_dict['amount'],
+                trans_dict['category']
+            )
 
             # Handle same-currency transfers (update destination account too)
             if trans_dict['is_transfer'] and trans_dict['transfer_account_id'] and trans_dict['category'] == 'transfer':
@@ -2232,21 +2219,21 @@ class FinanceDatabase:
         Args:
             cursor: Database cursor
             account_id: Account to update
-            amount: Transaction amount
+            amount: Transaction amount (already signed: negative for expenses, positive for income)
             transaction_category: 'income', 'expense', or 'transfer'
         """
         if transaction_category == 'income':
-            # Income increases balance
+            # Income increases balance (amount is positive)
             cursor.execute("""
                 UPDATE accounts
                 SET balance = balance + ?
                 WHERE id = ?
             """, (amount, account_id))
         elif transaction_category == 'expense':
-            # Expense decreases balance
+            # Expense decreases balance (amount is already negative, so we add it)
             cursor.execute("""
                 UPDATE accounts
-                SET balance = balance - ?
+                SET balance = balance + ?
                 WHERE id = ?
             """, (amount, account_id))
         elif transaction_category == 'transfer':
@@ -3969,7 +3956,7 @@ class FinanceDatabase:
             
             if period_key not in trends:
                 trends[period_key] = {'total': 0, 'by_category': {}}
-            
+
             trends[period_key]['total'] += abs(t['amount'])
             cat = t['type_name']
             trends[period_key]['by_category'][cat] = trends[period_key]['by_category'].get(cat, 0) + abs(t['amount'])
@@ -4061,7 +4048,7 @@ class FinanceDatabase:
                 trends[period_key]['income'] += t['amount']
             elif t['category'] == 'expense':
                 trends[period_key]['expenses'] += abs(t['amount'])
-            
+
             trends[period_key]['net'] = trends[period_key]['income'] - trends[period_key]['expenses']
         
         return {
@@ -4689,28 +4676,36 @@ class FinanceDatabase:
         # Build update query dynamically based on provided fields
         update_fields = []
         update_values = []
-        
+
         # Only update fields that are actually provided in update_data
+        if 'security_id' in update_data:
+            update_fields.append("security_id = ?")
+            update_values.append(update_data['security_id'])
+
         if 'quantity' in update_data:
             update_fields.append("quantity = ?")
             update_values.append(update_data['quantity'])
-        
+
         if 'purchase_price' in update_data:
             update_fields.append("average_cost = ?")
             update_values.append(update_data['purchase_price'])
-        
+
+        if 'purchase_date' in update_data:
+            update_fields.append("purchase_date = ?")
+            update_values.append(update_data['purchase_date'])
+
         if 'account_id' in update_data:
             update_fields.append("account_id = ?")
             update_values.append(update_data['account_id'])
-        
+
         if 'currency' in update_data:
             update_fields.append("currency = ?")
             update_values.append(update_data['currency'])
-        
+
         if 'current_price' in update_data:
             update_fields.append("current_price = ?")
             update_values.append(update_data['current_price'])
-        
+
         if 'notes' in update_data:
             update_fields.append("notes = ?")
             update_values.append(update_data['notes'])
@@ -4737,15 +4732,21 @@ class FinanceDatabase:
         if success:
             # Build log message based on what was actually updated
             updated_fields = []
+            if 'security_id' in update_data:
+                updated_fields.append(f"security_id={update_data['security_id']}")
             if 'quantity' in update_data:
                 updated_fields.append(f"quantity={update_data['quantity']}")
             if 'purchase_price' in update_data:
                 updated_fields.append(f"price={update_data['purchase_price']}")
+            if 'purchase_date' in update_data:
+                updated_fields.append(f"purchase_date={update_data['purchase_date']}")
+            if 'account_id' in update_data:
+                updated_fields.append(f"account_id={update_data['account_id']}")
             if 'currency' in update_data:
                 updated_fields.append(f"currency={update_data['currency']}")
             if 'notes' in update_data:
                 updated_fields.append("notes")
-            
+
             logger.info(f"Updated investment holding ID {holding_id}: {', '.join(updated_fields)}")
 
         return success
@@ -4768,13 +4769,23 @@ class FinanceDatabase:
         return success
 
     def delete_investment_holding(self, holding_id: int) -> bool:
-        """Delete an investment holding and all its transactions."""
+        """
+        Delete an investment holding and all its transactions.
+
+        This method:
+        1. Gets all investment transactions for this holding
+        2. Reverses balance impacts on linked accounts
+        3. Deletes linked transactions in the transactions table
+        4. Deletes investment transactions
+        5. Deletes the holding
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
 
         # Get holding info for logging
         cursor.execute("""
-            SELECT s.symbol FROM investment_holdings h
+            SELECT h.*, s.symbol, h.account_id
+            FROM investment_holdings h
             JOIN securities s ON h.security_id = s.id
             WHERE h.id = ?
         """, (holding_id,))
@@ -4784,7 +4795,64 @@ class FinanceDatabase:
             conn.close()
             return False
 
-        # Delete the holding (CASCADE will delete related transactions)
+        holding = dict(holding)
+        investment_account_id = holding['account_id']
+        symbol = holding['symbol']
+
+        # Get the linked account (checking/savings where cash movements are recorded)
+        cursor.execute("SELECT linked_account_id FROM accounts WHERE id = ?", (investment_account_id,))
+        inv_account = cursor.fetchone()
+        linked_account_id = inv_account['linked_account_id'] if inv_account else None
+
+        # Get all investment transactions for this holding
+        cursor.execute("""
+            SELECT * FROM investment_transactions
+            WHERE holding_id = ?
+        """, (holding_id,))
+        transactions = [dict(row) for row in cursor.fetchall()]
+
+        # Process each transaction - reverse balance impact and delete linked transaction
+        for trans in transactions:
+            # Reverse balance impact on linked account (if exists and within date range)
+            if linked_account_id and trans.get('linked_transaction_id'):
+                cursor.execute("SELECT opening_date FROM accounts WHERE id = ?", (linked_account_id,))
+                account_result = cursor.fetchone()
+                account_opening_date = account_result['opening_date'] if account_result else None
+
+                # Calculate cash impact to reverse
+                transaction_type = trans['transaction_type']
+                if transaction_type == 'buy':
+                    # Buy reduces cash (negative), so reverse by adding back
+                    cash_impact = -(trans['total_amount'] + trans.get('fees', 0) + trans.get('tax', 0))
+                elif transaction_type == 'sell':
+                    # Sell increases cash (positive), so reverse by subtracting
+                    cash_impact = trans['total_amount'] - trans.get('fees', 0) - trans.get('tax', 0)
+                elif transaction_type == 'dividend':
+                    # Dividend increases cash (positive), so reverse by subtracting
+                    cash_impact = trans['total_amount']
+                else:
+                    cash_impact = 0
+
+                # Only reverse balance if transaction is within account's active period
+                should_update_balance = True
+                if account_opening_date and trans.get('transaction_date'):
+                    should_update_balance = trans['transaction_date'] >= account_opening_date
+
+                if should_update_balance and cash_impact != 0:
+                    # Reverse the balance change
+                    cursor.execute("""
+                        UPDATE accounts
+                        SET balance = balance - ?
+                        WHERE id = ?
+                    """, (cash_impact, linked_account_id))
+
+                # Delete the linked transaction from the transactions table
+                cursor.execute("DELETE FROM transactions WHERE id = ?", (trans['linked_transaction_id'],))
+
+        # Delete all investment transactions for this holding
+        cursor.execute("DELETE FROM investment_transactions WHERE holding_id = ?", (holding_id,))
+
+        # Delete the holding itself
         cursor.execute("DELETE FROM investment_holdings WHERE id = ?", (holding_id,))
 
         success = cursor.rowcount > 0
@@ -4792,7 +4860,7 @@ class FinanceDatabase:
         conn.close()
 
         if success:
-            logger.info(f"Deleted investment holding: {holding['symbol']} (ID: {holding_id})")
+            logger.info(f"Deleted investment holding: {symbol} (ID: {holding_id}) with {len(transactions)} transactions")
 
         return success
 
@@ -4917,7 +4985,7 @@ class FinanceDatabase:
         """, (
             linked_account_id,  # Transaction goes to the linked account
             trans_data['transaction_date'],
-            abs(cash_impact),  # Store as positive value, sign is determined by type
+            cash_impact,  # Store with correct sign: negative for purchases, positive for sales/dividends
             linked_account_currency,
             trans_data.get('notes', description),
             destinataire,
@@ -4928,12 +4996,21 @@ class FinanceDatabase:
 
         linked_transaction_id = cursor.lastrowid
 
-        # Update LINKED account balance (not investment account)
-        cursor.execute("""
-            UPDATE accounts
-            SET balance = balance + ?
-            WHERE id = ?
-        """, (cash_impact, linked_account_id))
+        # Check if transaction is before linked account opening date
+        cursor.execute("SELECT opening_date FROM accounts WHERE id = ?", (linked_account_id,))
+        account_result = cursor.fetchone()
+        account_opening_date = account_result['opening_date'] if account_result else None
+
+        # Only update balance if transaction is on or after account opening date
+        if account_opening_date and trans_data['transaction_date'] < account_opening_date:
+            logger.info(f"Investment transaction dated {trans_data['transaction_date']} is before linked account opening date {account_opening_date} - balance not updated")
+        else:
+            # Update LINKED account balance (not investment account)
+            cursor.execute("""
+                UPDATE accounts
+                SET balance = balance + ?
+                WHERE id = ?
+            """, (cash_impact, linked_account_id))
 
         # Create the investment transaction with link to regular transaction
         cursor.execute("""
@@ -4990,6 +5067,301 @@ class FinanceDatabase:
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    def update_investment_transaction(self, transaction_id: int, trans_data: Dict[str, Any]) -> bool:
+        """
+        Update an existing investment transaction.
+
+        This method:
+        1. Reverses the old transaction's balance impact
+        2. Updates the investment transaction record
+        3. Updates the linked regular transaction
+        4. Applies the new transaction's balance impact
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Get the old transaction data
+        cursor.execute("""
+            SELECT it.*, h.account_id, s.symbol, s.name
+            FROM investment_transactions it
+            JOIN investment_holdings h ON it.holding_id = h.id
+            JOIN securities s ON h.security_id = s.id
+            WHERE it.id = ?
+        """, (transaction_id,))
+        old_trans = cursor.fetchone()
+
+        if not old_trans:
+            conn.close()
+            return False
+
+        old_trans = dict(old_trans)
+        old_investment_account_id = old_trans['account_id']
+
+        # Get the linked account for the OLD transaction
+        cursor.execute("SELECT linked_account_id FROM accounts WHERE id = ?", (old_investment_account_id,))
+        old_inv_account = cursor.fetchone()
+        old_linked_account_id = old_inv_account['linked_account_id'] if old_inv_account else None
+
+        # Reverse old balance impact (if within account opening date range)
+        if old_linked_account_id:
+            cursor.execute("SELECT opening_date FROM accounts WHERE id = ?", (old_linked_account_id,))
+            account_result = cursor.fetchone()
+            account_opening_date = account_result['opening_date'] if account_result else None
+
+            # Calculate old cash impact
+            old_transaction_type = old_trans['transaction_type']
+            old_total = old_trans['total_amount']
+            old_fees = old_trans.get('fees', 0)
+            old_tax = old_trans.get('tax', 0)
+
+            if old_transaction_type == 'buy':
+                old_cash_impact = -(old_total + old_fees + old_tax)
+            elif old_transaction_type == 'sell':
+                old_cash_impact = old_total - old_fees - old_tax
+            elif old_transaction_type == 'dividend':
+                old_cash_impact = old_total
+            else:
+                old_cash_impact = 0
+
+            # Only reverse if transaction was on or after opening date
+            if not (account_opening_date and old_trans['transaction_date'] < account_opening_date):
+                cursor.execute("""
+                    UPDATE accounts
+                    SET balance = balance - ?
+                    WHERE id = ?
+                """, (old_cash_impact, old_linked_account_id))
+
+        # Get the NEW holding's investment account
+        cursor.execute("""
+            SELECT h.account_id, s.symbol, s.name
+            FROM investment_holdings h
+            JOIN securities s ON h.security_id = s.id
+            WHERE h.id = ?
+        """, (trans_data['holding_id'],))
+        holding_result = cursor.fetchone()
+
+        if not holding_result:
+            conn.close()
+            raise ValueError(f"Holding ID {trans_data['holding_id']} not found")
+
+        new_investment_account_id = holding_result['account_id']
+        symbol = holding_result['symbol']
+        holding_name = holding_result['name']
+
+        # Get the NEW linked account
+        cursor.execute("SELECT linked_account_id, currency FROM accounts WHERE id = ?", (new_investment_account_id,))
+        new_inv_account = cursor.fetchone()
+
+        if not new_inv_account or not new_inv_account['linked_account_id']:
+            conn.close()
+            raise ValueError(f"Investment account must have a linked account for cash movements")
+
+        new_linked_account_id = new_inv_account['linked_account_id']
+
+        # Get linked account currency
+        cursor.execute("SELECT currency FROM accounts WHERE id = ?", (new_linked_account_id,))
+        linked_account = cursor.fetchone()
+        linked_account_currency = linked_account['currency'] if linked_account else trans_data['currency']
+
+        # Calculate new cash impact
+        transaction_type = trans_data['transaction_type']
+        total_amount = trans_data['total_amount']
+        fees = trans_data.get('fees', 0)
+        tax = trans_data.get('tax', 0)
+
+        if transaction_type == 'buy':
+            cursor.execute("""
+                SELECT tt.id as type_id, ts.id as subtype_id
+                FROM transaction_types tt
+                JOIN transaction_subtypes ts ON ts.type_id = tt.id
+                WHERE tt.name = 'Investments' AND ts.name = 'Securities Purchase'
+            """)
+            type_info = cursor.fetchone()
+            new_cash_impact = -(total_amount + fees + tax)
+            description = f"Purchase of {trans_data.get('shares', 0)} shares of {symbol}"
+            destinataire = holding_name
+
+        elif transaction_type == 'sell':
+            cursor.execute("""
+                SELECT tt.id as type_id, ts.id as subtype_id
+                FROM transaction_types tt
+                JOIN transaction_subtypes ts ON ts.type_id = tt.id
+                WHERE tt.name = 'Investment Income' AND ts.name = 'Sale Proceeds'
+            """)
+            type_info = cursor.fetchone()
+            new_cash_impact = total_amount - fees - tax
+            description = f"Sale of {trans_data.get('shares', 0)} shares of {symbol}"
+            destinataire = holding_name
+
+        elif transaction_type == 'dividend':
+            cursor.execute("""
+                SELECT tt.id as type_id, ts.id as subtype_id
+                FROM transaction_types tt
+                JOIN transaction_subtypes ts ON ts.type_id = tt.id
+                WHERE tt.name = 'Investment Income' AND ts.name = 'Dividends'
+            """)
+            type_info = cursor.fetchone()
+            new_cash_impact = total_amount
+            description = f"Dividend from {symbol}"
+            destinataire = holding_name
+        else:
+            conn.close()
+            raise ValueError(f"Unknown transaction type: {transaction_type}")
+
+        # Update the linked regular transaction
+        if old_trans.get('linked_transaction_id'):
+            cursor.execute("""
+                UPDATE transactions
+                SET account_id = ?,
+                    transaction_date = ?,
+                    amount = ?,
+                    currency = ?,
+                    description = ?,
+                    destinataire = ?,
+                    type_id = ?,
+                    subtype_id = ?
+                WHERE id = ?
+            """, (
+                new_linked_account_id,
+                trans_data['transaction_date'],
+                new_cash_impact,
+                linked_account_currency,
+                trans_data.get('notes', description),
+                destinataire,
+                type_info['type_id'],
+                type_info['subtype_id'],
+                old_trans['linked_transaction_id']
+            ))
+
+        # Check if new transaction is before linked account opening date
+        cursor.execute("SELECT opening_date FROM accounts WHERE id = ?", (new_linked_account_id,))
+        account_result = cursor.fetchone()
+        account_opening_date = account_result['opening_date'] if account_result else None
+
+        # Only update balance if transaction is on or after account opening date
+        if account_opening_date and trans_data['transaction_date'] < account_opening_date:
+            logger.info(f"Investment transaction dated {trans_data['transaction_date']} is before linked account opening date {account_opening_date} - balance not updated")
+        else:
+            # Apply new balance impact
+            cursor.execute("""
+                UPDATE accounts
+                SET balance = balance + ?
+                WHERE id = ?
+            """, (new_cash_impact, new_linked_account_id))
+
+        # Update the investment transaction
+        cursor.execute("""
+            UPDATE investment_transactions
+            SET holding_id = ?,
+                transaction_type = ?,
+                transaction_date = ?,
+                shares = ?,
+                price_per_share = ?,
+                total_amount = ?,
+                fees = ?,
+                tax = ?,
+                currency = ?,
+                notes = ?
+            WHERE id = ?
+        """, (
+            trans_data['holding_id'],
+            transaction_type,
+            trans_data['transaction_date'],
+            trans_data.get('shares'),
+            trans_data.get('price_per_share'),
+            total_amount,
+            fees,
+            tax,
+            trans_data['currency'],
+            trans_data.get('notes'),
+            transaction_id
+        ))
+
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if success:
+            logger.info(f"Updated investment transaction {transaction_id}")
+        return success
+
+    def delete_investment_transaction(self, transaction_id: int) -> bool:
+        """
+        Delete an investment transaction.
+
+        This method:
+        1. Reverses the transaction's balance impact
+        2. Deletes the linked regular transaction
+        3. Deletes the investment transaction record
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Get the transaction data
+        cursor.execute("""
+            SELECT it.*, h.account_id
+            FROM investment_transactions it
+            JOIN investment_holdings h ON it.holding_id = h.id
+            WHERE it.id = ?
+        """, (transaction_id,))
+        trans = cursor.fetchone()
+
+        if not trans:
+            conn.close()
+            return False
+
+        trans = dict(trans)
+        investment_account_id = trans['account_id']
+
+        # Get the linked account
+        cursor.execute("SELECT linked_account_id FROM accounts WHERE id = ?", (investment_account_id,))
+        inv_account = cursor.fetchone()
+        linked_account_id = inv_account['linked_account_id'] if inv_account else None
+
+        # Reverse balance impact (if within account opening date range)
+        if linked_account_id:
+            cursor.execute("SELECT opening_date FROM accounts WHERE id = ?", (linked_account_id,))
+            account_result = cursor.fetchone()
+            account_opening_date = account_result['opening_date'] if account_result else None
+
+            # Calculate cash impact to reverse
+            transaction_type = trans['transaction_type']
+            total = trans['total_amount']
+            fees = trans.get('fees', 0)
+            tax = trans.get('tax', 0)
+
+            if transaction_type == 'buy':
+                cash_impact = -(total + fees + tax)
+            elif transaction_type == 'sell':
+                cash_impact = total - fees - tax
+            elif transaction_type == 'dividend':
+                cash_impact = total
+            else:
+                cash_impact = 0
+
+            # Only reverse if transaction was on or after opening date
+            if not (account_opening_date and trans['transaction_date'] < account_opening_date):
+                cursor.execute("""
+                    UPDATE accounts
+                    SET balance = balance - ?
+                    WHERE id = ?
+                """, (cash_impact, linked_account_id))
+
+        # Delete the linked regular transaction
+        if trans.get('linked_transaction_id'):
+            cursor.execute("DELETE FROM transactions WHERE id = ?", (trans['linked_transaction_id'],))
+
+        # Delete the investment transaction
+        cursor.execute("DELETE FROM investment_transactions WHERE id = ?", (transaction_id,))
+
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        if success:
+            logger.info(f"Deleted investment transaction {transaction_id}")
+        return success
 
     def calculate_holding_summary(self, holding_id: int) -> Dict[str, Any]:
         """Calculate summary for a holding (shares, cost basis, gains, etc.)."""

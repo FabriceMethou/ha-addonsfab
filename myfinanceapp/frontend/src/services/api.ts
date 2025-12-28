@@ -7,6 +7,20 @@ import axios from 'axios';
 // - nginx reverse proxy in the unified Docker image
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
 
+// Helper to check if debug logging is enabled
+const isDebugEnabled = () => {
+  try {
+    const debugSettings = localStorage.getItem('debug_settings');
+    if (debugSettings) {
+      const settings = JSON.parse(debugSettings);
+      return settings.debug_show_logs === true || settings.debug_log_api_calls === true;
+    }
+  } catch (e) {
+    // Ignore parse errors
+  }
+  return false;
+};
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -14,22 +28,51 @@ const api = axios.create({
   },
 });
 
-// Request interceptor to add auth token
+// Request interceptor to add auth token and debug logging
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+
+    // Debug logging
+    if (isDebugEnabled()) {
+      console.log(`[DEBUG API] → ${config.method?.toUpperCase()} ${config.url}`, {
+        params: config.params,
+        data: config.data,
+      });
+    }
+
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => {
+    if (isDebugEnabled()) {
+      console.error('[DEBUG API] Request error:', error);
+    }
+    return Promise.reject(error);
+  }
 );
 
-// Response interceptor to handle auth errors
+// Response interceptor to handle auth errors and debug logging
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Debug logging
+    if (isDebugEnabled()) {
+      console.log(`[DEBUG API] ← ${response.status} ${response.config.method?.toUpperCase()} ${response.config.url}`, {
+        data: response.data,
+      });
+    }
+    return response;
+  },
   (error) => {
+    // Debug logging
+    if (isDebugEnabled()) {
+      console.error(`[DEBUG API] ← ${error.response?.status || 'ERROR'} ${error.config?.method?.toUpperCase()} ${error.config?.url}`, {
+        error: error.response?.data || error.message,
+      });
+    }
+
     if (error.response?.status === 401) {
       // Token expired or invalid
       localStorage.removeItem('access_token');
@@ -101,6 +144,11 @@ export const accountsAPI = {
     api.get(`/api/accounts/${accountId}/validations?limit=${limit}`),
   getLatestValidation: (accountId: number) =>
     api.get(`/api/accounts/${accountId}/validations/latest`),
+  // Investigation & debugging
+  investigate: (accountId: number) => api.get(`/api/accounts/${accountId}/investigate`),
+  searchByBank: (bankName: string) => api.get(`/api/accounts/search/${bankName}`),
+  // Balance recalculation
+  recalculateBalances: () => api.post('/api/accounts/recalculate-balances'),
 };
 
 // Transactions API
@@ -148,7 +196,6 @@ export const envelopesAPI = {
   reactivate: (id: number) => api.put(`/api/envelopes/${id}/reactivate`),
   getTransactions: (id: number) => api.get(`/api/envelopes/${id}/transactions`),
   addTransaction: (data: any) => api.post('/api/envelopes/transactions', data),
-  deleteTransaction: (id: number, transactionId: number) => api.delete(`/api/envelopes/${id}/transactions/${transactionId}`),
 };
 
 // Debts API
@@ -180,9 +227,12 @@ export const investmentsAPI = {
   getTransactions: () => api.get('/api/investments/transactions'),
   addTransaction: (data: any) => api.post('/api/investments/transactions', data),
   createTransaction: (data: any) => api.post('/api/investments/transactions', data),
+  updateTransaction: (id: number, data: any) => api.put(`/api/investments/transactions/${id}`, data),
+  deleteTransaction: (id: number) => api.delete(`/api/investments/transactions/${id}`),
   lookupISIN: (isin: string) => api.get(`/api/investments/lookup/isin/${isin}`),
   updateHoldingPrice: (holdingId: number) => api.post(`/api/investments/holdings/${holdingId}/update-price`),
   updateAllPrices: () => api.post('/api/investments/holdings/update-all-prices'),
+  fixDividendTotals: () => api.post('/api/investments/fix-dividend-totals'),
 };
 
 // Recurring Transactions API
