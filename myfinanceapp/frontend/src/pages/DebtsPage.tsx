@@ -469,7 +469,7 @@ export default function DebtsPage() {
 
       {/* Overall Progress */}
       {totalOriginal > 0 && (
-        <Card className="p-6">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex justify-between items-center mb-2">
             <h2 className="text-lg font-semibold text-foreground">Overall Payoff Progress</h2>
             <span className="text-lg font-bold text-primary">{payoffProgress.toFixed(1)}%</span>
@@ -662,7 +662,7 @@ export default function DebtsPage() {
         </>
       ) : (
         !showInactive && (
-          <Card className="p-6">
+          <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
             <div className="flex flex-col items-center justify-center min-h-[300px]">
               <CreditCard className="h-20 w-20 text-foreground-muted mb-4" />
               <h2 className="text-xl font-semibold text-foreground-muted mb-2">No Active Debts</h2>

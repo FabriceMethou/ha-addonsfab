@@ -3,7 +3,8 @@ Investments API endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal
+from datetime import datetime
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -15,7 +16,7 @@ import yfinance as yf
 router = APIRouter()
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/app/data/finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", "/home/fab/Documents/Development/myfinanceapp/data/finance.db")
 db = FinanceDatabase(db_path=DB_PATH)
 isin_lookup = ISINLookup()
 
@@ -113,7 +114,7 @@ def _get_latest_price(symbol: str) -> Optional[float]:
 class SecurityCreate(BaseModel):
     symbol: str
     name: str
-    investment_type: str = 'stock'
+    investment_type: Literal['stock', 'etf', 'mutual_fund', 'bond', 'crypto'] = 'stock'
     isin: Optional[str] = None
     exchange: Optional[str] = None
     currency: str = 'EUR'
@@ -124,7 +125,7 @@ class SecurityCreate(BaseModel):
 class SecurityUpdate(BaseModel):
     symbol: Optional[str] = None
     name: Optional[str] = None
-    investment_type: Optional[str] = None
+    investment_type: Optional[Literal['stock', 'etf', 'mutual_fund', 'bond', 'crypto']] = None
     isin: Optional[str] = None
     exchange: Optional[str] = None
     currency: Optional[str] = None
@@ -141,11 +142,12 @@ class InvestmentHoldingCreate(BaseModel):
     notes: str = ''
 
 class InvestmentHoldingUpdate(BaseModel):
+    security_id: Optional[int] = None
     account_id: Optional[int] = None
-    symbol: Optional[str] = None
-    name: Optional[str] = None
-    investment_type: Optional[str] = None
-    isin: Optional[str] = None
+    quantity: Optional[float] = None
+    purchase_price: Optional[float] = None
+    purchase_date: Optional[str] = None
+    current_price: Optional[float] = None
     notes: Optional[str] = None
 
 class InvestmentTransactionCreate(BaseModel):
@@ -284,8 +286,11 @@ async def create_holding(holding: InvestmentHoldingCreate, current_user: User = 
         try:
             db.add_investment_transaction(transaction_data)
         except ValueError as e:
-            # If linked account issue, just create holding without transaction
-            pass
+            # If linked account issue, log the error but still create the holding
+            # User can add transactions manually later
+            import logging
+            logger = logging.getLogger("uvicorn")
+            logger.warning(f"Could not create initial transaction for holding {holding_id}: {str(e)}")
 
     return {"message": "Holding created", "holding_id": holding_id}
 
@@ -300,6 +305,17 @@ async def update_holding(
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    # Validate security_id if provided
+    if 'security_id' in update_data:
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM securities WHERE id = ?", (update_data['security_id'],))
+        security = cursor.fetchone()
+        conn.close()
+
+        if not security:
+            raise HTTPException(status_code=400, detail="Invalid security ID")
+
     # Validate account_id if provided
     if 'account_id' in update_data:
         conn = db._get_connection()
@@ -310,7 +326,7 @@ async def update_holding(
         """, (update_data['account_id'],))
         account = cursor.fetchone()
         conn.close()
-        
+
         if not account:
             raise HTTPException(status_code=400, detail="Invalid investment account ID or account is not an investment account")
 
@@ -422,7 +438,30 @@ async def get_transactions(
 ):
     """Get investment transactions, optionally filtered by holding"""
     transactions = db.get_investment_transactions(holding_id)
-    return {"transactions": transactions}
+
+    # Map database fields to API fields for consistency
+    mapped_transactions = []
+    for trans in transactions:
+        mapped_trans = {
+            'id': trans.get('id'),
+            'holding_id': trans.get('holding_id'),
+            'transaction_type': trans.get('transaction_type'),
+            'transaction_date': trans.get('transaction_date'),
+            'quantity': trans.get('shares'),  # Map shares -> quantity
+            'price': trans.get('price_per_share'),  # Map price_per_share -> price
+            'total_amount': trans.get('total_amount'),
+            'fees': trans.get('fees'),
+            'tax': trans.get('tax'),
+            'currency': trans.get('currency'),
+            'notes': trans.get('notes'),
+            'symbol': trans.get('symbol'),
+            'name': trans.get('name'),
+            'created_at': trans.get('created_at'),
+            'linked_transaction_id': trans.get('linked_transaction_id')
+        }
+        mapped_transactions.append(mapped_trans)
+
+    return {"transactions": mapped_transactions}
 
 @router.post("/transactions")
 async def create_transaction(
@@ -447,13 +486,20 @@ async def create_transaction(
 
     account_currency = result['currency'] or 'EUR'
 
+    # For dividend transactions, total_amount is just the price (dividend amount)
+    # For buy/sell transactions, total_amount is quantity * price
+    if transaction.transaction_type == 'dividend':
+        total_amount = transaction.price
+    else:
+        total_amount = transaction.quantity * transaction.price
+
     transaction_data = {
         'holding_id': transaction.holding_id,
         'transaction_type': transaction.transaction_type,
         'transaction_date': transaction.transaction_date,
         'shares': transaction.quantity,
         'price_per_share': transaction.price,
-        'total_amount': transaction.quantity * transaction.price,
+        'total_amount': total_amount,
         'fees': transaction.fees,
         'tax': transaction.tax,
         'currency': account_currency,
@@ -464,6 +510,72 @@ async def create_transaction(
         trans_id = db.add_investment_transaction(transaction_data)
         return {"message": "Transaction added successfully", "transaction_id": trans_id}
     except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.put("/transactions/{transaction_id}")
+async def update_transaction(
+    transaction_id: int,
+    transaction: InvestmentTransactionCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update an existing investment transaction"""
+    # Get the holding to find the account and its currency
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT a.currency
+        FROM investment_holdings h
+        JOIN accounts a ON h.account_id = a.id
+        WHERE h.id = ?
+    """, (transaction.holding_id,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Holding not found")
+
+    account_currency = result['currency'] or 'EUR'
+
+    # For dividend transactions, total_amount is just the price (dividend amount)
+    # For buy/sell transactions, total_amount is quantity * price
+    if transaction.transaction_type == 'dividend':
+        total_amount = transaction.price
+    else:
+        total_amount = transaction.quantity * transaction.price
+
+    transaction_data = {
+        'holding_id': transaction.holding_id,
+        'transaction_type': transaction.transaction_type,
+        'transaction_date': transaction.transaction_date,
+        'shares': transaction.quantity,
+        'price_per_share': transaction.price,
+        'total_amount': total_amount,
+        'fees': transaction.fees,
+        'tax': transaction.tax,
+        'currency': account_currency,
+        'notes': transaction.notes
+    }
+
+    try:
+        success = db.update_investment_transaction(transaction_id, transaction_data)
+        if not success:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        return {"message": "Transaction updated successfully", "transaction_id": transaction_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.delete("/transactions/{transaction_id}")
+async def delete_transaction(
+    transaction_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """Delete an investment transaction"""
+    try:
+        success = db.delete_investment_transaction(transaction_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        return {"message": "Transaction deleted successfully"}
+    except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/summary")
@@ -599,6 +711,7 @@ async def update_all_prices(current_user: User = Depends(get_current_user)):
     logger.info(f"Starting bulk price update for {len(holdings)} holdings...")
     updated_count = 0
     failed = []
+    skipped = []
 
     from datetime import datetime
     conn = db._get_connection()
@@ -607,6 +720,13 @@ async def update_all_prices(current_user: User = Depends(get_current_user)):
     for holding in holdings:
         symbol = holding.get('symbol')
         holding_id = holding.get('id')
+        investment_type = holding.get('investment_type', '')
+
+        # Skip bonds and crypto - they require manual price updates
+        if investment_type in ['bond', 'crypto']:
+            logger.info(f"Skipping {symbol} ({investment_type}) - requires manual price entry")
+            skipped.append({"symbol": symbol, "type": investment_type, "reason": "Manual price entry required"})
+            continue
 
         try:
             logger.info(f"Fetching price for {symbol}...")
@@ -635,11 +755,51 @@ async def update_all_prices(current_user: User = Depends(get_current_user)):
     conn.commit()
     conn.close()
 
-    logger.info(f"Bulk update complete: {updated_count}/{len(holdings)} succeeded, {len(failed)} failed")
+    logger.info(f"Bulk update complete: {updated_count}/{len(holdings)} succeeded, {len(failed)} failed, {len(skipped)} skipped")
 
     return {
-        "message": f"Updated {updated_count} of {len(holdings)} holdings",
+        "message": f"Updated {updated_count} of {len(holdings)} holdings ({len(skipped)} skipped)",
         "updated_count": updated_count,
         "total_holdings": len(holdings),
-        "failed": failed
+        "skipped_count": len(skipped),
+        "failed": failed,
+        "skipped": skipped
+    }
+
+@router.post("/fix-dividend-totals")
+async def fix_dividend_totals(current_user: User = Depends(get_current_user)):
+    """
+    Fix existing dividend transactions that have total_amount = 0.
+    This is a one-time utility endpoint to fix data from before the dividend fix.
+    """
+    import logging
+    logger = logging.getLogger("uvicorn")
+
+    conn = db._get_connection()
+    cursor = conn.cursor()
+
+    # Check current state
+    cursor.execute('SELECT COUNT(*) as count FROM investment_transactions WHERE transaction_type = "dividend" AND total_amount = 0')
+    count_before = cursor.fetchone()['count']
+
+    logger.info(f"Found {count_before} dividend transactions with total_amount = 0")
+
+    # Fix them
+    cursor.execute('UPDATE investment_transactions SET total_amount = price_per_share WHERE transaction_type = "dividend" AND total_amount = 0')
+    rows_updated = cursor.rowcount
+    conn.commit()
+
+    # Check after
+    cursor.execute('SELECT COUNT(*) as count FROM investment_transactions WHERE transaction_type = "dividend" AND total_amount = 0')
+    count_after = cursor.fetchone()['count']
+
+    conn.close()
+
+    logger.info(f"Fixed {rows_updated} dividend transactions. Remaining with 0 total: {count_after}")
+
+    return {
+        "message": f"Fixed {rows_updated} dividend transactions",
+        "fixed_count": rows_updated,
+        "before": count_before,
+        "after": count_after
     }

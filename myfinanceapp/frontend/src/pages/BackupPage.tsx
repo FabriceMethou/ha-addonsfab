@@ -1,6 +1,7 @@
 // Backup & Restore Page
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '../contexts/ToastContext';
 import {
   Card,
   Button,
@@ -44,6 +45,7 @@ import { backupsAPI } from '../services/api';
 import { format } from 'date-fns';
 
 export default function BackupPage() {
+  const toast = useToast();
   const [tabValue, setTabValue] = useState('create');
   const [description, setDescription] = useState('');
   const [restoreConfirm, setRestoreConfirm] = useState<any>(null);
@@ -86,7 +88,7 @@ export default function BackupPage() {
     onError: (error: any) => {
       console.error('Failed to upload backup:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      alert(`Failed to upload backup: ${errorMessage}`);
+      toast.error(`Failed to upload backup: ${errorMessage}`);
     },
   });
 
@@ -96,7 +98,7 @@ export default function BackupPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['backups'] });
       setRestoreConfirm(null);
-      alert('Backup restored successfully! Please refresh the page.');
+      toast.success('Backup restored successfully! Please refresh the page.');
     },
   });
 
@@ -124,7 +126,7 @@ export default function BackupPage() {
     mutationFn: (data: any) => backupsAPI.updateSettings(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['backup-settings'] });
-      alert('Backup settings updated successfully!');
+      toast.success('Backup settings updated successfully!');
     },
   });
 
@@ -134,7 +136,7 @@ export default function BackupPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['backups'] });
       queryClient.invalidateQueries({ queryKey: ['backup-settings'] });
-      alert('Backup cleanup completed!');
+      toast.success('Backup cleanup completed!');
     },
   });
 
@@ -152,7 +154,7 @@ export default function BackupPage() {
       if (file.name.endsWith('.db') || file.name.endsWith('.db.gz')) {
         setSelectedFile(file);
       } else {
-        alert('Invalid file type. Please select a .db or .db.gz file.');
+        toast.error('Invalid file type. Please select a .db or .db.gz file.');
         event.target.value = '';
       }
     }
@@ -201,7 +203,7 @@ export default function BackupPage() {
     } catch (error: any) {
       console.error('Failed to download backup:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      alert(`Failed to download backup: ${errorMessage}`);
+      toast.error(`Failed to download backup: ${errorMessage}`);
     }
   };
 
@@ -511,7 +513,7 @@ export default function BackupPage() {
         <TabsContent value="settings">
           <div className="mt-4 space-y-6">
             {/* Automation Settings */}
-            <Card className="p-6">
+            <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
               <h2 className="text-lg font-semibold text-foreground mb-4">Backup Automation Settings</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -617,7 +619,7 @@ export default function BackupPage() {
 
             {/* Statistics */}
             {settingsData?.statistics && (
-              <Card className="p-6">
+              <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold text-foreground">Backup Statistics</h2>
                   <Button

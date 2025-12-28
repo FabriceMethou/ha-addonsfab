@@ -2,6 +2,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ToastContextProvider } from './contexts/ToastContext';
 
 // Pages
 import LoginPage from './pages/LoginPage';
@@ -20,6 +21,8 @@ import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
 import NotificationsPage from './pages/NotificationsPage';
 import SecurityPage from './pages/SecurityPage';
+import DashboardTestPage from './pages/DashboardTestPage';
+import DashboardModernPage from './pages/DashboardModernPage';
 
 // Layout
 import Layout from './components/Layout';
@@ -76,6 +79,8 @@ function AppRoutes() {
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="security" element={<SecurityPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="dashboard-test" element={<DashboardTestPage />} />
+        <Route path="dashboard-modern" element={<DashboardModernPage />} />
       </Route>
     </Routes>
   );
@@ -86,7 +91,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <Router>
         <AuthProvider>
-          <AppRoutes />
+          <ToastContextProvider>
+            <AppRoutes />
+          </ToastContextProvider>
         </AuthProvider>
       </Router>
     </QueryClientProvider>

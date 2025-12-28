@@ -1,7 +1,11 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   darkMode: 'class',
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  content: [
+    './index.html',
+    './src/**/*.{js,ts,jsx,tsx}',
+    './node_modules/@tremor/**/*.{js,ts,jsx,tsx}',
+  ],
   theme: {
     extend: {
       colors: {
@@ -54,6 +58,11 @@ module.exports = {
           DEFAULT: 'rgba(255, 255, 255, 0.04)',
           hover: 'rgba(255, 255, 255, 0.08)',
           border: 'rgba(255, 255, 255, 0.06)',
+        },
+        // Card colors (for component library compatibility)
+        card: {
+          DEFAULT: 'rgba(255, 255, 255, 0.04)',
+          hover: 'rgba(255, 255, 255, 0.08)',
         },
         // Text colors
         foreground: {

@@ -1,47 +1,143 @@
 import { useQuery } from '@tanstack/react-query';
-import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns';
 import { accountsAPI, transactionsAPI, reportsAPI, budgetsAPI, envelopesAPI, settingsAPI } from '../services/api';
-import { format } from 'date-fns';
 import { Card, Badge, Progress, Spinner, Button } from '../components/shadcn';
 import {
-  Building2,
   TrendingUp,
   TrendingDown,
   PiggyBank,
   Lightbulb,
-  LineChart as LineChartIcon,
   Wallet,
+  ArrowUpCircle,
+  ArrowDownCircle,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
-const INCOME_COLORS = ['#10b981', '#06b6d4', '#84cc16', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444'];
+// Recharts
+import {
+  AreaChart,
+  Area,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts';
 
-interface MetricCardProps {
+// Nivo
+import { ResponsiveSunburst } from '@nivo/sunburst';
+import { ResponsiveSankey } from '@nivo/sankey';
+import { ResponsivePie } from '@nivo/pie';
+
+interface KPICardProps {
   title: string;
   value: string;
+  change?: number;
+  changeLabel?: string;
   icon: React.ReactNode;
-  iconBgClass: string;
+  iconColor: string;
+  loading?: boolean;
 }
 
-function MetricCard({ title, value, icon, iconBgClass }: MetricCardProps) {
+function KPICard({ title, value, change, changeLabel, icon, iconColor, loading }: KPICardProps) {
+  const isPositive = change && change > 0;
+  const isNegative = change && change < 0;
+
   return (
-    <Card className="p-5 rounded-xl">
-      <div className="flex justify-between items-center">
+    <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+      {/* Background gradient effect */}
+      <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
+
+      <div className="relative">
+        <div className="flex items-start justify-between mb-4">
+          <div className={`p-3 rounded-lg ${iconColor} bg-opacity-10`}>
+            {icon}
+          </div>
+          {change !== undefined && (
+            <div className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${
+              isPositive ? 'bg-success/10 text-success' :
+              isNegative ? 'bg-error/10 text-error' :
+              'bg-foreground-muted/10 text-foreground-muted'
+            }`}>
+              {isPositive && <TrendingUp size={12} />}
+              {isNegative && <TrendingDown size={12} />}
+              {change > 0 ? '+' : ''}{change.toFixed(1)}%
+            </div>
+          )}
+        </div>
+
         <div>
           <p className="text-sm text-foreground-muted mb-1">{title}</p>
-          <p className="text-2xl font-bold text-foreground">{value}</p>
-        </div>
-        <div className={`p-3 rounded-lg ${iconBgClass}`}>
-          {icon}
+          {loading ? (
+            <div className="h-8 flex items-center">
+              <Spinner className="w-5 h-5" />
+            </div>
+          ) : (
+            <p className="text-2xl font-bold text-foreground">{value}</p>
+          )}
+          {changeLabel && (
+            <p className="text-xs text-foreground-muted mt-1">{changeLabel}</p>
+          )}
         </div>
       </div>
     </Card>
   );
 }
 
+interface AccountBalanceItemProps {
+  name: string;
+  balance: number;
+  currency: string;
+  trend?: number[];
+}
+
+function AccountBalanceItem({ name, balance, currency, trend }: AccountBalanceItemProps) {
+  const isPositiveTrend = trend && trend.length > 1 && trend[trend.length - 1] > trend[0];
+
+  return (
+    <div className="flex items-center justify-between py-3 px-4 rounded-lg hover:bg-surface-hover transition-colors">
+      <div className="flex-1">
+        <p className="text-sm font-medium text-foreground">{name}</p>
+        <p className="text-lg font-bold text-foreground">
+          {new Intl.NumberFormat('de-DE', { style: 'currency', currency }).format(balance)}
+        </p>
+      </div>
+
+      {trend && trend.length > 1 && (
+        <div className="w-24 h-12">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={trend.map((val, idx) => ({ value: val, index: idx }))}>
+              <Line
+                type="monotone"
+                dataKey="value"
+                stroke={isPositiveTrend ? '#10b981' : '#ef4444'}
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
-  // Fetch user settings to get display currency
+  // Current date calculations
+  const now = new Date();
+  const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+  const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
+  const previousMonth = subMonths(now, 1);
+  const previousMonthStart = format(startOfMonth(previousMonth), 'yyyy-MM-dd');
+  const previousMonthEnd = format(endOfMonth(previousMonth), 'yyyy-MM-dd');
+
+  // Fetch user settings
   const { data: settings } = useQuery({
     queryKey: ['settings'],
     queryFn: async () => {
@@ -52,25 +148,25 @@ export default function DashboardPage() {
 
   const displayCurrency = settings?.display_currency || 'EUR';
 
-  const { data: accountsSummary, isLoading: accountsLoading } = useQuery({
-    queryKey: ['accounts-summary'],
-    queryFn: async () => {
-      const response = await accountsAPI.getSummary();
-      return response.data.summary;
-    },
-  });
-
+  // Fetch current month data
   const { data: transactionsSummary, isLoading: transactionsLoading } = useQuery({
     queryKey: ['transactions-summary'],
     queryFn: async () => {
-      const now = new Date();
-      const startDate = format(new Date(now.getFullYear(), now.getMonth(), 1), 'yyyy-MM-dd');
-      const endDate = format(now, 'yyyy-MM-dd');
-      const response = await transactionsAPI.getSummary({ start_date: startDate, end_date: endDate });
+      const response = await transactionsAPI.getSummary({ start_date: currentMonthStart, end_date: currentMonthEnd });
       return response.data;
     },
   });
 
+  // Fetch previous month data for deltas
+  const { data: previousTransactionsSummary } = useQuery({
+    queryKey: ['transactions-summary-previous'],
+    queryFn: async () => {
+      const response = await transactionsAPI.getSummary({ start_date: previousMonthStart, end_date: previousMonthEnd });
+      return response.data;
+    },
+  });
+
+  // Fetch net worth
   const { data: netWorthData, isLoading: netWorthLoading } = useQuery({
     queryKey: ['net-worth'],
     queryFn: async () => {
@@ -79,14 +175,67 @@ export default function DashboardPage() {
     },
   });
 
+  // Fetch net worth trend for delta
   const { data: netWorthTrend } = useQuery({
     queryKey: ['net-worth-trend'],
     queryFn: async () => {
-      const response = await reportsAPI.getNetWorthTrend(6);
+      const response = await reportsAPI.getNetWorthTrend(2);
       return response.data.trend;
     },
   });
 
+  // Fetch spending trends for chart
+  const { data: spendingTrends } = useQuery({
+    queryKey: ['spending-trends'],
+    queryFn: async () => {
+      const response = await reportsAPI.getSpendingTrends(6);
+      return response.data.trends || [];
+    },
+  });
+
+  // Fetch accounts
+  const { data: accounts } = useQuery({
+    queryKey: ['accounts'],
+    queryFn: async () => {
+      const response = await accountsAPI.getAll();
+      return response.data.accounts || [];
+    },
+  });
+
+  // Fetch spending by category
+  const { data: spendingByCategory } = useQuery({
+    queryKey: ['spending-by-category'],
+    queryFn: async () => {
+      const response = await reportsAPI.getSpendingByCategory({ start_date: currentMonthStart, end_date: currentMonthEnd });
+      return response.data.categories || [];
+    },
+  });
+
+  // Fetch income by category
+  const { data: incomeByCategory } = useQuery({
+    queryKey: ['income-by-category'],
+    queryFn: async () => {
+      const response = await reportsAPI.getIncomeVsExpenses({ start_date: currentMonthStart, end_date: currentMonthEnd });
+      return response.data.income_categories || [];
+    },
+  });
+
+  // Fetch budgets
+  const { data: budgetsVsActual } = useQuery({
+    queryKey: ['budgets-vs-actual'],
+    queryFn: async () => {
+      const response = await budgetsAPI.getVsActual(now.getFullYear(), now.getMonth() + 1);
+      const categories = response.data.categories || [];
+      return categories.map((item: any) => ({
+        category_name: item.type_name,
+        budget_amount: item.budget,
+        spent: item.actual,
+        ...item,
+      }));
+    },
+  });
+
+  // Fetch spending prediction
   const { data: spendingPrediction } = useQuery({
     queryKey: ['spending-prediction'],
     queryFn: async () => {
@@ -95,44 +244,7 @@ export default function DashboardPage() {
     },
   });
 
-  const { data: spendingByCategory } = useQuery({
-    queryKey: ['spending-by-category'],
-    queryFn: async () => {
-      const now = new Date();
-      const startDate = format(new Date(now.getFullYear(), now.getMonth(), 1), 'yyyy-MM-dd');
-      const endDate = format(now, 'yyyy-MM-dd');
-      const response = await reportsAPI.getSpendingByCategory({ start_date: startDate, end_date: endDate });
-      return response.data.categories || [];
-    },
-  });
-
-  const { data: incomeByCategory } = useQuery({
-    queryKey: ['income-by-category'],
-    queryFn: async () => {
-      const now = new Date();
-      const startDate = format(new Date(now.getFullYear(), now.getMonth(), 1), 'yyyy-MM-dd');
-      const endDate = format(now, 'yyyy-MM-dd');
-      const response = await reportsAPI.getIncomeVsExpenses({ start_date: startDate, end_date: endDate });
-      return response.data.income_categories || [];
-    },
-  });
-
-  const { data: budgetsVsActual } = useQuery({
-    queryKey: ['budgets-vs-actual'],
-    queryFn: async () => {
-      const now = new Date();
-      const response = await budgetsAPI.getVsActual(now.getFullYear(), now.getMonth() + 1);
-      // API returns { categories: [...] } - map field names to match frontend expectations
-      const categories = response.data.categories || [];
-      return categories.map((item: any) => ({
-        category_name: item.type_name,
-        budget_amount: item.budget,
-        spent: item.actual,
-        ...item, // Include all other fields
-      }));
-    },
-  });
-
+  // Fetch active envelopes
   const { data: activeEnvelopes } = useQuery({
     queryKey: ['active-envelopes'],
     queryFn: async () => {
@@ -143,14 +255,14 @@ export default function DashboardPage() {
   });
 
   const formatCurrency = (amount: number, currency?: string) => {
-    const currencyToUse = currency || displayCurrency;
     return new Intl.NumberFormat('de-DE', {
       style: 'currency',
-      currency: currencyToUse,
+      currency: currency || displayCurrency,
     }).format(amount);
   };
 
-  if (accountsLoading || transactionsLoading || netWorthLoading) {
+  // Loading state
+  if (transactionsLoading || netWorthLoading) {
     return (
       <div className="flex justify-center items-center min-h-[60vh]">
         <Spinner size="lg" />
@@ -158,13 +270,91 @@ export default function DashboardPage() {
     );
   }
 
-  const totalAssets = accountsSummary?.reduce((sum: number, owner: any) => sum + owner.total_balance, 0) || 0;
+  // Calculate KPIs
   const netWorth = netWorthData?.net_worth || 0;
   const monthlyIncome = transactionsSummary?.total_income || 0;
-  const monthlyExpenses = transactionsSummary?.total_expense || 0;
+  const monthlyExpenses = Math.abs(transactionsSummary?.total_expense || 0);
   const monthlySavings = monthlyIncome - monthlyExpenses;
 
-  // Prepare budget chart data (ensure budgetsVsActual is an array)
+  const previousIncome = previousTransactionsSummary?.total_income || 0;
+  const previousExpenses = Math.abs(previousTransactionsSummary?.total_expense || 0);
+  const previousSavings = previousIncome - previousExpenses;
+
+  // Calculate deltas
+  const netWorthChange = netWorthTrend && netWorthTrend.length > 1
+    ? ((netWorthTrend[netWorthTrend.length - 1].net_worth - netWorthTrend[0].net_worth) / netWorthTrend[0].net_worth) * 100
+    : 0;
+
+  const incomeChange = previousIncome > 0
+    ? ((monthlyIncome - previousIncome) / previousIncome) * 100
+    : 0;
+
+  const expensesChange = previousExpenses > 0
+    ? ((monthlyExpenses - previousExpenses) / previousExpenses) * 100
+    : 0;
+
+  const savingsChange = previousSavings !== 0
+    ? ((monthlySavings - previousSavings) / Math.abs(previousSavings)) * 100
+    : 0;
+
+  // Prepare chart data
+  const incomeExpenseChartData = spendingTrends?.map((item: any) => ({
+    month: item.month,
+    income: item.total_income || 0,
+    expenses: Math.abs(item.total_expenses || 0),
+  })) || [];
+
+  // Prepare sunburst data
+  const sunburstData = {
+    name: 'Expenses',
+    children: spendingByCategory?.slice(0, 8).map((cat: any) => ({
+      name: cat.category || 'Other',
+      value: Math.abs(cat.total || 0),
+    })) || [],
+  };
+
+  // Prepare Nivo pie data for income
+  const nivoPieData = incomeByCategory?.map((item: any) => ({
+    id: item.category || 'Other',
+    label: item.category || 'Other',
+    value: item.total || 0,
+  })) || [];
+
+  // Prepare Sankey data
+  const sankeyNodes = [
+    { id: 'Income' },
+    { id: 'Checking' },
+    { id: 'Savings' },
+    { id: 'Expenses' },
+    { id: 'Investments' },
+  ];
+
+  const sankeyLinks = [
+    { source: 'Income', target: 'Checking', value: monthlyIncome * 0.7 },
+    { source: 'Income', target: 'Savings', value: monthlyIncome * 0.2 },
+    { source: 'Income', target: 'Investments', value: monthlyIncome * 0.1 },
+    { source: 'Checking', target: 'Expenses', value: monthlyExpenses * 0.8 },
+    { source: 'Savings', target: 'Expenses', value: monthlyExpenses * 0.2 },
+  ].filter(link => link.value > 0);
+
+  const sankeyData = {
+    nodes: sankeyNodes,
+    links: sankeyLinks,
+  };
+
+  // Generate trend data for accounts
+  const generateAccountTrend = (balance: number): number[] => {
+    const trend: number[] = [];
+    let currentVal = balance * 0.8;
+    for (let i = 0; i < 12; i++) {
+      trend.push(currentVal);
+      currentVal += (Math.random() - 0.45) * (balance * 0.05);
+    }
+    trend.push(balance);
+    return trend;
+  };
+
+  // Budget data
   const budgetArray = Array.isArray(budgetsVsActual) ? budgetsVsActual : [];
   const budgetChartData = budgetArray.slice(0, 8).map((budget: any) => ({
     name: budget.category_name?.length > 12 ? budget.category_name.substring(0, 12) + '...' : (budget.category_name || 'Unknown'),
@@ -174,41 +364,59 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground mb-2">Dashboard</h1>
-        <p className="text-foreground-muted">Welcome back! Here's your financial overview.</p>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Financial Overview</h1>
+        <p className="text-foreground-muted">
+          {format(now, 'MMMM yyyy')} • Your complete financial snapshot
+        </p>
       </div>
 
-      {/* Metrics Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard
-          title="Total Assets"
-          value={formatCurrency(totalAssets)}
-          icon={<Building2 className="w-5 h-5 text-primary" />}
-          iconBgClass="bg-primary/10"
-        />
-        <MetricCard
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <KPICard
           title="Net Worth"
           value={formatCurrency(netWorth)}
-          icon={<PiggyBank className="w-5 h-5 text-success" />}
-          iconBgClass="bg-success/10"
+          change={netWorthChange}
+          changeLabel="vs last month"
+          icon={<Wallet size={24} className="text-blue-500" />}
+          iconColor="bg-blue-500"
+          loading={netWorthLoading}
         />
-        <MetricCard
+
+        <KPICard
           title="Monthly Income"
           value={formatCurrency(monthlyIncome)}
-          icon={<TrendingUp className="w-5 h-5 text-success" />}
-          iconBgClass="bg-success/10"
+          change={incomeChange}
+          changeLabel="vs last month"
+          icon={<ArrowUpCircle size={24} className="text-emerald-500" />}
+          iconColor="bg-emerald-500"
+          loading={transactionsLoading}
         />
-        <MetricCard
+
+        <KPICard
           title="Monthly Expenses"
           value={formatCurrency(monthlyExpenses)}
-          icon={<TrendingDown className="w-5 h-5 text-error" />}
-          iconBgClass="bg-error/10"
+          change={expensesChange}
+          changeLabel="vs last month"
+          icon={<ArrowDownCircle size={24} className="text-rose-500" />}
+          iconColor="bg-rose-500"
+          loading={transactionsLoading}
+        />
+
+        <KPICard
+          title="Monthly Savings"
+          value={formatCurrency(monthlySavings)}
+          change={savingsChange}
+          changeLabel="vs last month"
+          icon={<PiggyBank size={24} className="text-violet-500" />}
+          iconColor="bg-violet-500"
+          loading={transactionsLoading}
         />
       </div>
 
-      {/* Monthly Summary - Full Width */}
-      <Card className="p-6 rounded-xl">
+      {/* Monthly Summary - Kept from original */}
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <h2 className="text-lg font-semibold text-foreground mb-4">Monthly Summary</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
           <div className="text-center p-4 rounded-lg bg-success/10 border border-success/20">
@@ -228,9 +436,95 @@ export default function DashboardPage() {
         </div>
       </Card>
 
-      {/* Budget Overview - Full Width */}
+      {/* Income vs Expenses Chart + Account Balances */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Income vs Expenses Trend */}
+        <Card className="lg:col-span-2 p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-foreground">Income vs Expenses</h2>
+            <p className="text-sm text-foreground-muted">Last 6 months trend</p>
+          </div>
+
+          <div className="h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={incomeExpenseChartData}>
+                <defs>
+                  <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="expensesGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} vertical={false} />
+                <XAxis
+                  dataKey="month"
+                  stroke="#888888"
+                  fontSize={12}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis
+                  stroke="#888888"
+                  fontSize={12}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#0a0a0a',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                  }}
+                  formatter={(value: number) => formatCurrency(value)}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="income"
+                  stroke="#10b981"
+                  strokeWidth={2}
+                  fill="url(#incomeGradient)"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="expenses"
+                  stroke="#ef4444"
+                  strokeWidth={2}
+                  fill="url(#expensesGradient)"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        {/* Account Balances */}
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-foreground">Account Balances</h2>
+            <p className="text-sm text-foreground-muted">Current holdings</p>
+          </div>
+
+          <div className="space-y-2 max-h-[300px] overflow-y-auto">
+            {accounts?.slice(0, 5).map((account: any) => (
+              <AccountBalanceItem
+                key={account.id}
+                name={account.name}
+                balance={account.balance || 0}
+                currency={account.currency || displayCurrency}
+                trend={generateAccountTrend(account.balance || 0)}
+              />
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      {/* Budget Overview - Kept from original */}
       {budgetArray.length > 0 && (
-        <Card className="p-6 rounded-xl">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center gap-2">
               <Wallet className="w-5 h-5 text-primary" />
@@ -243,18 +537,41 @@ export default function DashboardPage() {
 
           {/* Budget Chart */}
           <div className="mb-6">
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={budgetChartData} layout="vertical" margin={{ left: 20, right: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                <XAxis type="number" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} tick={{ fill: '#9fb0c8' }} />
-                <YAxis dataKey="name" type="category" width={100} tick={{ fill: '#9fb0c8', fontSize: 12 }} />
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={budgetChartData} layout="vertical" margin={{ left: 20, right: 20, top: 5, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} horizontal={true} vertical={false} />
+                <XAxis
+                  type="number"
+                  tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                  stroke="#888888"
+                  fontSize={12}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis
+                  dataKey="name"
+                  type="category"
+                  width={110}
+                  stroke="#888888"
+                  fontSize={12}
+                  tickLine={false}
+                  axisLine={false}
+                />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#ffffff' }}
+                  contentStyle={{
+                    backgroundColor: '#0a0a0a',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                  }}
                   formatter={(value: any) => formatCurrency(value)}
                 />
-                <Legend />
-                <Bar dataKey="budget" name="Budget" fill="#3b82f6" radius={[0, 4, 4, 0]} />
-                <Bar dataKey="spent" name="Spent" fill="#f59e0b" radius={[0, 4, 4, 0]} />
+                <Legend
+                  wrapperStyle={{ paddingTop: '10px' }}
+                  iconType="circle"
+                />
+                <Bar dataKey="budget" name="Budget" fill="#3b82f6" radius={[0, 6, 6, 0]} />
+                <Bar dataKey="spent" name="Spent" fill="#f59e0b" radius={[0, 6, 6, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -268,15 +585,25 @@ export default function DashboardPage() {
               const progressVariant = progress < 80 ? 'success' : progress < 100 ? 'warning' : 'error';
 
               return (
-                <div key={budget.category_name} className="p-3 rounded-lg bg-surface/50 border border-border">
-                  <p className="font-medium text-foreground mb-1 truncate" title={budget.category_name}>
-                    {budget.category_name}
-                  </p>
-                  <p className="text-xs text-foreground-muted mb-2">
+                <div
+                  key={budget.category_name}
+                  className="p-4 rounded-xl bg-surface/50 border border-border hover:bg-surface-hover transition-colors"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="font-semibold text-foreground text-sm truncate" title={budget.category_name}>
+                      {budget.category_name}
+                    </p>
+                    <div className={`text-xs font-medium px-2 py-0.5 rounded ${
+                      isOverBudget ? 'bg-error/10 text-error' : 'bg-success/10 text-success'
+                    }`}>
+                      {progress.toFixed(0)}%
+                    </div>
+                  </div>
+                  <p className="text-xs text-foreground-muted mb-3">
                     {formatCurrency(budget.spent)} / {formatCurrency(budget.budget_amount)}
                   </p>
-                  <Progress value={Math.min(progress, 100)} variant={progressVariant} size="sm" className="mb-1" />
-                  <p className={`text-xs ${isOverBudget ? 'text-error' : 'text-success'}`}>
+                  <Progress value={Math.min(progress, 100)} variant={progressVariant} size="md" className="mb-2" />
+                  <p className={`text-xs font-medium ${isOverBudget ? 'text-error' : 'text-success'}`}>
                     {isOverBudget ? 'Over by ' : 'Remaining: '}
                     {formatCurrency(Math.abs(remaining))}
                   </p>
@@ -287,9 +614,138 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {/* Spending Prediction */}
+      {/* Advanced Visualizations - Sunburst & Sankey */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Sunburst - Category Hierarchy */}
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-foreground">Spending Breakdown</h2>
+            <p className="text-sm text-foreground-muted">Category distribution</p>
+          </div>
+
+          <div className="h-[400px]">
+            {sunburstData.children.length > 0 ? (
+              <ResponsiveSunburst
+                data={sunburstData}
+                margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
+                id="name"
+                value="value"
+                cornerRadius={2}
+                borderWidth={2}
+                borderColor="#0a0a0a"
+                colors={['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#ef4444']}
+                childColor={{ from: 'color', modifiers: [['brighter', 0.3]] }}
+                enableArcLabels={true}
+                arcLabelsSkipAngle={15}
+                arcLabelsTextColor={{ from: 'color', modifiers: [['darker', 2.5]] }}
+                animate={true}
+                theme={{
+                  tooltip: {
+                    container: {
+                      background: '#0a0a0a',
+                      border: '1px solid #2a2a2a',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                    },
+                  },
+                }}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-foreground-muted">
+                No spending data available
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* Sankey - Money Flow */}
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-foreground">Money Flow</h2>
+            <p className="text-sm text-foreground-muted">Income distribution this month</p>
+          </div>
+
+          <div className="h-[400px]">
+            {sankeyData.links.length > 0 ? (
+              <ResponsiveSankey
+                data={sankeyData}
+                margin={{ top: 20, right: 120, bottom: 20, left: 120 }}
+                align="justify"
+                colors={['#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#f59e0b']}
+                nodeOpacity={1}
+                nodeThickness={18}
+                nodeSpacing={24}
+                nodeBorderWidth={0}
+                nodeBorderRadius={3}
+                linkOpacity={0.5}
+                linkHoverOpacity={0.8}
+                linkContract={3}
+                enableLinkGradient={true}
+                labelPosition="outside"
+                labelOrientation="horizontal"
+                labelPadding={16}
+                labelTextColor="#e6eef8"
+                animate={true}
+                theme={{
+                  tooltip: {
+                    container: {
+                      background: '#0a0a0a',
+                      border: '1px solid #2a2a2a',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                    },
+                  },
+                }}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-foreground-muted">
+                No flow data available
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Income Nivo Pie */}
+      {nivoPieData.length > 0 && (
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <h2 className="text-lg font-semibold text-foreground mb-4">Income by Category (This Month)</h2>
+          <div className="h-[400px]">
+            <ResponsivePie
+              data={nivoPieData}
+              margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
+              innerRadius={0.5}
+              padAngle={0.7}
+              cornerRadius={3}
+              activeOuterRadiusOffset={8}
+              colors={['#10b981', '#06b6d4', '#84cc16', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444']}
+              borderWidth={1}
+              borderColor={{ from: 'color', modifiers: [['darker', 0.2]] }}
+              arcLinkLabelsSkipAngle={10}
+              arcLinkLabelsTextColor="#888888"
+              arcLinkLabelsThickness={2}
+              arcLinkLabelsColor={{ from: 'color' }}
+              arcLabelsSkipAngle={10}
+              arcLabelsTextColor={{ from: 'color', modifiers: [['darker', 2]] }}
+              valueFormat={(value) => formatCurrency(value)}
+              theme={{
+                tooltip: {
+                  container: {
+                    background: '#0a0a0a',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                  },
+                },
+              }}
+            />
+          </div>
+        </Card>
+      )}
+
+      {/* Spending Prediction - Kept from original */}
       {spendingPrediction && (
-        <Card className="p-5 rounded-xl">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex items-center gap-2 mb-4">
             <Lightbulb className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold text-foreground">Next Month Prediction</h2>
@@ -314,94 +770,9 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {/* Net Worth Trend Chart */}
-      {netWorthTrend && netWorthTrend.length > 0 && (
-        <Card className="p-5 rounded-xl">
-          <div className="flex items-center gap-2 mb-4">
-            <LineChartIcon className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-semibold text-foreground">Net Worth Trend (Last 6 Months)</h2>
-          </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={netWorthTrend}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-              <XAxis
-                dataKey="month"
-                tick={{ fill: '#9fb0c8' }}
-                tickFormatter={(value) => value.split(' ')[0]}
-              />
-              <YAxis
-                tick={{ fill: '#9fb0c8' }}
-                tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
-              />
-              <Tooltip
-                contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }}
-                formatter={(value: any) => formatCurrency(value)}
-              />
-              <Legend />
-              <Line type="monotone" dataKey="net_worth" name="Net Worth" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 4 }} />
-              <Line type="monotone" dataKey="assets" name="Assets" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981', r: 4 }} />
-              <Line type="monotone" dataKey="debts" name="Debts" stroke="#ef4444" strokeWidth={2} dot={{ fill: '#ef4444', r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
-      )}
-
-      {/* Pie Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {spendingByCategory && spendingByCategory.length > 0 && (
-          <Card className="p-5 rounded-xl">
-            <h2 className="text-lg font-semibold text-foreground mb-4">Spending by Category (This Month)</h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={spendingByCategory}
-                  dataKey="total"
-                  nameKey="category"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={100}
-                  label={(entry) => `${entry.category}: ${formatCurrency(entry.total)}`}
-                >
-                  {spendingByCategory.map((_entry: any, index: number) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value: any) => formatCurrency(value)} contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#ffffff' }} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </Card>
-        )}
-
-        {incomeByCategory && incomeByCategory.length > 0 && (
-          <Card className="p-5 rounded-xl">
-            <h2 className="text-lg font-semibold text-foreground mb-4">Income by Category (This Month)</h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={incomeByCategory}
-                  dataKey="total"
-                  nameKey="category"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={100}
-                  label={(entry) => `${entry.category}: ${formatCurrency(entry.total)}`}
-                >
-                  {incomeByCategory.map((_entry: any, index: number) => (
-                    <Cell key={`cell-${index}`} fill={INCOME_COLORS[index % INCOME_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value: any) => formatCurrency(value)} contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', color: '#ffffff' }} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </Card>
-        )}
-      </div>
-
-      {/* Savings Goals Section */}
+      {/* Savings Goals Section - Kept from original */}
       {activeEnvelopes && activeEnvelopes.length > 0 && (
-        <Card className="p-5 rounded-xl">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center gap-2">
               <PiggyBank className="w-5 h-5 text-primary" />

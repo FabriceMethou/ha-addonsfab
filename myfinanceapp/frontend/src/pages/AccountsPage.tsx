@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { accountsAPI, currenciesAPI } from '../services/api';
+import { accountsAPI, currenciesAPI, settingsAPI } from '../services/api';
+import { useToast } from '../contexts/ToastContext';
 import {
   Card,
   Button,
@@ -36,6 +37,7 @@ import {
   CheckCircle,
   History,
   AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 
 interface TabPanelProps {
@@ -65,12 +67,21 @@ export default function AccountsPage() {
   const [validationHistory, setValidationHistory] = useState<any[]>([]);
 
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const { data: accountsData, isLoading: accountsLoading } = useQuery({
     queryKey: ['accounts'],
     queryFn: async () => {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
+    },
+  });
+
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const response = await settingsAPI.getAll();
+      return response.data.settings || {};
     },
   });
 
@@ -90,15 +101,13 @@ export default function AccountsPage() {
     },
   });
 
-  const { data: summaryResponse } = useQuery({
+  const { data: summaryData } = useQuery({
     queryKey: ['accounts-summary'],
     queryFn: async () => {
       const response = await accountsAPI.getSummary();
-      return response.data;
+      return response.data.summary;
     },
   });
-  const summaryData = summaryResponse?.summary;
-  const summaryCurrency = summaryResponse?.currency || 'EUR';
 
   const { data: currenciesData } = useQuery({
     queryKey: ['currencies'],
@@ -335,6 +344,48 @@ export default function AccountsPage() {
     },
   });
 
+  const recalculateBalancesMutation = useMutation({
+    mutationFn: () => accountsAPI.recalculateBalances(),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
+      const { updated_count, updates } = response.data;
+      if (updated_count > 0) {
+        const updateList = updates.map((u: any) =>
+          `${u.name}: ${u.old_balance.toFixed(2)} → ${u.new_balance.toFixed(2)}`
+        ).join(', ');
+        toast.success(`Successfully recalculated ${updated_count} account balance${updated_count !== 1 ? 's' : ''}: ${updateList}`);
+      } else {
+        toast.success('All account balances are already correct!');
+      }
+    },
+    onError: (error: any) => {
+      console.error('Failed to recalculate balances:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to recalculate balances: ${errorMessage}`);
+    },
+  });
+
+  // Optional: Auto-recalculate balances on page load (when debug setting is enabled)
+  useEffect(() => {
+    const autoRecalculate = settings?.debug_auto_recalculate === true;
+    if (autoRecalculate && accountsData) {
+      console.log('[DEBUG] Auto-recalculating balances on page load...');
+      accountsAPI.recalculateBalances()
+        .then((response) => {
+          const { updated_count } = response.data;
+          if (updated_count > 0) {
+            console.log(`[DEBUG] Auto-recalculated ${updated_count} account balances`);
+            queryClient.invalidateQueries({ queryKey: ['accounts'] });
+            queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
+          }
+        })
+        .catch((error) => {
+          console.error('[DEBUG] Auto-recalculate failed:', error);
+        });
+    }
+  }, [accountsData, settings, queryClient]);
+
   const handleSaveValidation = () => {
     if (!validatingAccount) return;
 
@@ -402,19 +453,19 @@ export default function AccountsPage() {
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {summaryData?.map((owner: any) => (
-          <Card key={owner.owner_id} className="p-5 rounded-xl">
+          <Card key={owner.owner_id} className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
             <div className="flex items-center gap-2 mb-2">
               <User className="w-5 h-5 text-primary" />
               <span className="text-lg font-semibold text-foreground">{owner.owner_name}</span>
             </div>
-            <p className="text-2xl font-bold text-primary">{formatCurrency(owner.total_balance, summaryCurrency)}</p>
+            <p className="text-2xl font-bold text-primary">{formatCurrency(owner.total_balance)}</p>
             <p className="text-sm text-foreground-muted">{owner.account_count} accounts</p>
           </Card>
         ))}
       </div>
 
       {/* Tabs */}
-      <Card className="rounded-xl overflow-hidden">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm overflow-hidden">
         <div className="border-b border-border">
           <div className="flex">
             {tabs.map((tab, index) => {
@@ -440,7 +491,15 @@ export default function AccountsPage() {
         {/* Accounts Tab */}
         <TabPanel value={tabValue} index={0}>
           <div className="p-4">
-            <div className="flex justify-end mb-4">
+            <div className="flex justify-end gap-2 mb-4">
+              <Button
+                variant="outline"
+                onClick={() => recalculateBalancesMutation.mutate()}
+                disabled={recalculateBalancesMutation.isPending}
+              >
+                <RefreshCw className={`w-4 h-4 mr-2 ${recalculateBalancesMutation.isPending ? 'animate-spin' : ''}`} />
+                {recalculateBalancesMutation.isPending ? 'Recalculating...' : 'Recalculate Balances'}
+              </Button>
               <Button onClick={() => {
                 setEditingItem(null);
                 resetAccountForm();

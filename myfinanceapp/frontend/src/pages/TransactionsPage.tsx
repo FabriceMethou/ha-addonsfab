@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { transactionsAPI, accountsAPI, categoriesAPI } from '../services/api';
 import { format } from 'date-fns';
+import { useToast } from '../contexts/ToastContext';
 import {
   Card,
   Button,
@@ -53,6 +54,7 @@ function useDebounce<T>(value: T, delay: number): T {
 }
 
 export default function TransactionsPage() {
+  const toast = useToast();
   const [openDialog, setOpenDialog] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
@@ -174,6 +176,12 @@ export default function TransactionsPage() {
       // Don't close dialog - allow adding multiple transactions
       // setOpenDialog(false);
       resetForm();
+      toast.success('Transaction created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create transaction:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create transaction: ${errorMessage}`);
     },
   });
 
@@ -188,6 +196,12 @@ export default function TransactionsPage() {
       setOpenDialog(false);
       setEditingTransaction(null);
       resetFormCompletely();
+      toast.success('Transaction updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update transaction:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update transaction: ${errorMessage}`);
     },
   });
 
@@ -199,6 +213,12 @@ export default function TransactionsPage() {
       queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
       setDeleteConfirm(null);
       setExpandedRow(null);
+      toast.success('Transaction deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete transaction:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete transaction: ${errorMessage}`);
     },
   });
 
@@ -343,7 +363,7 @@ export default function TransactionsPage() {
 
   const exportToCSV = () => {
     if (!transactionsData || transactionsData.length === 0) {
-      alert('No transactions to export');
+      toast.warning('No transactions to export');
       return;
     }
 
@@ -435,7 +455,7 @@ export default function TransactionsPage() {
 
       {/* Filters Section */}
       {showFilters && (
-        <Card className="p-5 rounded-xl">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="space-y-1.5">
               <Label>Account</Label>

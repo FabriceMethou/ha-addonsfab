@@ -1,6 +1,7 @@
 // Recurring Transactions Page - Manage recurring transaction templates
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '../contexts/ToastContext';
 import {
   Plus,
   Pencil,
@@ -46,6 +47,7 @@ import { recurringAPI, accountsAPI, categoriesAPI, transactionsAPI } from '../se
 import { format } from 'date-fns';
 
 export default function RecurringPage() {
+  const toast = useToast();
   const [currentTab, setCurrentTab] = useState<number | string>(0);
   const [openDialog, setOpenDialog] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<any>(null);
@@ -134,7 +136,7 @@ export default function RecurringPage() {
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
       queryClient.invalidateQueries({ queryKey: ['recurring-templates'] });
       queryClient.invalidateQueries({ queryKey: ['pending-transactions'] });
-      alert(`Generated ${response.data.count} pending transactions`);
+      toast.success(`Generated ${response.data.count} pending transactions`);
     },
   });
 
@@ -320,7 +322,7 @@ export default function RecurringPage() {
       </div>
 
       {/* Tabs */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <Tabs value={currentTab} onValueChange={setCurrentTab}>
           <TabsList>
             <TabsTrigger value={0}>

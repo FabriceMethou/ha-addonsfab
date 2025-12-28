@@ -17,7 +17,7 @@ from categorizer import TransactionCategorizer
 router = APIRouter()
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/app/data/finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", "/home/fab/Documents/Development/myfinanceapp/data/finance.db")
 db = FinanceDatabase(db_path=DB_PATH)
 categorizer = TransactionCategorizer()
 
@@ -29,7 +29,7 @@ class TransactionCreate(BaseModel):
     amount: float
     type_id: int
     subtype_id: Optional[int] = None
-    description: str
+    description: Optional[str] = None
     destinataire: Optional[str] = None  # Recipient/payee
     transfer_account_id: Optional[int] = None
     transfer_amount: Optional[float] = None
@@ -149,22 +149,32 @@ async def create_transaction(
         amount = -abs(amount)  # Expenses are negative
     elif category == 'income':
         amount = abs(amount)  # Income is positive
-    # Transfers keep the sign as entered
+    elif category == 'transfer':
+        amount = -abs(amount)  # Transfers are negative (money leaving source account)
+
+    # Get account currency
+    cursor.execute("SELECT currency FROM accounts WHERE id = ?", (transaction.account_id,))
+    account_result = cursor.fetchone()
+    account_currency = account_result['currency'] if account_result else 'EUR'
 
     # Determine destinataire - priority: explicit destinataire > transfer account name > description
     if transaction.destinataire:
         destinataire = transaction.destinataire
     elif category == 'transfer' and transaction.transfer_account_id:
         cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
-        account_result = cursor.fetchone()
-        if account_result:
-            destinataire = account_result['name']
+        dest_account_result = cursor.fetchone()
+        if dest_account_result:
+            destinataire = dest_account_result['name']
         else:
             destinataire = transaction.description
     else:
         destinataire = transaction.description
 
     conn.close()
+
+    # Auto-detect and set is_transfer flag
+    # Transfers should update BOTH accounts (source and destination)
+    is_transfer = bool(category == 'transfer' and transaction.transfer_account_id)
 
     # Add transaction - map API fields to database fields
     transaction_data = {
@@ -175,9 +185,10 @@ async def create_transaction(
         'subtype_id': transaction.subtype_id,
         'description': transaction.description,
         'destinataire': destinataire,
-        'currency': 'EUR',  # Default currency
+        'currency': account_currency,  # Use account's currency
         'transfer_account_id': transaction.transfer_account_id,
         'transfer_amount': transaction.transfer_amount,  # For cross-currency transfers
+        'is_transfer': is_transfer,  # Auto-detected: True when it's a transfer with destination
         'confirmed': not transaction.is_pending,  # Inverted: pending=True means confirmed=False
         'tags': transaction.tags,
     }
@@ -227,21 +238,31 @@ async def create_transactions_bulk(
                 amount = -abs(amount)  # Expenses are negative
             elif category == 'income':
                 amount = abs(amount)  # Income is positive
+            elif category == 'transfer':
+                amount = -abs(amount)  # Transfers are negative (money leaving source account)
+
+            # Get account currency
+            cursor.execute("SELECT currency FROM accounts WHERE id = ?", (transaction.account_id,))
+            account_result = cursor.fetchone()
+            account_currency = account_result['currency'] if account_result else 'EUR'
 
             # Determine destinataire - priority: explicit destinataire > transfer account name > description
             if transaction.destinataire:
                 destinataire = transaction.destinataire
             elif category == 'transfer' and transaction.transfer_account_id:
                 cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
-                account_result = cursor.fetchone()
-                if account_result:
-                    destinataire = account_result['name']
+                dest_account_result = cursor.fetchone()
+                if dest_account_result:
+                    destinataire = dest_account_result['name']
                 else:
                     destinataire = transaction.description
             else:
                 destinataire = transaction.description
 
             conn.close()
+
+            # Auto-detect and set is_transfer flag
+            is_transfer = bool(category == 'transfer' and transaction.transfer_account_id)
 
             # Add transaction - map API fields to database fields
             transaction_data = {
@@ -252,9 +273,10 @@ async def create_transactions_bulk(
                 'subtype_id': transaction.subtype_id,
                 'description': transaction.description,
                 'destinataire': destinataire,
-                'currency': 'EUR',  # Default currency
+                'currency': account_currency,  # Use account's currency
                 'transfer_account_id': transaction.transfer_account_id,
                 'transfer_amount': transaction.transfer_amount,  # For cross-currency transfers
+                'is_transfer': is_transfer,  # Auto-detected: True when it's a transfer with destination
                 'confirmed': not transaction.is_pending,  # Inverted: pending=True means confirmed=False
                 'tags': transaction.tags,
             }
@@ -324,7 +346,8 @@ async def update_transaction(
             update_data['amount'] = -abs(amount)  # Expenses are negative
         elif category == 'income':
             update_data['amount'] = abs(amount)  # Income is positive
-        # Transfers keep the sign as entered
+        elif category == 'transfer':
+            update_data['amount'] = -abs(amount)  # Transfers are negative (money leaving source account)
 
     # Map API field names to database column names
     if 'date' in update_data:
@@ -332,6 +355,19 @@ async def update_transaction(
 
     if 'is_pending' in update_data:
         update_data['confirmed'] = not update_data.pop('is_pending')
+
+    # Auto-detect and set is_transfer flag
+    # Check if type_id or transfer_account_id changed
+    if 'type_id' in update_data or 'transfer_account_id' in update_data:
+        transfer_account_id = update_data.get('transfer_account_id', existing.get('transfer_account_id'))
+        is_transfer = bool(category == 'transfer' and transfer_account_id)
+        update_data['is_transfer'] = is_transfer
+
+    # Handle destinataire field
+    # If destinataire is None or empty, use a fallback value to prevent NOT NULL constraint violation
+    if 'destinataire' in update_data and not update_data['destinataire']:
+        # Use description as fallback, or existing destinataire
+        update_data['destinataire'] = update_data.get('description', existing.get('description', ''))
 
     # Set destinataire - for transfers, use the receiving account name
     if 'description' in update_data or 'transfer_account_id' in update_data:
@@ -346,7 +382,7 @@ async def update_transaction(
                 conn.close()
                 if account_result:
                     update_data['destinataire'] = account_result['name']
-        elif 'description' in update_data:
+        elif 'description' in update_data and update_data['description']:
             # For non-transfers, use description as destinataire
             update_data['destinataire'] = update_data['description']
 

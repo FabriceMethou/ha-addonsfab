@@ -203,7 +203,7 @@ export default function BudgetsPage() {
 
       {/* Current Month Budget vs Actual */}
       {vsActualData && vsActualData.length > 0 && (
-        <Card className="p-6">
+        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <h2 className="text-lg font-semibold text-foreground mb-4">
             Budget vs Actual - {format(new Date(currentYear, currentMonth - 1), 'MMMM yyyy')}
           </h2>
@@ -242,7 +242,7 @@ export default function BudgetsPage() {
       )}
 
       {/* All Budgets Table */}
-      <Card className="p-6">
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <h2 className="text-lg font-semibold text-foreground mb-4">All Budgets</h2>
         {budgetsData && budgetsData.length > 0 ? (
           <div className="overflow-x-auto">

@@ -73,3 +73,15 @@ export {
   TabsTrigger,
   TabsContent,
 } from './Tabs'
+
+// Toast exports
+export {
+  Toast,
+  ToastProvider,
+  ToastViewport,
+  ToastTitle,
+  ToastDescription,
+  ToastClose,
+  ToastAction,
+  getToastIcon,
+} from './Toast'

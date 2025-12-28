@@ -15,7 +15,7 @@ from api.auth import get_current_user, User
 router = APIRouter()
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/app/data/finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", "/home/fab/Documents/Development/myfinanceapp/data/finance.db")
 db = FinanceDatabase(db_path=DB_PATH)
 
 # Pydantic models
@@ -82,6 +82,13 @@ async def create_account(
     current_user: User = Depends(get_current_user)
 ):
     """Create new account"""
+    # Validate that investment accounts have a linked account
+    if account.account_type == 'investment' and not account.linked_account_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Investment accounts must have a linked account for cash movements"
+        )
+
     account_name = (account.name or "").strip()
     if not account_name:
         account_name = f"{account.account_type.title()} Account"
@@ -396,3 +403,273 @@ async def get_latest_validation(
         return {"validation": None}
 
     return {"validation": validation}
+
+@router.post("/recalculate-balances")
+async def recalculate_all_balances(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Recalculate all account balances from scratch based on transactions.
+
+    This will:
+    1. Reset all accounts to their opening balances
+    2. Process all confirmed transactions (including linked investment transactions)
+    3. Skip transactions dated before account opening dates
+
+    Use this to fix balance inconsistencies or after fixing historical data.
+    """
+    try:
+        result = db.recalculate_all_balances()
+        return {
+            "message": "Balances recalculated successfully",
+            "accounts_updated": result['accounts_updated'],
+            "transactions_processed": result['transactions_processed'],
+            "historical_skipped": result['historical_skipped']
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to recalculate balances: {str(e)}"
+        )
+
+@router.post("/fix-transfer-flags")
+async def fix_transfer_flags(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Update all existing transfers to set is_transfer=True.
+
+    This fixes transfers created before the auto-detection was implemented.
+    Transfers should have is_transfer=True when they have a transfer_account_id.
+    """
+    conn = db._get_connection()
+    cursor = conn.cursor()
+
+    # Update all transactions that have transfer_account_id but is_transfer=False
+    cursor.execute("""
+        UPDATE transactions
+        SET is_transfer = 1
+        WHERE transfer_account_id IS NOT NULL
+        AND is_transfer = 0
+    """)
+
+    updated_count = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    return {
+        "message": f"Updated {updated_count} transfer transactions to set is_transfer=True",
+        "updated_count": updated_count
+    }
+
+@router.post("/fix-missing-transfer-transactions")
+async def fix_missing_transfer_transactions(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Fix missing transfer transactions.
+
+    When a transfer is created, it should create two transaction records:
+    - One on the source account
+    - One on the destination account
+
+    This endpoint finds transfers that only exist on one side and creates the missing record.
+    """
+    conn = db._get_connection()
+    cursor = conn.cursor()
+
+    # Find all transfer transactions
+    cursor.execute("""
+        SELECT t.id, t.account_id, t.transfer_account_id, t.amount, t.transaction_date,
+               t.description, t.destinataire, t.type_id, t.subtype_id, t.currency,
+               t.confirmed, t.is_historical
+        FROM transactions t
+        WHERE t.is_transfer = 1 AND t.transfer_account_id IS NOT NULL
+    """)
+    transfer_transactions = cursor.fetchall()
+
+    fixed_count = 0
+    for trans in transfer_transactions:
+        # Check if corresponding transaction exists on the other account
+        cursor.execute("""
+            SELECT id FROM transactions
+            WHERE account_id = ? AND transfer_account_id = ? AND transaction_date = ? AND ABS(ABS(amount) - ABS(?)) < 0.01
+        """, (trans['transfer_account_id'], trans['account_id'], trans['transaction_date'], trans['amount']))
+
+        corresponding = cursor.fetchone()
+
+        if not corresponding:
+            # Missing! Create the corresponding transaction
+            # Amount should be positive for the receiving account
+            corresponding_amount = abs(trans['amount'])
+
+            cursor.execute("""
+                INSERT INTO transactions
+                (account_id, transaction_date, amount, currency, description, destinataire,
+                 type_id, subtype_id, is_transfer, transfer_account_id, confirmed, is_historical)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+            """, (
+                trans['transfer_account_id'],  # The OTHER account
+                trans['transaction_date'],
+                corresponding_amount,
+                trans['currency'],
+                trans['description'] or '',
+                trans['destinataire'] or '',
+                trans['type_id'],
+                trans['subtype_id'],
+                trans['account_id'],  # Transfer FROM the original account
+                trans['confirmed'],
+                trans['is_historical']
+            ))
+
+            fixed_count += 1
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "message": f"Fixed {fixed_count} missing transfer transactions",
+        "fixed_count": fixed_count
+    }
+
+@router.get("/search/{bank_name}")
+async def search_accounts_by_bank(
+    bank_name: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Search accounts by bank name."""
+    conn = db._get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT a.id, a.name, b.name as bank_name, a.account_type, a.balance, a.currency
+        FROM accounts a
+        LEFT JOIN banks b ON a.bank_id = b.id
+        WHERE LOWER(b.name) LIKE LOWER(?)
+    """, (f"%{bank_name}%",))
+    accounts = cursor.fetchall()
+    conn.close()
+
+    return {"accounts": [dict(a) for a in accounts]}
+
+@router.get("/{account_id}/investigate")
+async def investigate_account(
+    account_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Investigate account balance discrepancies.
+    Returns detailed information about the account and all its transactions.
+    """
+    conn = db._get_connection()
+    cursor = conn.cursor()
+
+    # Get account details
+    cursor.execute("""
+        SELECT a.*, b.name as bank_name, o.name as owner_name
+        FROM accounts a
+        LEFT JOIN banks b ON a.bank_id = b.id
+        LEFT JOIN owners o ON a.owner_id = o.id
+        WHERE a.id = ?
+    """, (account_id,))
+    account = cursor.fetchone()
+
+    if not account:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    # Get all transactions for this account
+    cursor.execute("""
+        SELECT t.id, t.transaction_date, t.amount, t.description, t.destinataire,
+               tt.name as type_name, ts.name as subtype_name, tt.category,
+               t.confirmed, t.is_historical, t.is_transfer, t.transfer_account_id,
+               t.created_at
+        FROM transactions t
+        LEFT JOIN transaction_types tt ON t.type_id = tt.id
+        LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+        WHERE t.account_id = ?
+        ORDER BY t.transaction_date ASC, t.created_at ASC
+    """, (account_id,))
+    transactions = cursor.fetchall()
+
+    conn.close()
+
+    # Calculate expected balance
+    opening_balance = account['opening_balance'] if account['opening_balance'] is not None else 0
+    running_balance = opening_balance
+    calculation_steps = []
+
+    for trans in transactions:
+        trans_dict = dict(trans)
+
+        # Check if should be skipped
+        skip_reason = None
+        if trans_dict['is_historical']:
+            skip_reason = "historical"
+        elif trans_dict['transaction_date'] < account['opening_date']:
+            skip_reason = f"before opening date ({account['opening_date']})"
+        elif not trans_dict['confirmed']:
+            skip_reason = "not confirmed"
+
+        if skip_reason:
+            calculation_steps.append({
+                "transaction_id": trans_dict['id'],
+                "date": trans_dict['transaction_date'],
+                "description": trans_dict['description'],
+                "amount": trans_dict['amount'],
+                "type": trans_dict['type_name'],
+                "skipped": True,
+                "skip_reason": skip_reason,
+                "balance_after": running_balance
+            })
+            continue
+
+        category = trans_dict['category']
+        amount = trans_dict['amount']
+
+        # All amounts are stored with correct sign:
+        # - Income: positive (+100)
+        # - Expense: negative (-50)
+        # - Transfer: negative (-100, money leaving)
+        # So we always just add the amount
+        running_balance += amount
+
+        # Display operation with sign
+        if amount >= 0:
+            operation = f"+{amount}"
+        else:
+            operation = f"{amount}"  # Already has negative sign
+
+        calculation_steps.append({
+            "transaction_id": trans_dict['id'],
+            "date": trans_dict['transaction_date'],
+            "description": trans_dict['description'],
+            "amount": trans_dict['amount'],
+            "type": f"{trans_dict['type_name']} - {trans_dict['subtype_name']}",
+            "category": category,
+            "operation": operation,
+            "skipped": False,
+            "balance_after": running_balance
+        })
+
+    return {
+        "account": {
+            "id": account['id'],
+            "bank": account['bank_name'],
+            "owner": account['owner_name'],
+            "account_type": account['account_type'],
+            "current_balance": account['balance'],
+            "opening_date": account['opening_date'],
+            "opening_balance": opening_balance,
+            "currency": account['currency']
+        },
+        "transactions": [dict(t) for t in transactions],
+        "calculation": {
+            "opening_balance": opening_balance,
+            "expected_balance": running_balance,
+            "actual_balance": account['balance'],
+            "difference": running_balance - account['balance'],
+            "steps": calculation_steps
+        }
+    }
+
