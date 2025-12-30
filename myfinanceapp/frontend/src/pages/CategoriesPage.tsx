@@ -50,6 +50,7 @@ import {
   PopoverContent,
 } from '../components/shadcn';
 import { categoriesAPI } from '../services/api';
+import { useToast } from '../contexts/ToastContext';
 
 // Common emoji options for categories
 const EMOJI_OPTIONS = [
@@ -76,7 +77,45 @@ interface SubtypeFormData {
   type_id: number;
 }
 
+// KPI Card Component
+interface KPICardProps {
+  title: string;
+  value: string;
+  icon: React.ReactNode;
+  iconColor: string;
+  loading?: boolean;
+}
+
+function KPICard({ title, value, icon, iconColor, loading }: KPICardProps) {
+  return (
+    <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+      {/* Background gradient effect */}
+      <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
+
+      <div className="relative">
+        <div className="flex items-start justify-between mb-4">
+          <div className={`p-3 rounded-lg ${iconColor} bg-opacity-10`}>
+            {icon}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm text-foreground-muted mb-1">{title}</p>
+          {loading ? (
+            <div className="h-8 flex items-center">
+              <Spinner className="w-5 h-5" />
+            </div>
+          ) : (
+            <p className="text-2xl font-bold text-foreground">{value}</p>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function CategoriesPage() {
+  const toast = useToast();
   const [typeDialog, setTypeDialog] = useState(false);
   const [subtypeDialog, setSubtypeDialog] = useState(false);
   const [editingType, setEditingType] = useState<any>(null);
@@ -115,6 +154,12 @@ export default function CategoriesPage() {
       queryClient.invalidateQueries({ queryKey: ['categories-hierarchy'] });
       setTypeDialog(false);
       resetTypeForm();
+      toast.success('Category created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create category:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create category: ${errorMessage}`);
     },
   });
 
@@ -126,6 +171,12 @@ export default function CategoriesPage() {
       setTypeDialog(false);
       resetTypeForm();
       setEditingType(null);
+      toast.success('Category updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update category:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update category: ${errorMessage}`);
     },
   });
 
@@ -135,6 +186,12 @@ export default function CategoriesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['categories-hierarchy'] });
       setDeleteConfirm(null);
+      toast.success('Category deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete category:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete category: ${errorMessage}`);
     },
   });
 
@@ -145,6 +202,12 @@ export default function CategoriesPage() {
       queryClient.invalidateQueries({ queryKey: ['categories-hierarchy'] });
       setSubtypeDialog(false);
       resetSubtypeForm();
+      toast.success('Subcategory created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create subcategory:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create subcategory: ${errorMessage}`);
     },
   });
 
@@ -156,6 +219,12 @@ export default function CategoriesPage() {
       setSubtypeDialog(false);
       resetSubtypeForm();
       setEditingSubtype(null);
+      toast.success('Subcategory updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update subcategory:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update subcategory: ${errorMessage}`);
     },
   });
 
@@ -165,6 +234,12 @@ export default function CategoriesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['categories-hierarchy'] });
       setDeleteConfirm(null);
+      toast.success('Subcategory deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete subcategory:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete subcategory: ${errorMessage}`);
     },
   });
 
@@ -303,6 +378,7 @@ export default function CategoriesPage() {
 
   // Calculate statistics
   const totalTypes = categoriesData?.length || 0;
+  const totalSubtypes = categoriesData?.reduce((sum: number, cat: any) => sum + (cat.subtypes?.length || 0), 0) || 0;
   const expenseCount = categoriesData?.filter((c: any) => c.category === 'expense').length || 0;
   const incomeCount = categoriesData?.filter((c: any) => c.category === 'income').length || 0;
   const transferCount = categoriesData?.filter((c: any) => c.category === 'transfer').length || 0;
@@ -310,10 +386,55 @@ export default function CategoriesPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-foreground">
-          Transaction Categories
-        </h1>
+      <div>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Transaction Categories</h1>
+        <p className="text-foreground-muted">
+          {totalTypes} categor{totalTypes !== 1 ? 'ies' : 'y'}, {totalSubtypes} subcategor{totalSubtypes !== 1 ? 'ies' : 'y'} • Organize your transactions
+        </p>
+      </div>
+
+      {/* Summary KPI Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+        <KPICard
+          title="Total Categories"
+          value={totalTypes.toString()}
+          icon={<FolderOpen size={24} className="text-blue-500" />}
+          iconColor="bg-blue-500"
+          loading={categoriesLoading}
+        />
+        <KPICard
+          title="Expenses"
+          value={expenseCount.toString()}
+          icon={<TrendingDown size={24} className="text-rose-500" />}
+          iconColor="bg-rose-500"
+          loading={categoriesLoading}
+        />
+        <KPICard
+          title="Income"
+          value={incomeCount.toString()}
+          icon={<TrendingUp size={24} className="text-emerald-500" />}
+          iconColor="bg-emerald-500"
+          loading={categoriesLoading}
+        />
+        <KPICard
+          title="Transfers"
+          value={transferCount.toString()}
+          icon={<ArrowRightLeft size={24} className="text-cyan-500" />}
+          iconColor="bg-cyan-500"
+          loading={categoriesLoading}
+        />
+      </div>
+
+      {/* Action Bar and Filter Tabs */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <Tabs value={filterTab} onValueChange={setFilterTab}>
+          <TabsList>
+            <TabsTrigger value={0}>All ({totalTypes})</TabsTrigger>
+            <TabsTrigger value={1}>Expense ({expenseCount})</TabsTrigger>
+            <TabsTrigger value={2}>Income ({incomeCount})</TabsTrigger>
+            <TabsTrigger value={3}>Transfer ({transferCount})</TabsTrigger>
+          </TabsList>
+        </Tabs>
         <Button
           onClick={() => {
             setEditingType(null);
@@ -325,48 +446,6 @@ export default function CategoriesPage() {
           Add Category
         </Button>
       </div>
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <FolderOpen className="h-5 w-5 text-primary" />
-            <span className="text-sm text-foreground-muted">Total Categories</span>
-          </div>
-          <p className="text-2xl font-bold text-primary">{totalTypes}</p>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingDown className="h-5 w-5 text-error" />
-            <span className="text-sm text-foreground-muted">Expense</span>
-          </div>
-          <p className="text-2xl font-bold text-error">{expenseCount}</p>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingUp className="h-5 w-5 text-success" />
-            <span className="text-sm text-foreground-muted">Income</span>
-          </div>
-          <p className="text-2xl font-bold text-success">{incomeCount}</p>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <ArrowRightLeft className="h-5 w-5 text-info" />
-            <span className="text-sm text-foreground-muted">Transfer</span>
-          </div>
-          <p className="text-2xl font-bold text-info">{transferCount}</p>
-        </Card>
-      </div>
-
-      {/* Filter Tabs */}
-      <Tabs value={filterTab} onValueChange={setFilterTab}>
-        <TabsList className="w-full sm:w-auto">
-          <TabsTrigger value={0}>All ({totalTypes})</TabsTrigger>
-          <TabsTrigger value={1}>Expense ({expenseCount})</TabsTrigger>
-          <TabsTrigger value={2}>Income ({incomeCount})</TabsTrigger>
-          <TabsTrigger value={3}>Transfer ({transferCount})</TabsTrigger>
-        </TabsList>
-      </Tabs>
 
       {/* Categories List */}
       <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
@@ -389,12 +468,12 @@ export default function CategoriesPage() {
                           {category.name}
                         </h3>
                         <div className="flex items-center gap-2 mt-1">
-                          <Badge variant={getCategoryBadgeVariant(category.category)}>
+                          <Badge variant={getCategoryBadgeVariant(category.category)} size="sm">
                             {getCategoryIcon(category.category)}
                             <span className="ml-1">{category.category || 'expense'}</span>
                           </Badge>
                           <span className="text-xs text-foreground-muted">
-                            {category.subtypes?.length || 0} subcategories
+                            {category.subtypes?.length || 0} subcategor{(category.subtypes?.length || 0) !== 1 ? 'ies' : 'y'}
                           </span>
                         </div>
                       </div>
@@ -432,43 +511,45 @@ export default function CategoriesPage() {
                     </div>
 
                     {category.subtypes && category.subtypes.length > 0 ? (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Subcategory Name</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {category.subtypes.map((subtype: any) => (
-                            <TableRow key={subtype.id}>
-                              <TableCell>
-                                <div className="flex items-center gap-2">
-                                  <CornerDownRight className="h-4 w-4 text-foreground-muted" />
-                                  {subtype.name}
-                                </div>
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleEditSubtype(category, subtype)}
-                                >
-                                  <Pencil className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleDeleteSubtype(subtype)}
-                                  className="text-error hover:text-error"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </TableCell>
+                      <div className="rounded-lg border border-border overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Subcategory Name</TableHead>
+                              <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                          </TableHeader>
+                          <TableBody>
+                            {category.subtypes.map((subtype: any) => (
+                              <TableRow key={subtype.id}>
+                                <TableCell>
+                                  <div className="flex items-center gap-2">
+                                    <CornerDownRight className="h-4 w-4 text-foreground-muted" />
+                                    {subtype.name}
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleEditSubtype(category, subtype)}
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleDeleteSubtype(subtype)}
+                                    className="text-error hover:text-error"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
                     ) : (
                       <div className="flex items-center gap-2 p-4 rounded-lg bg-info/10 text-info">
                         <Info className="h-5 w-5" />
@@ -482,12 +563,12 @@ export default function CategoriesPage() {
           </Accordion>
         ) : (
           <div className="flex flex-col items-center justify-center min-h-[300px]">
-            <Tag className="h-20 w-20 text-foreground-muted mb-4" />
+            <Tag className="h-20 w-20 text-foreground-muted mb-4 opacity-50" />
             <h2 className="text-xl font-semibold text-foreground-muted mb-2">
-              No Categories Yet
+              No Categories Found
             </h2>
             <p className="text-sm text-foreground-muted mb-6">
-              Create your first category to organize transactions
+              {filterTab !== 0 ? 'Try adjusting your filters or create a new category' : 'Create your first category to organize transactions'}
             </p>
             <Button
               onClick={() => {
@@ -653,7 +734,7 @@ export default function CategoriesPage() {
                   <p className="font-semibold text-foreground">
                     {typeForm.name || 'Category Name'}
                   </p>
-                  <Badge variant={getCategoryBadgeVariant(typeForm.category)}>
+                  <Badge variant={getCategoryBadgeVariant(typeForm.category)} size="sm">
                     {typeForm.category}
                   </Badge>
                 </div>
@@ -667,7 +748,8 @@ export default function CategoriesPage() {
             </Button>
             <Button
               onClick={handleSubmitType}
-              disabled={createTypeMutation.isPending || updateTypeMutation.isPending || !typeForm.name}
+              loading={createTypeMutation.isPending || updateTypeMutation.isPending}
+              disabled={!typeForm.name}
             >
               {editingType ? 'Update' : 'Create'}
             </Button>
@@ -707,7 +789,8 @@ export default function CategoriesPage() {
             </Button>
             <Button
               onClick={handleSubmitSubtype}
-              disabled={createSubtypeMutation.isPending || updateSubtypeMutation.isPending || !subtypeForm.name}
+              loading={createSubtypeMutation.isPending || updateSubtypeMutation.isPending}
+              disabled={!subtypeForm.name}
             >
               {editingSubtype ? 'Update' : 'Create'}
             </Button>
@@ -723,14 +806,14 @@ export default function CategoriesPage() {
           </DialogHeader>
 
           <div className="py-4 space-y-3">
-            <div className="flex items-start gap-3 p-4 rounded-lg bg-warning/10 text-warning">
+            <div className="flex items-start gap-3 p-4 rounded-lg bg-warning/10 text-warning border border-warning/20">
               <AlertTriangle className="h-5 w-5 flex-shrink-0 mt-0.5" />
               <p className="text-sm">
                 Are you sure you want to delete the {deleteConfirm?.type} "{deleteConfirm?.item?.name}"?
               </p>
             </div>
             {deleteConfirm?.warning && (
-              <div className="flex items-start gap-3 p-4 rounded-lg bg-error/10 text-error">
+              <div className="flex items-start gap-3 p-4 rounded-lg bg-error/10 text-error border border-error/20">
                 <AlertTriangle className="h-5 w-5 flex-shrink-0 mt-0.5" />
                 <p className="text-sm">{deleteConfirm.warning}</p>
               </div>
@@ -744,7 +827,7 @@ export default function CategoriesPage() {
             <Button
               variant="destructive"
               onClick={handleConfirmDelete}
-              disabled={deleteTypeMutation.isPending || deleteSubtypeMutation.isPending}
+              loading={deleteTypeMutation.isPending || deleteSubtypeMutation.isPending}
             >
               Delete
             </Button>

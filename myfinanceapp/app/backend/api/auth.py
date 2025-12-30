@@ -16,7 +16,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from auth import AuthManager
 
 # Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-this-in-production")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError(
+        "JWT_SECRET_KEY environment variable is not set. "
+        "This is required for secure authentication. "
+        "Please set it before starting the application."
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -25,7 +31,9 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token")
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/app/data/finance.db")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 auth_mgr = AuthManager(db_path=DB_PATH)
 
 # Pydantic models

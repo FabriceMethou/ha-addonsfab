@@ -29,13 +29,14 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
-      <Card className="w-full max-w-md p-8 rounded-xl">
+      <Card className="w-full max-w-md p-8 rounded-xl border border-border bg-card/50 backdrop-blur-sm shadow-xl">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-4">
-            <Wallet className="w-8 h-8 text-primary" />
+          <div className="relative inline-flex items-center justify-center w-20 h-20 rounded-full bg-primary/10 mb-4">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-primary opacity-10 blur-2xl rounded-full" />
+            <Wallet className="w-10 h-10 text-primary relative z-10" />
           </div>
-          <h1 className="text-2xl font-bold text-foreground mb-2">Finance Tracker</h1>
-          <p className="text-foreground-muted text-sm">Sign in to manage your finances</p>
+          <h1 className="text-3xl font-bold text-foreground mb-2">Finance Tracker</h1>
+          <p className="text-foreground-muted">Sign in to manage your finances</p>
         </div>
 
         {error && (

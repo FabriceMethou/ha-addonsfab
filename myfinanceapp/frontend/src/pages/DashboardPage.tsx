@@ -17,8 +17,6 @@ import { Link } from 'react-router-dom';
 import {
   AreaChart,
   Area,
-  LineChart,
-  Line,
   BarChart,
   Bar,
   XAxis,
@@ -31,7 +29,6 @@ import {
 
 // Nivo
 import { ResponsiveSunburst } from '@nivo/sunburst';
-import { ResponsiveSankey } from '@nivo/sankey';
 import { ResponsivePie } from '@nivo/pie';
 
 interface KPICardProps {
@@ -59,11 +56,10 @@ function KPICard({ title, value, change, changeLabel, icon, iconColor, loading }
             {icon}
           </div>
           {change !== undefined && (
-            <div className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${
-              isPositive ? 'bg-success/10 text-success' :
+            <div className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${isPositive ? 'bg-success/10 text-success' :
               isNegative ? 'bg-error/10 text-error' :
-              'bg-foreground-muted/10 text-foreground-muted'
-            }`}>
+                'bg-foreground-muted/10 text-foreground-muted'
+              }`}>
               {isPositive && <TrendingUp size={12} />}
               {isNegative && <TrendingDown size={12} />}
               {change > 0 ? '+' : ''}{change.toFixed(1)}%
@@ -93,12 +89,9 @@ interface AccountBalanceItemProps {
   name: string;
   balance: number;
   currency: string;
-  trend?: number[];
 }
 
-function AccountBalanceItem({ name, balance, currency, trend }: AccountBalanceItemProps) {
-  const isPositiveTrend = trend && trend.length > 1 && trend[trend.length - 1] > trend[0];
-
+function AccountBalanceItem({ name, balance, currency }: AccountBalanceItemProps) {
   return (
     <div className="flex items-center justify-between py-3 px-4 rounded-lg hover:bg-surface-hover transition-colors">
       <div className="flex-1">
@@ -107,23 +100,6 @@ function AccountBalanceItem({ name, balance, currency, trend }: AccountBalanceIt
           {new Intl.NumberFormat('de-DE', { style: 'currency', currency }).format(balance)}
         </p>
       </div>
-
-      {trend && trend.length > 1 && (
-        <div className="w-24 h-12">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={trend.map((val, idx) => ({ value: val, index: idx }))}>
-              <Line
-                type="monotone"
-                dataKey="value"
-                stroke={isPositiveTrend ? '#10b981' : '#ef4444'}
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
     </div>
   );
 }
@@ -149,7 +125,7 @@ export default function DashboardPage() {
   const displayCurrency = settings?.display_currency || 'EUR';
 
   // Fetch current month data
-  const { data: transactionsSummary, isLoading: transactionsLoading } = useQuery({
+  const { data: transactionsSummary, isLoading: transactionsLoading, isError: transactionsError } = useQuery({
     queryKey: ['transactions-summary'],
     queryFn: async () => {
       const response = await transactionsAPI.getSummary({ start_date: currentMonthStart, end_date: currentMonthEnd });
@@ -167,7 +143,7 @@ export default function DashboardPage() {
   });
 
   // Fetch net worth
-  const { data: netWorthData, isLoading: netWorthLoading } = useQuery({
+  const { data: netWorthData, isLoading: netWorthLoading, isError: netWorthError } = useQuery({
     queryKey: ['net-worth'],
     queryFn: async () => {
       const response = await reportsAPI.getNetWorth();
@@ -261,6 +237,16 @@ export default function DashboardPage() {
     }).format(amount);
   };
 
+  // Helper function to safely calculate percentage change
+  const calculatePercentageChange = (current: number, previous: number): number => {
+    if (previous === 0) {
+      // If previous is 0 and current is positive, that's technically infinite growth
+      // Return 0 to avoid NaN/Infinity in UI
+      return current > 0 ? 100 : 0;
+    }
+    return ((current - previous) / Math.abs(previous)) * 100;
+  };
+
   // Loading state
   if (transactionsLoading || netWorthLoading) {
     return (
@@ -270,89 +256,65 @@ export default function DashboardPage() {
     );
   }
 
+  // Error state
+  if (transactionsError || netWorthError) {
+    return (
+      <div className="flex justify-center items-center min-h-[60vh]">
+        <Card className="p-6 max-w-md">
+          <h2 className="text-xl font-semibold text-error mb-2">Error Loading Dashboard</h2>
+          <p className="text-foreground-muted mb-4">
+            We encountered an error while loading your financial data. Please try refreshing the page.
+          </p>
+          <Button onClick={() => window.location.reload()}>Refresh Page</Button>
+        </Card>
+      </div>
+    );
+  }
+
   // Calculate KPIs
-  const netWorth = netWorthData?.net_worth || 0;
-  const monthlyIncome = transactionsSummary?.total_income || 0;
-  const monthlyExpenses = Math.abs(transactionsSummary?.total_expense || 0);
+  const netWorth = netWorthData?.net_worth ?? 0;
+  const monthlyIncome = transactionsSummary?.total_income ?? 0;
+  const monthlyExpenses = Math.abs(transactionsSummary?.total_expense ?? 0);
   const monthlySavings = monthlyIncome - monthlyExpenses;
 
-  const previousIncome = previousTransactionsSummary?.total_income || 0;
-  const previousExpenses = Math.abs(previousTransactionsSummary?.total_expense || 0);
+  const previousIncome = previousTransactionsSummary?.total_income ?? 0;
+  const previousExpenses = Math.abs(previousTransactionsSummary?.total_expense ?? 0);
   const previousSavings = previousIncome - previousExpenses;
 
-  // Calculate deltas
-  const netWorthChange = netWorthTrend && netWorthTrend.length > 1
-    ? ((netWorthTrend[netWorthTrend.length - 1].net_worth - netWorthTrend[0].net_worth) / netWorthTrend[0].net_worth) * 100
+  // Calculate deltas with safe percentage calculation
+  const netWorthChange = netWorthTrend && netWorthTrend.length >= 2
+    ? calculatePercentageChange(
+        netWorthTrend[netWorthTrend.length - 1].net_worth,
+        netWorthTrend[netWorthTrend.length - 2].net_worth
+      )
     : 0;
 
-  const incomeChange = previousIncome > 0
-    ? ((monthlyIncome - previousIncome) / previousIncome) * 100
-    : 0;
-
-  const expensesChange = previousExpenses > 0
-    ? ((monthlyExpenses - previousExpenses) / previousExpenses) * 100
-    : 0;
-
-  const savingsChange = previousSavings !== 0
-    ? ((monthlySavings - previousSavings) / Math.abs(previousSavings)) * 100
-    : 0;
+  const incomeChange = calculatePercentageChange(monthlyIncome, previousIncome);
+  const expensesChange = calculatePercentageChange(monthlyExpenses, previousExpenses);
+  const savingsChange = calculatePercentageChange(monthlySavings, previousSavings);
 
   // Prepare chart data
   const incomeExpenseChartData = spendingTrends?.map((item: any) => ({
     month: item.month,
-    income: item.total_income || 0,
-    expenses: Math.abs(item.total_expenses || 0),
-  })) || [];
+    income: item.total_income ?? 0,
+    expenses: Math.abs(item.total_expenses ?? 0),
+  })) ?? [];
 
   // Prepare sunburst data
   const sunburstData = {
     name: 'Expenses',
     children: spendingByCategory?.slice(0, 8).map((cat: any) => ({
       name: cat.category || 'Other',
-      value: Math.abs(cat.total || 0),
-    })) || [],
+      value: Math.abs(cat.total ?? 0),
+    })) ?? [],
   };
 
   // Prepare Nivo pie data for income
   const nivoPieData = incomeByCategory?.map((item: any) => ({
     id: item.category || 'Other',
     label: item.category || 'Other',
-    value: item.total || 0,
-  })) || [];
-
-  // Prepare Sankey data
-  const sankeyNodes = [
-    { id: 'Income' },
-    { id: 'Checking' },
-    { id: 'Savings' },
-    { id: 'Expenses' },
-    { id: 'Investments' },
-  ];
-
-  const sankeyLinks = [
-    { source: 'Income', target: 'Checking', value: monthlyIncome * 0.7 },
-    { source: 'Income', target: 'Savings', value: monthlyIncome * 0.2 },
-    { source: 'Income', target: 'Investments', value: monthlyIncome * 0.1 },
-    { source: 'Checking', target: 'Expenses', value: monthlyExpenses * 0.8 },
-    { source: 'Savings', target: 'Expenses', value: monthlyExpenses * 0.2 },
-  ].filter(link => link.value > 0);
-
-  const sankeyData = {
-    nodes: sankeyNodes,
-    links: sankeyLinks,
-  };
-
-  // Generate trend data for accounts
-  const generateAccountTrend = (balance: number): number[] => {
-    const trend: number[] = [];
-    let currentVal = balance * 0.8;
-    for (let i = 0; i < 12; i++) {
-      trend.push(currentVal);
-      currentVal += (Math.random() - 0.45) * (balance * 0.05);
-    }
-    trend.push(balance);
-    return trend;
-  };
+    value: item.total ?? 0,
+  })) ?? [];
 
   // Budget data
   const budgetArray = Array.isArray(budgetsVsActual) ? budgetsVsActual : [];
@@ -446,58 +408,64 @@ export default function DashboardPage() {
           </div>
 
           <div className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={incomeExpenseChartData}>
-                <defs>
-                  <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="expensesGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} vertical={false} />
-                <XAxis
-                  dataKey="month"
-                  stroke="#888888"
-                  fontSize={12}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <YAxis
-                  stroke="#888888"
-                  fontSize={12}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0a0a0a',
-                    border: '1px solid #2a2a2a',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                  }}
-                  formatter={(value: number) => formatCurrency(value)}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="income"
-                  stroke="#10b981"
-                  strokeWidth={2}
-                  fill="url(#incomeGradient)"
-                />
-                <Area
-                  type="monotone"
-                  dataKey="expenses"
-                  stroke="#ef4444"
-                  strokeWidth={2}
-                  fill="url(#expensesGradient)"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            {incomeExpenseChartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={incomeExpenseChartData}>
+                  <defs>
+                    <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="expensesGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#ef4444" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} vertical={false} />
+                  <XAxis
+                    dataKey="month"
+                    stroke="#888888"
+                    fontSize={12}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    stroke="#888888"
+                    fontSize={12}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0a0a0a',
+                      border: '1px solid #2a2a2a',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                    }}
+                    formatter={(value: number) => formatCurrency(value)}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="income"
+                    stroke="#10b981"
+                    strokeWidth={2}
+                    fill="url(#incomeGradient)"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="expenses"
+                    stroke="#ef4444"
+                    strokeWidth={2}
+                    fill="url(#expensesGradient)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-foreground-muted">
+                No income/expense trend data available
+              </div>
+            )}
           </div>
         </Card>
 
@@ -509,15 +477,20 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-2 max-h-[300px] overflow-y-auto">
-            {accounts?.slice(0, 5).map((account: any) => (
-              <AccountBalanceItem
-                key={account.id}
-                name={account.name}
-                balance={account.balance || 0}
-                currency={account.currency || displayCurrency}
-                trend={generateAccountTrend(account.balance || 0)}
-              />
-            ))}
+            {accounts && accounts.length > 0 ? (
+              accounts.slice(0, 5).map((account: any) => (
+                <AccountBalanceItem
+                  key={account.id}
+                  name={account.name}
+                  balance={account.balance ?? 0}
+                  currency={account.currency || displayCurrency}
+                />
+              ))
+            ) : (
+              <div className="flex items-center justify-center h-[200px] text-foreground-muted">
+                No accounts available
+              </div>
+            )}
           </div>
         </Card>
       </div>
@@ -587,15 +560,14 @@ export default function DashboardPage() {
               return (
                 <div
                   key={budget.category_name}
-                  className="p-4 rounded-xl bg-surface/50 border border-border hover:bg-surface-hover transition-colors"
+                  className="p-4 rounded-xl bg-card border border-border hover:bg-surface-hover transition-colors"
                 >
                   <div className="flex items-center justify-between mb-2">
                     <p className="font-semibold text-foreground text-sm truncate" title={budget.category_name}>
                       {budget.category_name}
                     </p>
-                    <div className={`text-xs font-medium px-2 py-0.5 rounded ${
-                      isOverBudget ? 'bg-error/10 text-error' : 'bg-success/10 text-success'
-                    }`}>
+                    <div className={`text-xs font-medium px-2 py-0.5 rounded ${isOverBudget ? 'bg-error/10 text-error' : 'bg-success/10 text-success'
+                      }`}>
                       {progress.toFixed(0)}%
                     </div>
                   </div>
@@ -614,97 +586,43 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {/* Advanced Visualizations - Sunburst & Sankey */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Sunburst - Category Hierarchy */}
+      {/* Spending Breakdown - Sunburst */}
+      {sunburstData.children.length > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="mb-6">
             <h2 className="text-lg font-semibold text-foreground">Spending Breakdown</h2>
-            <p className="text-sm text-foreground-muted">Category distribution</p>
+            <p className="text-sm text-foreground-muted">Category distribution this month</p>
           </div>
 
           <div className="h-[400px]">
-            {sunburstData.children.length > 0 ? (
-              <ResponsiveSunburst
-                data={sunburstData}
-                margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
-                id="name"
-                value="value"
-                cornerRadius={2}
-                borderWidth={2}
-                borderColor="#0a0a0a"
-                colors={['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#ef4444']}
-                childColor={{ from: 'color', modifiers: [['brighter', 0.3]] }}
-                enableArcLabels={true}
-                arcLabelsSkipAngle={15}
-                arcLabelsTextColor={{ from: 'color', modifiers: [['darker', 2.5]] }}
-                animate={true}
-                theme={{
-                  tooltip: {
-                    container: {
-                      background: '#0a0a0a',
-                      border: '1px solid #2a2a2a',
-                      borderRadius: '8px',
-                      fontSize: '12px',
-                    },
+            <ResponsiveSunburst
+              data={sunburstData}
+              margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
+              id="name"
+              value="value"
+              cornerRadius={2}
+              borderWidth={2}
+              borderColor="#0a0a0a"
+              colors={['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#ef4444']}
+              childColor={{ from: 'color', modifiers: [['brighter', 0.3]] }}
+              enableArcLabels={true}
+              arcLabelsSkipAngle={15}
+              arcLabelsTextColor={{ from: 'color', modifiers: [['darker', 2.5]] }}
+              animate={true}
+              theme={{
+                tooltip: {
+                  container: {
+                    background: '#0a0a0a',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '8px',
+                    fontSize: '12px',
                   },
-                }}
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-foreground-muted">
-                No spending data available
-              </div>
-            )}
+                },
+              }}
+            />
           </div>
         </Card>
-
-        {/* Sankey - Money Flow */}
-        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="mb-6">
-            <h2 className="text-lg font-semibold text-foreground">Money Flow</h2>
-            <p className="text-sm text-foreground-muted">Income distribution this month</p>
-          </div>
-
-          <div className="h-[400px]">
-            {sankeyData.links.length > 0 ? (
-              <ResponsiveSankey
-                data={sankeyData}
-                margin={{ top: 20, right: 120, bottom: 20, left: 120 }}
-                align="justify"
-                colors={['#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#f59e0b']}
-                nodeOpacity={1}
-                nodeThickness={18}
-                nodeSpacing={24}
-                nodeBorderWidth={0}
-                nodeBorderRadius={3}
-                linkOpacity={0.5}
-                linkHoverOpacity={0.8}
-                linkContract={3}
-                enableLinkGradient={true}
-                labelPosition="outside"
-                labelOrientation="horizontal"
-                labelPadding={16}
-                labelTextColor="#e6eef8"
-                animate={true}
-                theme={{
-                  tooltip: {
-                    container: {
-                      background: '#0a0a0a',
-                      border: '1px solid #2a2a2a',
-                      borderRadius: '8px',
-                      fontSize: '12px',
-                    },
-                  },
-                }}
-              />
-            ) : (
-              <div className="flex items-center justify-center h-full text-foreground-muted">
-                No flow data available
-              </div>
-            )}
-          </div>
-        </Card>
-      </div>
+      )}
 
       {/* Income Nivo Pie */}
       {nivoPieData.length > 0 && (

@@ -462,7 +462,7 @@ class FinanceDatabase:
                 envelope_id INTEGER NOT NULL,
                 transaction_date DATE NOT NULL,
                 amount REAL NOT NULL,
-                account_id INTEGER NOT NULL,
+                account_id INTEGER,
                 description TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (envelope_id) REFERENCES envelopes(id) ON DELETE CASCADE,

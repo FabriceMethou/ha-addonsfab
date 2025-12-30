@@ -34,6 +34,10 @@ import {
   ChevronUp,
   ChevronLeft,
   ChevronRight,
+  Receipt,
+  Wallet,
+  ArrowUpCircle,
+  ArrowDownCircle,
 } from 'lucide-react';
 
 // Debounce hook
@@ -51,6 +55,43 @@ function useDebounce<T>(value: T, delay: number): T {
   }, [value, delay]);
 
   return debouncedValue;
+}
+
+// KPI Card Component
+interface KPICardProps {
+  title: string;
+  value: string;
+  icon: React.ReactNode;
+  iconColor: string;
+  loading?: boolean;
+}
+
+function KPICard({ title, value, icon, iconColor, loading }: KPICardProps) {
+  return (
+    <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+      {/* Background gradient effect */}
+      <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
+
+      <div className="relative">
+        <div className="flex items-start justify-between mb-4">
+          <div className={`p-3 rounded-lg ${iconColor} bg-opacity-10`}>
+            {icon}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm text-foreground-muted mb-1">{title}</p>
+          {loading ? (
+            <div className="h-8 flex items-center">
+              <Spinner className="w-5 h-5" />
+            </div>
+          ) : (
+            <p className="text-2xl font-bold text-foreground">{value}</p>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
 }
 
 export default function TransactionsPage() {
@@ -403,6 +444,13 @@ export default function TransactionsPage() {
     URL.revokeObjectURL(url);
   };
 
+  // Calculate summary statistics
+  const totalIncome = transactionsData?.reduce((sum: number, t: any) =>
+    t.amount > 0 && t.category !== 'transfer' ? sum + t.amount : sum, 0) || 0;
+  const totalExpenses = Math.abs(transactionsData?.reduce((sum: number, t: any) =>
+    t.amount < 0 && t.category !== 'transfer' ? sum + t.amount : sum, 0) || 0);
+  const netChange = totalIncome - totalExpenses;
+
   // Pagination logic
   const totalTransactions = transactionsData?.length || 0;
   const totalPages = Math.ceil(totalTransactions / pageSize);
@@ -424,33 +472,71 @@ export default function TransactionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-2xl font-bold text-foreground">Transactions</h1>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant={showFilters ? 'default' : 'outline'}
-            onClick={() => setShowFilters(!showFilters)}
-          >
-            <Filter className="w-4 h-4 mr-2" />
-            Filters {hasActiveFilters && `(${Object.values(filters).filter(v => v).length})`}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={exportToCSV}
-            disabled={!transactionsData || transactionsData.length === 0}
-          >
-            <Download className="w-4 h-4 mr-2" />
-            Export CSV
-          </Button>
-          <Button onClick={() => {
-            setEditingTransaction(null);
-            resetForm();
-            setOpenDialog(true);
-          }}>
-            <Plus className="w-4 h-4 mr-2" />
-            Add Transaction
-          </Button>
-        </div>
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Transactions</h1>
+        <p className="text-foreground-muted">
+          {totalTransactions} transaction{totalTransactions !== 1 ? 's' : ''} • Track your financial activity
+        </p>
+      </div>
+
+      {/* Summary KPI Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <KPICard
+          title="Total Transactions"
+          value={totalTransactions.toString()}
+          icon={<Receipt size={24} className="text-blue-500" />}
+          iconColor="bg-blue-500"
+          loading={transactionsLoading}
+        />
+        <KPICard
+          title="Total Income"
+          value={formatCurrency(totalIncome)}
+          icon={<ArrowUpCircle size={24} className="text-emerald-500" />}
+          iconColor="bg-emerald-500"
+          loading={transactionsLoading}
+        />
+        <KPICard
+          title="Total Expenses"
+          value={formatCurrency(totalExpenses)}
+          icon={<ArrowDownCircle size={24} className="text-rose-500" />}
+          iconColor="bg-rose-500"
+          loading={transactionsLoading}
+        />
+        <KPICard
+          title="Net Change"
+          value={formatCurrency(netChange)}
+          icon={<Wallet size={24} className={netChange >= 0 ? "text-emerald-500" : "text-rose-500"} />}
+          iconColor={netChange >= 0 ? "bg-emerald-500" : "bg-rose-500"}
+          loading={transactionsLoading}
+        />
+      </div>
+
+      {/* Action Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
+        <Button
+          variant={showFilters ? 'default' : 'outline'}
+          onClick={() => setShowFilters(!showFilters)}
+        >
+          <Filter className="w-4 h-4 mr-2" />
+          Filters {hasActiveFilters && `(${Object.values(filters).filter(v => v).length})`}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={exportToCSV}
+          disabled={!transactionsData || transactionsData.length === 0}
+        >
+          <Download className="w-4 h-4 mr-2" />
+          Export CSV
+        </Button>
+        <Button onClick={() => {
+          setEditingTransaction(null);
+          resetFormCompletely();
+          setOpenDialog(true);
+        }}>
+          <Plus className="w-4 h-4 mr-2" />
+          Add Transaction
+        </Button>
       </div>
 
       {/* Filters Section */}
@@ -613,7 +699,7 @@ export default function TransactionsPage() {
           return (
             <Card
               key={transaction.id}
-              className={`rounded-xl overflow-hidden transition-all ${isExpanded ? 'ring-2 ring-primary/50' : ''}`}
+              className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${isExpanded ? 'ring-2 ring-primary/50' : ''}`}
             >
               {/* Collapsed View - Click to Expand */}
               <div
@@ -645,7 +731,7 @@ export default function TransactionsPage() {
 
               {/* Expanded View */}
               {isExpanded && (
-                <div className="border-t border-border px-4 py-4">
+                <div className="border-t border-border px-4 py-4 bg-surface/50">
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                     <div>
                       <p className="text-xs text-foreground-muted mb-1">Date</p>
@@ -763,8 +849,26 @@ export default function TransactionsPage() {
         })}
 
         {paginatedTransactions.length === 0 && (
-          <Card className="p-8 text-center rounded-xl">
-            <p className="text-foreground-muted">No transactions found</p>
+          <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+            <div className="flex flex-col items-center justify-center min-h-[300px]">
+              <Receipt className="h-20 w-20 text-foreground-muted mb-4" />
+              <h2 className="text-xl font-semibold text-foreground-muted mb-2">
+                No Transactions Found
+              </h2>
+              <p className="text-sm text-foreground-muted mb-6">
+                {hasActiveFilters ? 'Try adjusting your filters' : 'Start by adding your first transaction'}
+              </p>
+              {!hasActiveFilters && (
+                <Button onClick={() => {
+                  setEditingTransaction(null);
+                  resetFormCompletely();
+                  setOpenDialog(true);
+                }}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Transaction
+                </Button>
+              )}
+            </div>
           </Card>
         )}
       </div>
@@ -995,7 +1099,7 @@ export default function TransactionsPage() {
             <Button variant="outline" onClick={() => {
               setOpenDialog(false);
               setEditingTransaction(null);
-              resetForm();
+              resetFormCompletely();
             }}>
               Cancel
             </Button>

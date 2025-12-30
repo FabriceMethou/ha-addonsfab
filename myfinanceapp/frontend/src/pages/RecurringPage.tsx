@@ -106,6 +106,12 @@ export default function RecurringPage() {
       queryClient.invalidateQueries({ queryKey: ['recurring-templates'] });
       setOpenDialog(false);
       resetForm();
+      toast.success('Recurring template created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create template:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create template: ${errorMessage}`);
     },
   });
 
@@ -117,6 +123,12 @@ export default function RecurringPage() {
       setOpenDialog(false);
       resetForm();
       setEditingTemplate(null);
+      toast.success('Recurring template updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update template:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update template: ${errorMessage}`);
     },
   });
 
@@ -126,6 +138,12 @@ export default function RecurringPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['recurring-templates'] });
       setDeleteConfirm(null);
+      toast.success('Recurring template deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete template:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete template: ${errorMessage}`);
     },
   });
 
@@ -297,28 +315,104 @@ export default function RecurringPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-foreground">Recurring Transactions</h1>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => generateMutation.mutate()}
-            disabled={generateMutation.isPending}
-          >
-            <Play className="h-4 w-4 mr-2" />
-            {generateMutation.isPending ? 'Generating...' : 'Generate Transactions'}
-          </Button>
-          <Button
-            onClick={() => {
-              setEditingTemplate(null);
-              resetForm();
-              setOpenDialog(true);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Add Template
-          </Button>
-        </div>
+      <div>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Recurring Transactions</h1>
+        <p className="text-foreground-muted">
+          {recurringData?.length || 0} template{(recurringData?.length || 0) !== 1 ? 's' : ''}, {pendingData?.length || 0} pending • Automate your regular payments
+        </p>
+      </div>
+
+      {/* KPI Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {/* Total Templates */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-blue-500 bg-opacity-10">
+                <RefreshCw className="h-6 w-6 text-blue-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Templates</p>
+              <p className="text-2xl font-bold text-foreground">{recurringData?.length || 0}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Active Templates */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-emerald-500 bg-opacity-10">
+                <CheckCircle className="h-6 w-6 text-emerald-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Active Templates</p>
+              <p className="text-2xl font-bold text-foreground">
+                {recurringData?.filter((t: any) => t.is_active).length || 0}
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Pending Approval */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-amber-500 bg-opacity-10">
+                <Clock className="h-6 w-6 text-amber-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Pending Approval</p>
+              <p className="text-2xl font-bold text-foreground">{pendingData?.length || 0}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Inactive Templates */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-slate-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-slate-500 bg-opacity-10">
+                <XCircle className="h-6 w-6 text-slate-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Inactive Templates</p>
+              <p className="text-2xl font-bold text-foreground">
+                {recurringData?.filter((t: any) => !t.is_active).length || 0}
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Action Bar */}
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="outline"
+          onClick={() => generateMutation.mutate()}
+          disabled={generateMutation.isPending}
+        >
+          <Play className="h-4 w-4 mr-2" />
+          {generateMutation.isPending ? 'Generating...' : 'Generate Transactions'}
+        </Button>
+        <Button
+          onClick={() => {
+            setEditingTemplate(null);
+            resetForm();
+            setOpenDialog(true);
+          }}
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          Add Template
+        </Button>
       </div>
 
       {/* Tabs */}

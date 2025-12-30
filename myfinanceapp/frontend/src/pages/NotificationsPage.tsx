@@ -155,19 +155,95 @@ export default function NotificationsPage() {
 
   const emailEnabled = config?.email?.enabled || false;
 
+  // Calculate KPI metrics
+  const totalAlerts = historyData?.length || 0;
+  const successfulAlerts = historyData?.filter((a: any) => a.status === 'sent').length || 0;
+  const failedAlerts = historyData?.filter((a: any) => a.status !== 'sent').length || 0;
+  const alertTypes = historyData
+    ? [...new Set(historyData.map((a: any) => a.type))].length
+    : 0;
+
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      {/* Header */}
+      <div className="flex justify-between items-start">
         <div>
-          <h1 className="text-2xl font-bold text-foreground mb-1">Notification Settings</h1>
-          <p className="text-sm text-foreground-muted">
+          <h1 className="text-3xl font-bold text-foreground mb-2">Notification Settings</h1>
+          <p className="text-foreground-muted">
             Configure email alerts and notification preferences
           </p>
         </div>
         <Badge variant={emailEnabled ? 'success' : 'outline'} className="flex items-center gap-1">
           <Bell className="w-3 h-3" />
-          {emailEnabled ? 'Notifications Enabled' : 'Notifications Disabled'}
+          {emailEnabled ? 'Enabled' : 'Disabled'}
         </Badge>
+      </div>
+
+      {/* KPI Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {/* Total Alerts */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-blue-500 bg-opacity-10">
+                <Bell className="h-6 w-6 text-blue-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Alerts</p>
+              <p className="text-2xl font-bold text-foreground">{totalAlerts}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Successful Alerts */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-emerald-500 bg-opacity-10">
+                <Send className="h-6 w-6 text-emerald-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Successful</p>
+              <p className="text-2xl font-bold text-foreground">{successfulAlerts}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Failed Alerts */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-rose-500 bg-opacity-10">
+                <Mail className="h-6 w-6 text-rose-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Failed</p>
+              <p className="text-2xl font-bold text-foreground">{failedAlerts}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Alert Types */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-violet-500 bg-opacity-10">
+                <History className="h-6 w-6 text-violet-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Alert Types</p>
+              <p className="text-2xl font-bold text-foreground">{alertTypes}</p>
+            </div>
+          </div>
+        </Card>
       </div>
 
       {/* Email Configuration */}

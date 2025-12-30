@@ -38,6 +38,8 @@ import {
   History,
   AlertTriangle,
   RefreshCw,
+  Users,
+  Landmark,
 } from 'lucide-react';
 
 interface TabPanelProps {
@@ -49,6 +51,49 @@ interface TabPanelProps {
 function TabPanel({ children, value, index }: TabPanelProps) {
   if (value !== index) return null;
   return <div className="pt-4">{children}</div>;
+}
+
+// KPI Card Component
+interface KPICardProps {
+  title: string;
+  value: string;
+  subtitle?: string;
+  icon: React.ReactNode;
+  iconColor: string;
+  loading?: boolean;
+}
+
+function KPICard({ title, value, subtitle, icon, iconColor, loading }: KPICardProps) {
+  return (
+    <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+      {/* Background gradient effect */}
+      <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
+
+      <div className="relative">
+        <div className="flex items-start justify-between mb-4">
+          <div className={`p-3 rounded-lg ${iconColor} bg-opacity-10`}>
+            {icon}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm text-foreground-muted mb-1">{title}</p>
+          {loading ? (
+            <div className="h-8 flex items-center">
+              <Spinner className="w-5 h-5" />
+            </div>
+          ) : (
+            <>
+              <p className="text-2xl font-bold text-foreground">{value}</p>
+              {subtitle && (
+                <p className="text-xs text-foreground-muted mt-1">{subtitle}</p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
 }
 
 export default function AccountsPage() {
@@ -152,6 +197,12 @@ export default function AccountsPage() {
       queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
       setAccountDialog(false);
       resetAccountForm();
+      toast.success('Account created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create account:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create account: ${errorMessage}`);
     },
   });
 
@@ -163,6 +214,12 @@ export default function AccountsPage() {
       setAccountDialog(false);
       resetAccountForm();
       setEditingItem(null);
+      toast.success('Account updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update account:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update account: ${errorMessage}`);
     },
   });
 
@@ -172,6 +229,12 @@ export default function AccountsPage() {
       queryClient.invalidateQueries({ queryKey: ['accounts'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
       setDeleteConfirm(null);
+      toast.success('Account deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete account:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete account: ${errorMessage}`);
     },
   });
 
@@ -235,6 +298,7 @@ export default function AccountsPage() {
       setBankDialog(false);
       setBankForm({ name: '' });
       setEditingBank(null);
+      toast.success('Bank created successfully!');
     },
   });
 
@@ -246,6 +310,7 @@ export default function AccountsPage() {
       setBankDialog(false);
       setBankForm({ name: '' });
       setEditingBank(null);
+      toast.success('Bank updated successfully!');
     },
   });
 
@@ -254,6 +319,12 @@ export default function AccountsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['banks'] });
       setDeleteBankConfirm(null);
+      toast.success('Bank deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete bank:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete bank: ${errorMessage}`);
     },
   });
 
@@ -266,6 +337,7 @@ export default function AccountsPage() {
       setOwnerDialog(false);
       setOwnerForm({ name: '' });
       setEditingOwner(null);
+      toast.success('Owner created successfully!');
     },
   });
 
@@ -278,6 +350,7 @@ export default function AccountsPage() {
       setOwnerDialog(false);
       setOwnerForm({ name: '' });
       setEditingOwner(null);
+      toast.success('Owner updated successfully!');
     },
   });
 
@@ -287,6 +360,12 @@ export default function AccountsPage() {
       queryClient.invalidateQueries({ queryKey: ['owners'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
       setDeleteOwnerConfirm(null);
+      toast.success('Owner deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete owner:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete owner: ${errorMessage}`);
     },
   });
 
@@ -341,6 +420,7 @@ export default function AccountsPage() {
       setValidationDialog(false);
       setValidationForm({ actual_balance: '', notes: '' });
       setValidatingAccount(null);
+      toast.success('Balance validation saved!');
     },
   });
 
@@ -432,6 +512,12 @@ export default function AccountsPage() {
     setAccountForm({ ...accountForm, [field]: formatted });
   };
 
+  // Calculate summary metrics
+  const totalBalance = accountsData?.reduce((sum: number, a: any) => sum + a.balance, 0) || 0;
+  const totalAccounts = accountsData?.length || 0;
+  const totalBanks = banksData?.length || 0;
+  const totalOwners = ownersData?.length || 0;
+
   if (accountsLoading) {
     return (
       <div className="flex justify-center items-center min-h-[60vh]">
@@ -448,25 +534,70 @@ export default function AccountsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-foreground">Accounts Management</h1>
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {summaryData?.map((owner: any) => (
-          <Card key={owner.owner_id} className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-            <div className="flex items-center gap-2 mb-2">
-              <User className="w-5 h-5 text-primary" />
-              <span className="text-lg font-semibold text-foreground">{owner.owner_name}</span>
-            </div>
-            <p className="text-2xl font-bold text-primary">{formatCurrency(owner.total_balance)}</p>
-            <p className="text-sm text-foreground-muted">{owner.account_count} accounts</p>
-          </Card>
-        ))}
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Accounts Management</h1>
+        <p className="text-foreground-muted">
+          {totalAccounts} account{totalAccounts !== 1 ? 's' : ''} across {totalBanks} bank{totalBanks !== 1 ? 's' : ''} • Manage your financial accounts
+        </p>
       </div>
 
+      {/* KPI Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <KPICard
+          title="Total Balance"
+          value={formatCurrency(totalBalance)}
+          subtitle="All accounts combined"
+          icon={<Wallet size={24} className="text-blue-500" />}
+          iconColor="bg-blue-500"
+          loading={accountsLoading}
+        />
+        <KPICard
+          title="Total Accounts"
+          value={totalAccounts.toString()}
+          subtitle="Active accounts"
+          icon={<Landmark size={24} className="text-emerald-500" />}
+          iconColor="bg-emerald-500"
+          loading={accountsLoading}
+        />
+        <KPICard
+          title="Total Banks"
+          value={totalBanks.toString()}
+          subtitle="Financial institutions"
+          icon={<Building2 size={24} className="text-violet-500" />}
+          iconColor="bg-violet-500"
+        />
+        <KPICard
+          title="Total Owners"
+          value={totalOwners.toString()}
+          subtitle="Account holders"
+          icon={<Users size={24} className="text-amber-500" />}
+          iconColor="bg-amber-500"
+        />
+      </div>
+
+      {/* Owner Summary Cards */}
+      {summaryData && summaryData.length > 0 && (
+        <div>
+          <h2 className="text-lg font-semibold text-foreground mb-4">Balances by Owner</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {summaryData.map((owner: any) => (
+              <Card key={owner.owner_id} className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                <div className="flex items-center gap-2 mb-2">
+                  <User className="w-5 h-5 text-primary" />
+                  <span className="text-lg font-semibold text-foreground">{owner.owner_name}</span>
+                </div>
+                <p className="text-2xl font-bold text-primary">{formatCurrency(owner.total_balance)}</p>
+                <p className="text-sm text-foreground-muted">{owner.account_count} account{owner.account_count !== 1 ? 's' : ''}</p>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Tabs */}
-      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm overflow-hidden">
-        <div className="border-b border-border">
+      <Card className="rounded-xl border border-border bg-card/50 backdrop-blur-sm overflow-hidden">
+        <div className="border-b border-border bg-surface/30">
           <div className="flex">
             {tabs.map((tab, index) => {
               const Icon = tab.icon;
@@ -474,10 +605,10 @@ export default function AccountsPage() {
                 <button
                   key={index}
                   onClick={() => setTabValue(index)}
-                  className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition-all ${
                     tabValue === index
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-foreground-muted hover:text-foreground'
+                      ? 'border-primary text-primary bg-primary/5'
+                      : 'border-transparent text-foreground-muted hover:text-foreground hover:bg-surface-hover'
                   }`}
                 >
                   <Icon className="w-4 h-4" />
@@ -490,7 +621,7 @@ export default function AccountsPage() {
 
         {/* Accounts Tab */}
         <TabPanel value={tabValue} index={0}>
-          <div className="p-4">
+          <div className="p-6">
             <div className="flex justify-end gap-2 mb-4">
               <Button
                 variant="outline"
@@ -510,58 +641,79 @@ export default function AccountsPage() {
               </Button>
             </div>
 
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Account</TableHead>
-                  <TableHead>Bank</TableHead>
-                  <TableHead>Owner</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead className="text-right">Balance</TableHead>
-                  <TableHead>Currency</TableHead>
-                  <TableHead>Opened</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {accountsData?.map((account: any) => (
-                  <TableRow key={account.id}>
-                    <TableCell className="font-medium">{account.name || '-'}</TableCell>
-                    <TableCell>{account.bank_name}</TableCell>
-                    <TableCell>{account.owner_name}</TableCell>
-                    <TableCell>
-                      <Badge variant="default" size="sm">{account.account_type}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right font-bold">
-                      {formatCurrency(account.balance, account.currency)}
-                    </TableCell>
-                    <TableCell>{account.currency}</TableCell>
-                    <TableCell>
-                      {account.opening_date ? new Date(account.opening_date).toLocaleDateString('de-DE') : '-'}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex gap-1 justify-end">
-                        <Button variant="ghost" size="icon" onClick={() => handleOpenValidation(account)} title="Validate Balance">
-                          <CheckCircle className="w-4 h-4 text-success" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleEditAccount(account)}>
-                          <Edit2 className="w-4 h-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => setDeleteConfirm({ type: 'account', item: account })}>
-                          <Trash2 className="w-4 h-4 text-error" />
-                        </Button>
-                      </div>
-                    </TableCell>
+            <div className="rounded-lg border border-border overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Account</TableHead>
+                    <TableHead>Bank</TableHead>
+                    <TableHead>Owner</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Balance</TableHead>
+                    <TableHead>Currency</TableHead>
+                    <TableHead>Opened</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {accountsData && accountsData.length > 0 ? (
+                    accountsData.map((account: any) => (
+                      <TableRow key={account.id}>
+                        <TableCell className="font-medium">{account.name || '-'}</TableCell>
+                        <TableCell>{account.bank_name}</TableCell>
+                        <TableCell>{account.owner_name}</TableCell>
+                        <TableCell>
+                          <Badge variant="default" size="sm">{account.account_type}</Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-bold">
+                          {formatCurrency(account.balance, account.currency)}
+                        </TableCell>
+                        <TableCell>{account.currency}</TableCell>
+                        <TableCell>
+                          {account.opening_date ? new Date(account.opening_date).toLocaleDateString('de-DE') : '-'}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex gap-1 justify-end">
+                            <Button variant="ghost" size="icon" onClick={() => handleOpenValidation(account)} title="Validate Balance">
+                              <CheckCircle className="w-4 h-4 text-success" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => handleEditAccount(account)}>
+                              <Edit2 className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => setDeleteConfirm({ type: 'account', item: account })}>
+                              <Trash2 className="w-4 h-4 text-error" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-center py-12">
+                        <div className="flex flex-col items-center justify-center text-foreground-muted">
+                          <Wallet className="h-12 w-12 mb-2 opacity-50" />
+                          <p>No accounts found</p>
+                          <Button onClick={() => {
+                            setEditingItem(null);
+                            resetAccountForm();
+                            setAccountDialog(true);
+                          }} className="mt-4" size="sm">
+                            <Plus className="w-4 h-4 mr-2" />
+                            Add Your First Account
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </TabPanel>
 
         {/* Banks Tab */}
         <TabPanel value={tabValue} index={1}>
-          <div className="p-4">
+          <div className="p-6">
             <div className="flex justify-end mb-4">
               <Button onClick={() => {
                 setEditingBank(null);
@@ -573,50 +725,71 @@ export default function AccountsPage() {
               </Button>
             </div>
 
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Bank Name</TableHead>
-                  <TableHead className="text-right">Accounts</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {banksData?.map((bank: any) => {
-                  const bankAccountCount = accountsData?.filter((a: any) => a.bank_id === bank.id).length || 0;
-                  return (
-                    <TableRow key={bank.id}>
-                      <TableCell>{bank.name}</TableCell>
-                      <TableCell className="text-right">
-                        <Badge variant="default" size="sm">{bankAccountCount}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex gap-1 justify-end">
-                          <Button variant="ghost" size="icon" onClick={() => handleEditBank(bank)}>
-                            <Edit2 className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setDeleteBankConfirm(bank)}
-                            disabled={bankAccountCount > 0}
-                            title={bankAccountCount > 0 ? 'Cannot delete bank with accounts' : 'Delete bank'}
-                          >
-                            <Trash2 className="w-4 h-4 text-error" />
+            <div className="rounded-lg border border-border overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Bank Name</TableHead>
+                    <TableHead className="text-right">Accounts</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {banksData && banksData.length > 0 ? (
+                    banksData.map((bank: any) => {
+                      const bankAccountCount = accountsData?.filter((a: any) => a.bank_id === bank.id).length || 0;
+                      return (
+                        <TableRow key={bank.id}>
+                          <TableCell className="font-medium">{bank.name}</TableCell>
+                          <TableCell className="text-right">
+                            <Badge variant="default" size="sm">{bankAccountCount}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex gap-1 justify-end">
+                              <Button variant="ghost" size="icon" onClick={() => handleEditBank(bank)}>
+                                <Edit2 className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setDeleteBankConfirm(bank)}
+                                disabled={bankAccountCount > 0}
+                                title={bankAccountCount > 0 ? 'Cannot delete bank with accounts' : 'Delete bank'}
+                              >
+                                <Trash2 className="w-4 h-4 text-error" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={3} className="text-center py-12">
+                        <div className="flex flex-col items-center justify-center text-foreground-muted">
+                          <Building2 className="h-12 w-12 mb-2 opacity-50" />
+                          <p>No banks found</p>
+                          <Button onClick={() => {
+                            setEditingBank(null);
+                            setBankForm({ name: '' });
+                            setBankDialog(true);
+                          }} className="mt-4" size="sm">
+                            <Plus className="w-4 h-4 mr-2" />
+                            Add Your First Bank
                           </Button>
                         </div>
                       </TableCell>
                     </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </TabPanel>
 
         {/* Owners Tab */}
         <TabPanel value={tabValue} index={2}>
-          <div className="p-4">
+          <div className="p-6">
             <div className="flex justify-end mb-4">
               <Button onClick={() => {
                 setEditingOwner(null);
@@ -628,50 +801,71 @@ export default function AccountsPage() {
               </Button>
             </div>
 
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Owner Name</TableHead>
-                  <TableHead className="text-right">Accounts</TableHead>
-                  <TableHead className="text-right">Total Balance</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {ownersData?.map((owner: any) => {
-                  const ownerAccounts = accountsData?.filter((a: any) => a.owner_id === owner.id) || [];
-                  const totalBalance = ownerAccounts.reduce((sum: number, a: any) => sum + a.balance, 0);
+            <div className="rounded-lg border border-border overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Owner Name</TableHead>
+                    <TableHead className="text-right">Accounts</TableHead>
+                    <TableHead className="text-right">Total Balance</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {ownersData && ownersData.length > 0 ? (
+                    ownersData.map((owner: any) => {
+                      const ownerAccounts = accountsData?.filter((a: any) => a.owner_id === owner.id) || [];
+                      const totalBalance = ownerAccounts.reduce((sum: number, a: any) => sum + a.balance, 0);
 
-                  return (
-                    <TableRow key={owner.id}>
-                      <TableCell>{owner.name}</TableCell>
-                      <TableCell className="text-right">
-                        <Badge variant="default" size="sm">{ownerAccounts.length}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right font-bold">
-                        {formatCurrency(totalBalance)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex gap-1 justify-end">
-                          <Button variant="ghost" size="icon" onClick={() => handleEditOwner(owner)}>
-                            <Edit2 className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setDeleteOwnerConfirm(owner)}
-                            disabled={ownerAccounts.length > 0}
-                            title={ownerAccounts.length > 0 ? 'Cannot delete owner with accounts' : 'Delete owner'}
-                          >
-                            <Trash2 className="w-4 h-4 text-error" />
+                      return (
+                        <TableRow key={owner.id}>
+                          <TableCell className="font-medium">{owner.name}</TableCell>
+                          <TableCell className="text-right">
+                            <Badge variant="default" size="sm">{ownerAccounts.length}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-bold">
+                            {formatCurrency(totalBalance)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex gap-1 justify-end">
+                              <Button variant="ghost" size="icon" onClick={() => handleEditOwner(owner)}>
+                                <Edit2 className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setDeleteOwnerConfirm(owner)}
+                                disabled={ownerAccounts.length > 0}
+                                title={ownerAccounts.length > 0 ? 'Cannot delete owner with accounts' : 'Delete owner'}
+                              >
+                                <Trash2 className="w-4 h-4 text-error" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center py-12">
+                        <div className="flex flex-col items-center justify-center text-foreground-muted">
+                          <Users className="h-12 w-12 mb-2 opacity-50" />
+                          <p>No owners found</p>
+                          <Button onClick={() => {
+                            setEditingOwner(null);
+                            setOwnerForm({ name: '' });
+                            setOwnerDialog(true);
+                          }} className="mt-4" size="sm">
+                            <Plus className="w-4 h-4 mr-2" />
+                            Add Your First Owner
                           </Button>
                         </div>
                       </TableCell>
                     </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </TabPanel>
       </Card>
@@ -935,34 +1129,36 @@ export default function AccountsPage() {
                   <History className="w-4 h-4" />
                   <span className="font-semibold">Recent Validations</span>
                 </div>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead className="text-right">System</TableHead>
-                      <TableHead className="text-right">Actual</TableHead>
-                      <TableHead className="text-right">Difference</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {validationHistory.map((val: any) => (
-                      <TableRow key={val.id}>
-                        <TableCell>{new Date(val.validation_date).toLocaleDateString()}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(val.system_balance, validatingAccount?.currency)}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(val.actual_balance, validatingAccount?.currency)}</TableCell>
-                        <TableCell className={`text-right ${val.is_match ? 'text-success' : 'text-error'}`}>
-                          {formatCurrency(Math.abs(val.difference), validatingAccount?.currency)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={val.is_match ? 'success' : 'error'} size="sm">
-                            {val.is_match ? 'Match' : 'Mismatch'}
-                          </Badge>
-                        </TableCell>
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-right">System</TableHead>
+                        <TableHead className="text-right">Actual</TableHead>
+                        <TableHead className="text-right">Difference</TableHead>
+                        <TableHead>Status</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {validationHistory.map((val: any) => (
+                        <TableRow key={val.id}>
+                          <TableCell>{new Date(val.validation_date).toLocaleDateString()}</TableCell>
+                          <TableCell className="text-right">{formatCurrency(val.system_balance, validatingAccount?.currency)}</TableCell>
+                          <TableCell className="text-right">{formatCurrency(val.actual_balance, validatingAccount?.currency)}</TableCell>
+                          <TableCell className={`text-right ${val.is_match ? 'text-success' : 'text-error'}`}>
+                            {formatCurrency(Math.abs(val.difference), validatingAccount?.currency)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={val.is_match ? 'success' : 'error'} size="sm">
+                              {val.is_match ? 'Match' : 'Mismatch'}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               </div>
             )}
           </div>

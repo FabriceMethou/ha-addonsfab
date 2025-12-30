@@ -21,8 +21,6 @@ import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
 import NotificationsPage from './pages/NotificationsPage';
 import SecurityPage from './pages/SecurityPage';
-import DashboardTestPage from './pages/DashboardTestPage';
-import DashboardModernPage from './pages/DashboardModernPage';
 
 // Layout
 import Layout from './components/Layout';
@@ -79,8 +77,6 @@ function AppRoutes() {
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="security" element={<SecurityPage />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route path="dashboard-test" element={<DashboardTestPage />} />
-        <Route path="dashboard-modern" element={<DashboardModernPage />} />
       </Route>
     </Routes>
   );

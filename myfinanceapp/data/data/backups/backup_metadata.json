@@ -1,0 +1,30 @@
+{
+  "backups": [
+    {
+      "id": 1,
+      "filename": "finance_backup_20251230_103739_auto.db.gz",
+      "path": "data/backups/finance_backup_20251230_103739_auto.db.gz",
+      "timestamp": "2025-12-30T10:37:39.610569",
+      "type": "auto",
+      "description": "Daily automatic backup",
+      "size_bytes": 7280,
+      "original_size": 266240,
+      "checksum": "91e9084fce681583f6bfcdb5e3352aacc754a07d2718f7506cbb168faf742a73",
+      "compressed": true,
+      "stats": {
+        "transactions": 0,
+        "accounts": 0,
+        "envelopes": 0,
+        "debts": 0,
+        "file_size": 266240
+      }
+    }
+  ],
+  "settings": {
+    "auto_backup_enabled": true,
+    "retention_days": 30,
+    "max_backups": 50,
+    "compress_backups": true,
+    "last_auto_backup": "2025-12-30T10:37:39.610616"
+  }
+}

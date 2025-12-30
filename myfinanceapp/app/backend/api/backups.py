@@ -15,7 +15,9 @@ from api.auth import get_current_user, User
 router = APIRouter()
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/home/fab/Documents/Development/myfinanceapp/data/finance.db")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 backup_mgr = BackupManager(db_path=DB_PATH)
 
 class BackupCreate(BaseModel):

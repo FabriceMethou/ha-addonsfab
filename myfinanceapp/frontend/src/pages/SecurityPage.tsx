@@ -1,6 +1,7 @@
 // Security Page - MFA, User Management, and Audit Logs
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '../contexts/ToastContext';
 import {
   Card,
   Button,
@@ -38,6 +39,7 @@ import { format } from 'date-fns';
 
 export default function SecurityPage() {
   const { user } = useAuth();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [tabValue, setTabValue] = useState('mfa');
 
@@ -46,6 +48,7 @@ export default function SecurityPage() {
   const [mfaSecret, setMfaSecret] = useState('');
   const [mfaQRCode, setMfaQRCode] = useState('');
   const [mfaVerifyToken, setMfaVerifyToken] = useState('');
+  const [disableMfaConfirm, setDisableMfaConfirm] = useState(false);
 
   // User Management State
   const [userDialog, setUserDialog] = useState(false);
@@ -127,29 +130,44 @@ export default function SecurityPage() {
   };
 
   const handleDisableMFA = () => {
-    if (window.confirm('Are you sure you want to disable Two-Factor Authentication?')) {
-      disableMFAMutation.mutate();
-    }
+    setDisableMfaConfirm(true);
+  };
+
+  const confirmDisableMFA = () => {
+    disableMFAMutation.mutate();
+    setDisableMfaConfirm(false);
   };
 
   const handleCreateUser = () => {
     if (!newUserForm.username || !newUserForm.password) {
-      alert('Username and password are required');
+      toast.error('Username and password are required');
       return;
     }
     if (newUserForm.password.length < 6) {
-      alert('Password must be at least 6 characters');
+      toast.error('Password must be at least 6 characters');
       return;
     }
     createUserMutation.mutate(newUserForm);
   };
 
+  // Calculate KPI metrics
+  const totalUsers = usersData?.users?.length || 0;
+  const mfaEnabledUsers = usersData?.users?.filter((u: any) => u.mfa_enabled).length || 0;
+  const recentLogins = loginHistoryData?.filter((log: any) => {
+    const logDate = new Date(log.timestamp);
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    return logDate >= yesterday;
+  }).length || 0;
+  const failedLogins = loginHistoryData?.filter((log: any) => !log.success).length || 0;
+
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      {/* Header */}
+      <div className="flex justify-between items-start">
         <div>
-          <h1 className="text-2xl font-bold text-foreground mb-1">Security & Access Control</h1>
-          <p className="text-sm text-foreground-muted">
+          <h1 className="text-3xl font-bold text-foreground mb-2">Security & Access Control</h1>
+          <p className="text-foreground-muted">
             Manage authentication, user access, and security settings
           </p>
         </div>
@@ -158,6 +176,75 @@ export default function SecurityPage() {
           {user?.is_admin ? 'Administrator' : 'User'}
         </Badge>
       </div>
+
+      {/* KPI Summary Cards */}
+      {user?.is_admin && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {/* Total Users */}
+          <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-3xl rounded-full" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-4">
+                <div className="p-3 rounded-lg bg-blue-500 bg-opacity-10">
+                  <User className="h-6 w-6 text-blue-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-foreground-muted mb-1">Total Users</p>
+                <p className="text-2xl font-bold text-foreground">{totalUsers}</p>
+              </div>
+            </div>
+          </Card>
+
+          {/* MFA Enabled */}
+          <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500 opacity-5 blur-3xl rounded-full" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-4">
+                <div className="p-3 rounded-lg bg-emerald-500 bg-opacity-10">
+                  <Shield className="h-6 w-6 text-emerald-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-foreground-muted mb-1">MFA Enabled</p>
+                <p className="text-2xl font-bold text-foreground">{mfaEnabledUsers}/{totalUsers}</p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Recent Logins */}
+          <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500 opacity-5 blur-3xl rounded-full" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-4">
+                <div className="p-3 rounded-lg bg-violet-500 bg-opacity-10">
+                  <History className="h-6 w-6 text-violet-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-foreground-muted mb-1">Last 24h Logins</p>
+                <p className="text-2xl font-bold text-foreground">{recentLogins}</p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Failed Logins */}
+          <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500 opacity-5 blur-3xl rounded-full" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-4">
+                <div className="p-3 rounded-lg bg-rose-500 bg-opacity-10">
+                  <KeyRound className="h-6 w-6 text-rose-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-foreground-muted mb-1">Failed Logins</p>
+                <p className="text-2xl font-bold text-foreground">{failedLogins}</p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
 
       <Card>
         <Tabs value={tabValue} onValueChange={(value) => setTabValue(value as string)}>
@@ -509,6 +596,34 @@ export default function SecurityPage() {
               disabled={createUserMutation.isPending}
             >
               Create User
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Disable MFA Confirmation Dialog */}
+      <Dialog open={disableMfaConfirm} onOpenChange={() => setDisableMfaConfirm(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disable Two-Factor Authentication</DialogTitle>
+          </DialogHeader>
+
+          <div className="py-4">
+            <p className="text-foreground-muted">
+              Are you sure you want to disable Two-Factor Authentication? This will make your account less secure.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDisableMfaConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDisableMFA}
+              disabled={disableMFAMutation.isPending}
+            >
+              {disableMFAMutation.isPending ? 'Disabling...' : 'Disable 2FA'}
             </Button>
           </DialogFooter>
         </DialogContent>
