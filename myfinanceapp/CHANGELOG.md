@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.10
+
+- Add KPI summary cards and refreshed headers for Transactions and Work Hours pages, plus improved empty-state UX.
+- Include income totals in spending trends responses and tighten debug setting updates to admin users only.
+- Require `JWT_SECRET_KEY` at startup and standardize DB path defaults to the project data directory.
+- Add `.env.example`, a migration script for optional envelope transaction accounts, and move diagnostics into `app/tools`.
+
 ## 2.0.9
 
 ### Critical Bug Fixes

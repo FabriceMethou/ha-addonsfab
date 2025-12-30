@@ -1,6 +1,7 @@
 // Budgets Page
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '../contexts/ToastContext';
 import {
   Plus,
   Pencil,
@@ -9,6 +10,9 @@ import {
   TrendingDown,
   Target,
   AlertTriangle,
+  Wallet,
+  CheckCircle2,
+  DollarSign,
 } from 'lucide-react';
 import {
   Button,
@@ -40,6 +44,7 @@ import { budgetsAPI, categoriesAPI } from '../services/api';
 import { format } from 'date-fns';
 
 export default function BudgetsPage() {
+  const toast = useToast();
   const [openDialog, setOpenDialog] = useState(false);
   const [editingBudget, setEditingBudget] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
@@ -91,6 +96,12 @@ export default function BudgetsPage() {
       queryClient.invalidateQueries({ queryKey: ['budget-vs-actual'] });
       setOpenDialog(false);
       resetForm();
+      toast.success('Budget created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create budget:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create budget: ${errorMessage}`);
     },
   });
 
@@ -103,6 +114,12 @@ export default function BudgetsPage() {
       setOpenDialog(false);
       setEditingBudget(null);
       resetForm();
+      toast.success('Budget updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update budget:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update budget: ${errorMessage}`);
     },
   });
 
@@ -113,6 +130,12 @@ export default function BudgetsPage() {
       queryClient.invalidateQueries({ queryKey: ['budgets'] });
       queryClient.invalidateQueries({ queryKey: ['budget-vs-actual'] });
       setDeleteConfirm(null);
+      toast.success('Budget deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete budget:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete budget: ${errorMessage}`);
     },
   });
 
@@ -184,11 +207,96 @@ export default function BudgetsPage() {
     );
   }
 
+  // Calculate KPI metrics
+  const totalBudgets = budgetsData?.length || 0;
+  const activeBudgets = budgetsData?.filter((b: any) => b.is_active).length || 0;
+  const totalMonthlyBudget = budgetsData
+    ?.filter((b: any) => b.period === 'monthly' && b.is_active)
+    .reduce((sum: number, b: any) => sum + b.amount, 0) || 0;
+  const budgetsOnTrack = vsActualData?.filter((item: any) => item.actual <= item.budget).length || 0;
+  const totalTrackedBudgets = vsActualData?.length || 0;
+
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-foreground">Budgets</h1>
+      <div>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Budgets</h1>
+        <p className="text-foreground-muted">
+          {totalBudgets} budget{totalBudgets !== 1 ? 's' : ''}, {activeBudgets} active • Track and manage your spending limits
+        </p>
+      </div>
+
+      {/* KPI Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {/* Total Budgets */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-blue-500 bg-opacity-10">
+                <Target className="h-6 w-6 text-blue-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Budgets</p>
+              <p className="text-2xl font-bold text-foreground">{totalBudgets}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Active Budgets */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-emerald-500 bg-opacity-10">
+                <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Active Budgets</p>
+              <p className="text-2xl font-bold text-foreground">{activeBudgets}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Monthly Budget Total */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-violet-500 bg-opacity-10">
+                <DollarSign className="h-6 w-6 text-violet-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Monthly Budget</p>
+              <p className="text-2xl font-bold text-foreground">{formatCurrency(totalMonthlyBudget)}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Budgets On Track */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-cyan-500 bg-opacity-10">
+                <Wallet className="h-6 w-6 text-cyan-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">On Track This Month</p>
+              <p className="text-2xl font-bold text-foreground">
+                {budgetsOnTrack}/{totalTrackedBudgets}
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Action Bar */}
+      <div className="flex justify-end">
         <Button
           onClick={() => {
             setEditingBudget(null);

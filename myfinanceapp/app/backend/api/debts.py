@@ -5,15 +5,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import sys, os
+import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from database import FinanceDatabase
 from api.auth import get_current_user, User
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/app/data/finance.db")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 db = FinanceDatabase(db_path=DB_PATH)
 
 class DebtCreate(BaseModel):
@@ -129,8 +134,6 @@ async def update_debt(debt_id: int, debt_update: DebtUpdate, current_user: User 
     # Get only the fields that were explicitly set in the request
     update_data = debt_update.model_dump(exclude_unset=True)
 
-    print(f"[DEBUG] Received update data: {update_data}")
-
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
 
@@ -158,8 +161,6 @@ async def update_debt(debt_id: int, debt_update: DebtUpdate, current_user: User 
     if 'linked_account_id' in update_data:
         updates['linked_account_id'] = update_data['linked_account_id']
 
-    print(f"[DEBUG] Mapped updates to database fields: {updates}")
-
     try:
         success = db.update_debt(debt_id, updates)
         if not success:
@@ -168,23 +169,21 @@ async def update_debt(debt_id: int, debt_update: DebtUpdate, current_user: User 
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[ERROR] Exception in update_debt: {type(e).__name__}: {str(e)}")
+        logger.error(f"Exception in update_debt: {type(e).__name__}: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Error updating debt: {str(e)}")
 
 @router.delete("/{debt_id}")
 async def delete_debt(debt_id: int, current_user: User = Depends(get_current_user)):
     """Delete (deactivate) a debt and its associated data"""
-    print(f"[DEBUG] Deleting debt with ID: {debt_id}")
     try:
         success = db.delete_debt(debt_id)
         if not success:
             raise HTTPException(status_code=404, detail="Debt not found")
-        print(f"[DEBUG] Successfully deleted debt {debt_id}")
         return {"message": "Debt deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[ERROR] Exception in delete_debt: {type(e).__name__}: {str(e)}")
+        logger.error(f"Exception in delete_debt: {type(e).__name__}: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Error deleting debt: {str(e)}")
 
 @router.post("/payments")

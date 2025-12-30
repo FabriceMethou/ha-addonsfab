@@ -29,7 +29,13 @@ logger = logging.getLogger(__name__)
 from api import auth, accounts, transactions, categories, envelopes, recurring, debts, investments, reports, backups, settings, currencies, work_profiles, budgets, alerts
 
 # Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-this-in-production")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError(
+        "JWT_SECRET_KEY environment variable is not set. "
+        "This is required for secure authentication. "
+        "Please set it before starting the application."
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 

@@ -473,15 +473,13 @@ export default function InvestmentsPage() {
   // Update single holding price mutation
   const updateHoldingPriceMutation = useMutation({
     mutationFn: (holdingId: number) => investmentsAPI.updateHoldingPrice(holdingId),
-    onSuccess: (response) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
       queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
-      console.log(`[Investment] Price updated: ${response.data.symbol} = ${formatCurrency(response.data.current_price)}`);
+      // Price updated successfully
     },
     onError: (error: any) => {
-      console.error('[Investment] Failed to update holding price:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      console.error(`[Investment] Error details: ${errorMessage}`);
+      console.error('Failed to update holding price:', error);
     },
   });
 
@@ -492,7 +490,6 @@ export default function InvestmentsPage() {
       queryClient.invalidateQueries({ queryKey: ['investments-holdings'] });
       queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
       const data = response.data;
-      console.log(`[Investment] Bulk update complete: ${data.updated_count}/${data.total_holdings} holdings updated`);
 
       // Show success message with details
       let message = `Successfully updated ${data.updated_count} holding${data.updated_count !== 1 ? 's' : ''}`;
@@ -501,22 +498,12 @@ export default function InvestmentsPage() {
       }
       if (data.failed && data.failed.length > 0) {
         message += `. ${data.failed.length} failed`;
-        data.failed.forEach((f: any) => {
-          console.error(`[Investment] Failed to update ${f.symbol}: ${f.error}`);
-        });
       }
       toast.success( message);
-
-      if (data.skipped && data.skipped.length > 0) {
-        data.skipped.forEach((s: any) => {
-          console.log(`[Investment] Skipped ${s.symbol} (${s.type}): ${s.reason}`);
-        });
-      }
     },
     onError: (error: any) => {
-      console.error('[Investment] Failed to update prices:', error);
+      console.error('Failed to update prices:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      console.error(`[Investment] Error details: ${errorMessage}`);
       toast.error( `Failed to update prices: ${errorMessage}`);
     },
   });
@@ -678,13 +665,9 @@ export default function InvestmentsPage() {
       notes: holdingForm.notes,
     };
 
-    console.log('Submitting holding data:', data);
-
     if (editingHolding) {
-      console.log('Updating holding ID:', editingHolding.id);
       updateHoldingMutation.mutate({ id: editingHolding.id, data });
     } else {
-      console.log('Creating new holding');
       createHoldingMutation.mutate(data);
     }
   };
@@ -732,116 +715,177 @@ export default function InvestmentsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-foreground">Investment Portfolio</h1>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => updateAllPricesMutation.mutate()}
-            disabled={updateAllPricesMutation.isPending}
-            title="Auto-updates prices for stocks, ETFs, and mutual funds via Yahoo Finance. Bonds and crypto require manual price entry."
-          >
-            <RefreshCw className={`h-4 w-4 mr-2 ${updateAllPricesMutation.isPending ? 'animate-spin' : ''}`} />
-            {updateAllPricesMutation.isPending ? 'Updating...' : 'Update All Prices'}
-          </Button>
-          <Button
-            onClick={() => {
-              setEditingTransaction(null);
-              resetTransactionForm();
-              setTransactionDialog(true);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Add Transaction
-          </Button>
-          <Button
-            onClick={() => {
-              setEditingHolding(null);
-              resetHoldingForm();
-              setHoldingDialog(true);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Add Holding
-          </Button>
-        </div>
+      <div>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Investment Portfolio</h1>
+        <p className="text-foreground-muted">
+          {summaryData?.holdings_count || holdingsData?.length || 0} holding{(summaryData?.holdings_count || holdingsData?.length || 0) !== 1 ? 's' : ''} • Track your investment performance
+        </p>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Landmark className="h-5 w-5 text-primary" />
-            <span className="text-sm text-foreground-muted">Total Value</span>
+      {/* Action Bar */}
+      <div className="flex flex-wrap gap-2 justify-end">
+        <Button
+          variant="outline"
+          onClick={() => updateAllPricesMutation.mutate()}
+          disabled={updateAllPricesMutation.isPending}
+          title="Auto-updates prices for stocks, ETFs, and mutual funds via Yahoo Finance. Bonds and crypto require manual price entry."
+        >
+          <RefreshCw className={`h-4 w-4 mr-2 ${updateAllPricesMutation.isPending ? 'animate-spin' : ''}`} />
+          {updateAllPricesMutation.isPending ? 'Updating...' : 'Update All Prices'}
+        </Button>
+        <Button
+          onClick={() => {
+            setEditingTransaction(null);
+            resetTransactionForm();
+            setTransactionDialog(true);
+          }}
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          Add Transaction
+        </Button>
+        <Button
+          onClick={() => {
+            setEditingHolding(null);
+            resetHoldingForm();
+            setHoldingDialog(true);
+          }}
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          Add Holding
+        </Button>
+      </div>
+
+      {/* Summary KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-blue-500 bg-opacity-10">
+                <Landmark size={24} className="text-blue-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Value</p>
+              <p className="text-2xl font-bold text-foreground">{formatCurrency(totalValue)}</p>
+            </div>
           </div>
-          <p className="text-xl font-bold text-primary">{formatCurrency(totalValue)}</p>
         </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <LineChart className="h-5 w-5 text-info" />
-            <span className="text-sm text-foreground-muted">Total Cost</span>
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-cyan-500 bg-opacity-10">
+                <LineChart size={24} className="text-cyan-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Cost</p>
+              <p className="text-2xl font-bold text-foreground">{formatCurrency(totalCost)}</p>
+            </div>
           </div>
-          <p className="text-xl font-bold text-foreground">{formatCurrency(totalCost)}</p>
         </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            {totalGainLoss >= 0 ? (
-              <TrendingUp className="h-5 w-5 text-success" />
-            ) : (
-              <TrendingDown className="h-5 w-5 text-error" />
-            )}
-            <span className="text-sm text-foreground-muted">Gain/Loss</span>
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className={`absolute top-0 right-0 w-32 h-32 ${totalGainLoss >= 0 ? 'bg-emerald-500' : 'bg-rose-500'} opacity-5 blur-3xl rounded-full`} />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className={`p-3 rounded-lg ${totalGainLoss >= 0 ? 'bg-emerald-500' : 'bg-rose-500'} bg-opacity-10`}>
+                {totalGainLoss >= 0 ? (
+                  <TrendingUp size={24} className="text-emerald-500" />
+                ) : (
+                  <TrendingDown size={24} className="text-rose-500" />
+                )}
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Gain/Loss</p>
+              <p className={`text-2xl font-bold ${totalGainLoss >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                {formatCurrency(totalGainLoss)}
+              </p>
+              <p className="text-xs text-foreground-muted mt-1">
+                {totalGainLossPercent >= 0 ? '+' : ''}
+                {totalGainLossPercent.toFixed(2)}%
+              </p>
+            </div>
           </div>
-          <p className={`text-xl font-bold ${totalGainLoss >= 0 ? 'text-success' : 'text-error'}`}>
-            {formatCurrency(totalGainLoss)}
-          </p>
-          <span className="text-xs text-foreground-muted">
-            {totalGainLossPercent >= 0 ? '+' : ''}
-            {totalGainLossPercent.toFixed(2)}%
-          </span>
         </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <LineChart className="h-5 w-5 text-foreground-muted" />
-            <span className="text-sm text-foreground-muted">Holdings</span>
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-violet-500 bg-opacity-10">
+                <LineChart size={24} className="text-violet-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Holdings</p>
+              <p className="text-2xl font-bold text-foreground">
+                {summaryData?.holdings_count || holdingsData?.length || 0}
+              </p>
+            </div>
           </div>
-          <p className="text-xl font-bold text-foreground">
-            {summaryData?.holdings_count || holdingsData?.length || 0}
-          </p>
         </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingUp className="h-5 w-5 text-success" />
-            <span className="text-sm text-foreground-muted">Total Dividends</span>
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-emerald-500 bg-opacity-10">
+                <DollarSign size={24} className="text-emerald-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Dividends</p>
+              <p className="text-2xl font-bold text-foreground">{formatCurrency(summaryData?.total_dividends || 0)}</p>
+              <p className="text-xs text-foreground-muted mt-1">
+                12M: {formatCurrency(summaryData?.recent_dividends_12m || 0)}
+              </p>
+            </div>
           </div>
-          <p className="text-xl font-bold text-success">{formatCurrency(summaryData?.total_dividends || 0)}</p>
-          <span className="text-xs text-foreground-muted">
-            12M: {formatCurrency(summaryData?.recent_dividends_12m || 0)}
-          </span>
         </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Landmark className="h-5 w-5 text-info" />
-            <span className="text-sm text-foreground-muted">Dividend Yield</span>
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-cyan-500 bg-opacity-10">
+                <TrendingUp size={24} className="text-cyan-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Dividend Yield</p>
+              <p className="text-2xl font-bold text-foreground">{(summaryData?.dividend_yield || 0).toFixed(2)}%</p>
+              <p className="text-xs text-foreground-muted mt-1">Annual yield</p>
+            </div>
           </div>
-          <p className="text-xl font-bold text-info">{(summaryData?.dividend_yield || 0).toFixed(2)}%</p>
-          <span className="text-xs text-foreground-muted">Annual yield</span>
         </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="h-5 w-5 text-warning" />
-            <span className="text-sm text-foreground-muted">Total Fees</span>
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-amber-500 bg-opacity-10">
+                <AlertTriangle size={24} className="text-amber-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Fees</p>
+              <p className="text-2xl font-bold text-foreground">{formatCurrency(summaryData?.total_fees || 0)}</p>
+              <p className="text-xs text-foreground-muted mt-1">All transactions</p>
+            </div>
           </div>
-          <p className="text-xl font-bold text-warning">{formatCurrency(summaryData?.total_fees || 0)}</p>
-          <span className="text-xs text-foreground-muted">All transactions</span>
         </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="h-5 w-5 text-error" />
-            <span className="text-sm text-foreground-muted">Total Tax</span>
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-rose-500 bg-opacity-10">
+                <AlertTriangle size={24} className="text-rose-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Tax</p>
+              <p className="text-2xl font-bold text-foreground">{formatCurrency(summaryData?.total_tax || 0)}</p>
+              <p className="text-xs text-foreground-muted mt-1">All transactions</p>
+            </div>
           </div>
-          <p className="text-xl font-bold text-error">{formatCurrency(summaryData?.total_tax || 0)}</p>
-          <span className="text-xs text-foreground-muted">All transactions</span>
         </Card>
       </div>
 

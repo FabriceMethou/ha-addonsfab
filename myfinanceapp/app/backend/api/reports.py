@@ -15,7 +15,9 @@ from predictions import SpendingPredictor
 router = APIRouter()
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/app/data/finance.db")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 db = FinanceDatabase(db_path=DB_PATH)
 
 @router.get("/net-worth")
@@ -79,7 +81,7 @@ async def spending_by_category(
 
     return {
         "categories": [
-            {"category": cat, "amount": amt, "total": amt}
+            {"category": cat, "total": amt}
             for cat, amt in category_spending.items()
         ],
         "total": sum(category_spending.values()),
@@ -211,6 +213,7 @@ async def net_worth_trend(
                 db.convert_currency(d['current_balance'], d.get('currency', 'EUR'), display_currency)
                 for d in debts if d.get('is_active', True)
             )
+
             net_worth = total_assets - total_debts
 
             trends.append({
@@ -440,8 +443,10 @@ async def spending_trends(
             }
 
             total_expenses = 0
+            total_income = 0
             for t in transactions:
-                if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
+                # Calculate expenses (exclude transfers)
+                if t['amount'] < 0 and t.get('category') != 'transfer':
                     cat = t.get('type_name', 'Uncategorized')
                     categories_set.add(cat)
 
@@ -453,8 +458,13 @@ async def spending_trends(
                         month_data["categories"][cat] = 0
                     month_data["categories"][cat] += abs(t['amount'])
                     total_expenses += abs(t['amount'])
+                
+                # Calculate income (exclude transfers)
+                elif t['amount'] > 0 and t.get('category') != 'transfer':
+                    total_income += t['amount']
 
-            month_data["total"] = total_expenses
+            month_data["total_expenses"] = total_expenses
+            month_data["total_income"] = total_income
             trends.append(month_data)
 
         # Include current month
@@ -472,8 +482,10 @@ async def spending_trends(
         }
 
         total_expenses = 0
+        total_income = 0
         for t in transactions:
-            if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
+            # Calculate expenses (exclude transfers)
+            if t['amount'] < 0 and t.get('category') != 'transfer':
                 cat = t.get('type_name', 'Uncategorized')
                 categories_set.add(cat)
 
@@ -484,8 +496,13 @@ async def spending_trends(
                     month_data["categories"][cat] = 0
                 month_data["categories"][cat] += abs(t['amount'])
                 total_expenses += abs(t['amount'])
+            
+            # Calculate income (exclude transfers)
+            elif t['amount'] > 0 and t.get('category') != 'transfer':
+                total_income += t['amount']
 
-        month_data["total"] = total_expenses
+        month_data["total_expenses"] = total_expenses
+        month_data["total_income"] = total_income
         trends.append(month_data)
 
         # Calculate trend direction (increasing/decreasing) for each category

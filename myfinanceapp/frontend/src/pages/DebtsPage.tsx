@@ -7,9 +7,10 @@ import {
   Trash2,
   CreditCard,
   Wallet,
-  TrendingDown,
   AlertTriangle,
   ExternalLink,
+  DollarSign,
+  TrendingUp,
 } from 'lucide-react';
 import {
   Button,
@@ -45,6 +46,7 @@ import {
 import { debtsAPI, accountsAPI } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { format, parseISO } from 'date-fns';
+import { useToast } from '../contexts/ToastContext';
 
 interface DebtFormData {
   creditor: string;
@@ -67,6 +69,49 @@ interface PaymentFormData {
   notes: string;
 }
 
+// KPI Card Component
+interface KPICardProps {
+  title: string;
+  value: string;
+  subtitle?: string;
+  icon: React.ReactNode;
+  iconColor: string;
+  loading?: boolean;
+}
+
+function KPICard({ title, value, subtitle, icon, iconColor, loading }: KPICardProps) {
+  return (
+    <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+      {/* Background gradient effect */}
+      <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
+
+      <div className="relative">
+        <div className="flex items-start justify-between mb-4">
+          <div className={`p-3 rounded-lg ${iconColor} bg-opacity-10`}>
+            {icon}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm text-foreground-muted mb-1">{title}</p>
+          {loading ? (
+            <div className="h-8 flex items-center">
+              <Spinner className="w-5 h-5" />
+            </div>
+          ) : (
+            <>
+              <p className="text-2xl font-bold text-foreground">{value}</p>
+              {subtitle && (
+                <p className="text-xs text-foreground-muted mt-1">{subtitle}</p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 // Helper function to safely format dates
 const formatDate = (dateString: string | null | undefined): string => {
   if (!dateString) return 'Invalid Date';
@@ -80,6 +125,7 @@ const formatDate = (dateString: string | null | undefined): string => {
 };
 
 export default function DebtsPage() {
+  const toast = useToast();
   const navigate = useNavigate();
   const [debtDialog, setDebtDialog] = useState(false);
   const [paymentDialog, setPaymentDialog] = useState(false);
@@ -146,6 +192,12 @@ export default function DebtsPage() {
       queryClient.invalidateQueries({ queryKey: ['debts-summary'] });
       setDebtDialog(false);
       resetDebtForm();
+      toast.success('Debt created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create debt:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create debt: ${errorMessage}`);
     },
   });
 
@@ -158,10 +210,12 @@ export default function DebtsPage() {
       setDebtDialog(false);
       resetDebtForm();
       setEditingDebt(null);
+      toast.success('Debt updated successfully!');
     },
     onError: (error: any) => {
-      console.error('[ERROR] Failed to update debt:', error);
-      console.error('[ERROR] Error response:', error.response?.data);
+      console.error('Failed to update debt:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update debt: ${errorMessage}`);
     },
   });
 
@@ -172,6 +226,12 @@ export default function DebtsPage() {
       queryClient.invalidateQueries({ queryKey: ['debts'] });
       queryClient.invalidateQueries({ queryKey: ['debts-summary'] });
       setDeleteConfirm(null);
+      toast.success('Debt deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete debt:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete debt: ${errorMessage}`);
     },
   });
 
@@ -184,6 +244,12 @@ export default function DebtsPage() {
       queryClient.invalidateQueries({ queryKey: ['debt-payments', selectedDebt?.id] });
       setPaymentDialog(false);
       resetPaymentForm();
+      toast.success('Payment added successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to add payment:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to add payment: ${errorMessage}`);
     },
   });
 
@@ -360,15 +426,7 @@ export default function DebtsPage() {
     // Use minimum_payment (API returns it as this, not monthly_payment)
     const monthlyPayment = debt.minimum_payment || 0;
 
-    console.log('[DEBUG] calculatePayoffTimeline:', {
-      debtName: debt.creditor,
-      monthlyPayment,
-      currentBalance: debt.current_balance,
-      interestRate: debt.interest_rate
-    });
-
     if (!monthlyPayment || monthlyPayment <= 0 || debt.current_balance <= 0) {
-      console.log('[DEBUG] Skipping timeline - missing required data');
       return { months: null, payoffDate: null, totalInterest: 0 };
     }
 
@@ -398,8 +456,6 @@ export default function DebtsPage() {
     const payoffDate = new Date();
     payoffDate.setMonth(payoffDate.getMonth() + months);
 
-    console.log('[DEBUG] Payoff timeline calculated:', { months, payoffDate, totalInterest });
-
     return { months, payoffDate, totalInterest };
   };
 
@@ -410,61 +466,68 @@ export default function DebtsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-foreground">Debt Management</h1>
-        <div className="flex items-center gap-3">
-          <Button
-            variant={showInactive ? 'outline' : 'ghost'}
-            size="sm"
-            onClick={() => setShowInactive(!showInactive)}
-          >
-            {showInactive ? 'Hide' : 'Show'} Closed Debts ({inactiveDebts.length})
-          </Button>
-          <Button
-            onClick={() => {
-              setEditingDebt(null);
-              resetDebtForm();
-              setDebtDialog(true);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Add Debt
-          </Button>
-        </div>
+      <div>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Debt Management</h1>
+        <p className="text-foreground-muted">
+          {activeDebts.length} active debt{activeDebts.length !== 1 ? 's' : ''} • Track payments and payoff progress
+        </p>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <CreditCard className="h-5 w-5 text-error" />
-            <span className="text-sm text-foreground-muted">Total Debt</span>
-          </div>
-          <p className="text-2xl font-bold text-error">{formatCurrency(totalDebt)}</p>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Wallet className="h-5 w-5 text-success" />
-            <span className="text-sm text-foreground-muted">Total Paid</span>
-          </div>
-          <p className="text-2xl font-bold text-success">{formatCurrency(totalPaid)}</p>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingDown className="h-5 w-5 text-info" />
-            <span className="text-sm text-foreground-muted">Payoff Progress</span>
-          </div>
-          <p className="text-2xl font-bold text-info">{payoffProgress.toFixed(1)}%</p>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="h-5 w-5 text-warning" />
-            <span className="text-sm text-foreground-muted">Active Debts</span>
-          </div>
-          <p className="text-2xl font-bold text-foreground">
-            {debtsData?.filter((d: any) => d.status === 'active').length || 0}
-          </p>
-        </Card>
+      {/* Summary KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
+        <KPICard
+          title="Total Debt"
+          value={formatCurrency(totalDebt)}
+          subtitle="Current balance"
+          icon={<CreditCard size={24} className="text-rose-500" />}
+          iconColor="bg-rose-500"
+          loading={debtsLoading}
+        />
+        <KPICard
+          title="Total Paid"
+          value={formatCurrency(totalPaid)}
+          subtitle="Principal paid off"
+          icon={<DollarSign size={24} className="text-emerald-500" />}
+          iconColor="bg-emerald-500"
+          loading={debtsLoading}
+        />
+        <KPICard
+          title="Payoff Progress"
+          value={`${payoffProgress.toFixed(1)}%`}
+          subtitle="Overall completion"
+          icon={<TrendingUp size={24} className="text-cyan-500" />}
+          iconColor="bg-cyan-500"
+          loading={debtsLoading}
+        />
+        <KPICard
+          title="Active Debts"
+          value={activeDebts.length.toString()}
+          subtitle="Requiring payments"
+          icon={<AlertTriangle size={24} className="text-amber-500" />}
+          iconColor="bg-amber-500"
+          loading={debtsLoading}
+        />
+      </div>
+
+      {/* Action Bar */}
+      <div className="flex justify-end items-center gap-3">
+        <Button
+          variant={showInactive ? 'outline' : 'ghost'}
+          size="sm"
+          onClick={() => setShowInactive(!showInactive)}
+        >
+          {showInactive ? 'Hide' : 'Show'} Closed Debts ({inactiveDebts.length})
+        </Button>
+        <Button
+          onClick={() => {
+            setEditingDebt(null);
+            resetDebtForm();
+            setDebtDialog(true);
+          }}
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          Add Debt
+        </Button>
       </div>
 
       {/* Overall Progress */}
@@ -493,7 +556,7 @@ export default function DebtsPage() {
                 : 0;
 
               return (
-                <Card key={debt.id} className="p-6">
+                <Card key={debt.id} className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                   <div className="flex justify-between items-start mb-4">
                     <div className="flex-1">
                       <h3 className="text-lg font-semibold text-foreground">{debt.creditor}</h3>
@@ -502,7 +565,7 @@ export default function DebtsPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={getStatusBadgeVariant(debt.status)}>
+                      <Badge variant={getStatusBadgeVariant(debt.status)} size="sm">
                         {debt.status.replace('_', ' ')}
                       </Badge>
                       <Button variant="ghost" size="sm" onClick={() => handleEdit(debt)}>
@@ -637,7 +700,7 @@ export default function DebtsPage() {
                         resetPaymentForm();
                         setPaymentDialog(true);
                       }}
-                      disabled={debt.status === 'paid_off' || addPaymentMutation.isPending}
+                      disabled={debt.status === 'paid_off'}
                     >
                       <Wallet className="h-4 w-4 mr-2" />
                       Add Payment
@@ -664,7 +727,7 @@ export default function DebtsPage() {
         !showInactive && (
           <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
             <div className="flex flex-col items-center justify-center min-h-[300px]">
-              <CreditCard className="h-20 w-20 text-foreground-muted mb-4" />
+              <CreditCard className="h-20 w-20 text-foreground-muted mb-4 opacity-50" />
               <h2 className="text-xl font-semibold text-foreground-muted mb-2">No Active Debts</h2>
               <p className="text-sm text-foreground-muted mb-6">
                 Add your first debt to start tracking payments
@@ -695,7 +758,7 @@ export default function DebtsPage() {
                 : 0;
 
               return (
-                <Card key={debt.id} className="p-6 opacity-70">
+                <Card key={debt.id} className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm opacity-70">
                   <div className="flex justify-between items-start mb-4">
                     <div className="flex-1">
                       <h3 className="text-lg font-semibold text-foreground">{debt.creditor}</h3>
@@ -703,7 +766,7 @@ export default function DebtsPage() {
                         <p className="text-sm text-foreground-muted mt-1">{debt.notes}</p>
                       )}
                     </div>
-                    <Badge variant={debt.current_balance <= 0 ? 'success' : 'outline'}>
+                    <Badge variant={debt.current_balance <= 0 ? 'success' : 'outline'} size="sm">
                       {debt.current_balance <= 0 ? 'PAID OFF' : 'INACTIVE'}
                     </Badge>
                   </div>
@@ -905,11 +968,10 @@ export default function DebtsPage() {
             </Button>
             <Button
               onClick={handleSubmitDebt}
-              disabled={createMutation.isPending || updateMutation.isPending || !debtForm.creditor}
+              loading={createMutation.isPending || updateMutation.isPending}
+              disabled={!debtForm.creditor}
             >
-              {createMutation.isPending || updateMutation.isPending
-                ? (editingDebt ? 'Updating...' : 'Adding...')
-                : (editingDebt ? 'Update' : 'Add')}
+              {editingDebt ? 'Update' : 'Add'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -981,9 +1043,10 @@ export default function DebtsPage() {
             </Button>
             <Button
               onClick={handleAddPayment}
-              disabled={addPaymentMutation.isPending || !paymentForm.amount}
+              loading={addPaymentMutation.isPending}
+              disabled={!paymentForm.amount}
             >
-              {addPaymentMutation.isPending ? 'Adding Payment...' : 'Add Payment'}
+              Add Payment
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -997,7 +1060,7 @@ export default function DebtsPage() {
           </DialogHeader>
 
           <div className="py-4">
-            <div className="flex items-start gap-3 p-4 rounded-lg bg-warning/10 text-warning">
+            <div className="flex items-start gap-3 p-4 rounded-lg bg-warning/10 text-warning border border-warning/20">
               <AlertTriangle className="h-5 w-5 flex-shrink-0 mt-0.5" />
               <p className="text-sm">
                 Are you sure you want to delete the debt "{deleteConfirm?.creditor}"? This will also
@@ -1013,9 +1076,9 @@ export default function DebtsPage() {
             <Button
               variant="destructive"
               onClick={() => deleteMutation.mutate(deleteConfirm.id)}
-              disabled={deleteMutation.isPending}
+              loading={deleteMutation.isPending}
             >
-              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+              Delete
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1056,25 +1119,27 @@ function DebtPayments({ debtId }: { debtId: number }) {
   }
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Date</TableHead>
-          <TableHead>Amount</TableHead>
-          <TableHead>Notes</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {paymentsData.map((payment: any) => (
-          <TableRow key={payment.id}>
-            <TableCell className="text-sm">{formatDate(payment.payment_date)}</TableCell>
-            <TableCell className="font-semibold text-success">
-              {formatCurrency(payment.amount)}
-            </TableCell>
-            <TableCell className="text-sm">{payment.notes || '-'}</TableCell>
+    <div className="rounded-lg border border-border overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Date</TableHead>
+            <TableHead>Amount</TableHead>
+            <TableHead>Notes</TableHead>
           </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+        </TableHeader>
+        <TableBody>
+          {paymentsData.map((payment: any) => (
+            <TableRow key={payment.id}>
+              <TableCell className="text-sm">{formatDate(payment.payment_date)}</TableCell>
+              <TableCell className="font-semibold text-success">
+                {formatCurrency(payment.amount)}
+              </TableCell>
+              <TableCell className="text-sm">{payment.notes || '-'}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   );
 }

@@ -13,7 +13,9 @@ from api.auth import get_current_user, User
 router = APIRouter()
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/home/fab/Documents/Development/myfinanceapp/data/finance.db")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 db = FinanceDatabase(db_path=DB_PATH)
 
 class SettingUpdate(BaseModel):
@@ -52,6 +54,14 @@ async def get_setting(key: str, current_user: User = Depends(get_current_user)):
 @router.put("/{key}")
 async def update_setting(key: str, setting: SettingUpdate, current_user: User = Depends(get_current_user)):
     """Update setting"""
+    # Debug settings require admin role
+    debug_settings = ['debug_mode', 'debug_auto_recalculate', 'debug_show_logs', 'debug_log_api_calls', 'debug_log_transactions']
+    if key in debug_settings and not current_user.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Debug settings can only be modified by administrators"
+        )
+
     try:
         # Convert value to string for storage (lowercase for booleans)
         if isinstance(setting.value, bool):

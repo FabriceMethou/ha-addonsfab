@@ -75,6 +75,12 @@ export default function BackupPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['backups'] });
       setDescription('');
+      toast.success('Backup created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create backup:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create backup: ${errorMessage}`);
     },
   });
 
@@ -84,6 +90,7 @@ export default function BackupPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['backups'] });
       setSelectedFile(null);
+      toast.success('Backup imported successfully!');
     },
     onError: (error: any) => {
       console.error('Failed to upload backup:', error);
@@ -108,6 +115,12 @@ export default function BackupPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['backups'] });
       setDeleteConfirm(null);
+      toast.success('Backup deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete backup:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete backup: ${errorMessage}`);
     },
   });
 
@@ -215,10 +228,91 @@ export default function BackupPage() {
     );
   }
 
+  // Calculate KPI metrics
+  const totalBackups = backupsData?.length || 0;
+  const totalSize = backupsData?.reduce((sum: number, b: any) => sum + b.size_bytes, 0) || 0;
+  const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+  const autoBackups = backupsData?.filter((b: any) => b.type === 'auto').length || 0;
+  const manualBackups = backupsData?.filter((b: any) => b.type === 'manual').length || 0;
+  const latestBackup = backupsData && backupsData.length > 0
+    ? formatDate(backupsData[0].timestamp)
+    : 'N/A';
+
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-foreground">Backup & Restore</h1>
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Backup & Restore</h1>
+        <p className="text-foreground-muted">
+          {totalBackups} backup{totalBackups !== 1 ? 's' : ''}, {totalSizeMB} MB total • Protect your financial data
+        </p>
+      </div>
+
+      {/* KPI Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {/* Total Backups */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-blue-500 bg-opacity-10">
+                <Archive className="h-6 w-6 text-blue-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Backups</p>
+              <p className="text-2xl font-bold text-foreground">{totalBackups}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Total Size */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-violet-500 bg-opacity-10">
+                <HardDrive className="h-6 w-6 text-violet-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Total Size</p>
+              <p className="text-2xl font-bold text-foreground">{totalSizeMB} MB</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Auto Backups */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-emerald-500 bg-opacity-10">
+                <CheckCircle className="h-6 w-6 text-emerald-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Auto / Manual</p>
+              <p className="text-2xl font-bold text-foreground">{autoBackups} / {manualBackups}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Latest Backup */}
+        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500 opacity-5 blur-3xl rounded-full" />
+          <div className="relative">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-3 rounded-lg bg-cyan-500 bg-opacity-10">
+                <Download className="h-6 w-6 text-cyan-500" />
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-foreground-muted mb-1">Latest Backup</p>
+              <p className="text-sm font-semibold text-foreground truncate">{latestBackup}</p>
+            </div>
+          </div>
+        </Card>
       </div>
 
       <Tabs value={tabValue} onValueChange={(value) => setTabValue(value as string)}>

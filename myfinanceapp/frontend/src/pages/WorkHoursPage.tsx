@@ -1,6 +1,7 @@
 // Work Hours Calculator Page
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '../contexts/ToastContext';
 import {
   Plus,
   Pencil,
@@ -9,6 +10,8 @@ import {
   Calculator,
   AlertTriangle,
   Info,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react';
 import {
   Button,
@@ -42,6 +45,7 @@ import {
 import { workProfilesAPI, accountsAPI } from '../services/api';
 
 export default function WorkHoursPage() {
+  const toast = useToast();
   const [tabValue, setTabValue] = useState<number | string>(0);
   const [openDialog, setOpenDialog] = useState(false);
   const [editingProfile, setEditingProfile] = useState<any>(null);
@@ -86,6 +90,12 @@ export default function WorkHoursPage() {
       setOpenDialog(false);
       resetForm();
       setEditingProfile(null);
+      toast.success(editingProfile ? 'Work profile updated successfully!' : 'Work profile created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to save work profile:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to save work profile: ${errorMessage}`);
     },
   });
 
@@ -95,6 +105,12 @@ export default function WorkHoursPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['work-profiles'] });
       setDeleteConfirm(null);
+      toast.success('Work profile deleted successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete work profile:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete work profile: ${errorMessage}`);
     },
   });
 
@@ -158,12 +174,95 @@ export default function WorkHoursPage() {
     );
   }
 
+  // Calculate KPI metrics
+  const totalProfiles = profilesData?.length || 0;
+  const avgHourlyRate =
+    totalProfiles > 0
+      ? profilesData.reduce((sum: number, p: any) => sum + p.hourly_rate, 0) / totalProfiles
+      : 0;
+  const highestRate =
+    totalProfiles > 0 ? Math.max(...profilesData.map((p: any) => p.hourly_rate)) : 0;
+  const lowestRate =
+    totalProfiles > 0 ? Math.min(...profilesData.map((p: any) => p.hourly_rate)) : 0;
+
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-foreground">Work Hours Calculator</h1>
+      <div>
+        <h1 className="text-3xl font-bold text-foreground mb-2">Work Hours Calculator</h1>
+        <p className="text-foreground-muted">
+          {totalProfiles} profile{totalProfiles !== 1 ? 's' : ''} • Calculate the cost of purchases in working time
+        </p>
       </div>
+
+      {/* KPI Summary Cards */}
+      {totalProfiles > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {/* Total Profiles */}
+          <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-3xl rounded-full" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-4">
+                <div className="p-3 rounded-lg bg-blue-500 bg-opacity-10">
+                  <Clock className="h-6 w-6 text-blue-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-foreground-muted mb-1">Total Profiles</p>
+                <p className="text-2xl font-bold text-foreground">{totalProfiles}</p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Average Hourly Rate */}
+          <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500 opacity-5 blur-3xl rounded-full" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-4">
+                <div className="p-3 rounded-lg bg-cyan-500 bg-opacity-10">
+                  <Calculator className="h-6 w-6 text-cyan-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-foreground-muted mb-1">Average Rate</p>
+                <p className="text-2xl font-bold text-foreground">{formatCurrency(avgHourlyRate)}/h</p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Highest Rate */}
+          <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500 opacity-5 blur-3xl rounded-full" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-4">
+                <div className="p-3 rounded-lg bg-emerald-500 bg-opacity-10">
+                  <TrendingUp className="h-6 w-6 text-emerald-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-foreground-muted mb-1">Highest Rate</p>
+                <p className="text-2xl font-bold text-foreground">{formatCurrency(highestRate)}/h</p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Lowest Rate */}
+          <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500 opacity-5 blur-3xl rounded-full" />
+            <div className="relative">
+              <div className="flex items-start justify-between mb-4">
+                <div className="p-3 rounded-lg bg-violet-500 bg-opacity-10">
+                  <TrendingDown className="h-6 w-6 text-violet-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-foreground-muted mb-1">Lowest Rate</p>
+                <p className="text-2xl font-bold text-foreground">{formatCurrency(lowestRate)}/h</p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* Info Alert */}
       <div className="flex items-start gap-3 p-4 rounded-lg bg-primary/10 text-primary">

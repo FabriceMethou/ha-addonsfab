@@ -33,6 +33,11 @@ import {
   DialogTitle,
   DialogDescription,
   Textarea,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Table,
   TableBody,
   TableCell,
@@ -40,7 +45,7 @@ import {
   TableHeader,
   TableRow,
 } from '../components/shadcn';
-import { envelopesAPI } from '../services/api';
+import { envelopesAPI, accountsAPI } from '../services/api';
 import { format, parseISO, isPast, differenceInDays } from 'date-fns';
 
 interface EnvelopeFormData {
@@ -64,6 +69,8 @@ export default function EnvelopesPage() {
   const [transactionForm, setTransactionForm] = useState({
     amount: '',
     description: '',
+    transaction_date: format(new Date(), 'yyyy-MM-dd'),
+    account_id: '',
   });
 
   const [formData, setFormData] = useState<EnvelopeFormData>({
@@ -83,6 +90,15 @@ export default function EnvelopesPage() {
     queryFn: async () => {
       const response = await envelopesAPI.getAll(showInactive);
       return response.data.envelopes;
+    },
+  });
+
+  // Fetch accounts for account selector
+  const { data: accountsData } = useQuery({
+    queryKey: ['accounts'],
+    queryFn: async () => {
+      const response = await accountsAPI.getAll();
+      return response.data.accounts;
     },
   });
 
@@ -140,7 +156,7 @@ export default function EnvelopesPage() {
       queryClient.invalidateQueries({ queryKey: ['envelopes'] });
       queryClient.invalidateQueries({ queryKey: ['envelope-transactions', selectedEnvelope?.id] });
       setOpenTransactionDialog(false);
-      setTransactionForm({ amount: '', description: '' });
+      setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '' });
     },
   });
 
@@ -188,11 +204,18 @@ export default function EnvelopesPage() {
   const handleAddTransaction = () => {
     if (selectedEnvelope) {
       const amount = parseFloat(transactionForm.amount);
-      const data = {
+      const data: any = {
         envelope_id: selectedEnvelope.id,
         amount: transactionType === 'withdraw' ? -Math.abs(amount) : Math.abs(amount),
         description: transactionForm.description || (transactionType === 'withdraw' ? 'Withdrawal' : 'Deposit'),
+        date: transactionForm.transaction_date,  // API expects 'date' field
       };
+
+      // account_id is optional - only include if selected
+      if (transactionForm.account_id) {
+        data.account_id = parseInt(transactionForm.account_id);
+      }
+
       addTransactionMutation.mutate(data);
     }
   };
@@ -200,14 +223,14 @@ export default function EnvelopesPage() {
   const handleOpenAddFunds = (envelope: any) => {
     setSelectedEnvelope(envelope);
     setTransactionType('add');
-    setTransactionForm({ amount: '', description: '' });
+    setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '' });
     setOpenTransactionDialog(true);
   };
 
   const handleOpenWithdraw = (envelope: any) => {
     setSelectedEnvelope(envelope);
     setTransactionType('withdraw');
-    setTransactionForm({ amount: '', description: '' });
+    setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '' });
     setOpenTransactionDialog(true);
   };
 
@@ -721,12 +744,45 @@ export default function EnvelopesPage() {
             </div>
 
             <div className="space-y-2">
+              <Label htmlFor="account">Account (Optional)</Label>
+              <Select
+                value={transactionForm.account_id}
+                onValueChange={(value) => setTransactionForm({ ...transactionForm, account_id: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="None - Virtual allocation only" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">None</SelectItem>
+                  {accountsData?.map((account: any) => (
+                    <SelectItem key={account.id} value={account.id.toString()}>
+                      {account.name} - {account.bank_name} ({formatCurrency(account.balance)})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-foreground-muted">
+                Envelope transactions are virtual allocations. Leave empty for goal tracking only.
+              </p>
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="txDescription">Description (Optional)</Label>
               <Input
                 id="txDescription"
                 value={transactionForm.description}
                 onChange={(e) => setTransactionForm({ ...transactionForm, description: e.target.value })}
                 placeholder={transactionType === 'withdraw' ? 'Withdrawal reason' : 'Deposit note'}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="txDate">Transaction Date</Label>
+              <Input
+                id="txDate"
+                type="date"
+                value={transactionForm.transaction_date}
+                onChange={(e) => setTransactionForm({ ...transactionForm, transaction_date: e.target.value })}
               />
             </div>
           </div>
