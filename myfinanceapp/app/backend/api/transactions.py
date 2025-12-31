@@ -643,8 +643,8 @@ async def reject_pending_transaction(
     current_user: User = Depends(get_current_user)
 ):
     """Reject/delete a pending transaction"""
-    # For pending transactions, just delete them
-    success = db.delete_transaction(transaction_id)
+    # For pending transactions, delete from pending_transactions table
+    success = db.reject_pending_transaction(transaction_id)
 
     if not success:
         raise HTTPException(

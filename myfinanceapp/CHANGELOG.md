@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.11
+
+- Allow recurring templates to omit description, recipient, and subtype values while keeping database inserts safe.
+- Confirm pending transactions through full add-transaction logic and reject them from the pending queue.
+- Add recipient autocomplete, clearer pending transaction details, and toast feedback to the recurring templates UI.
+- Refine transactions detail card styling.
+
 ## 2.0.10
 
 - Add KPI summary cards and refreshed headers for Transactions and Work Hours pages, plus improved empty-state UX.
