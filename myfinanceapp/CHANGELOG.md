@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.12
+
+- Update visual of Report, Dashboard and Transaction page
+- Fix Networth report issue 
+
 ## 2.0.11
 
 - Allow recurring templates to omit description, recipient, and subtype values while keeping database inserts safe.

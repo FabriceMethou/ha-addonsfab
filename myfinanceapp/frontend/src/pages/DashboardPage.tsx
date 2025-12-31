@@ -23,7 +23,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from 'recharts';
 
@@ -284,9 +283,9 @@ export default function DashboardPage() {
   // Calculate deltas with safe percentage calculation
   const netWorthChange = netWorthTrend && netWorthTrend.length >= 2
     ? calculatePercentageChange(
-        netWorthTrend[netWorthTrend.length - 1].net_worth,
-        netWorthTrend[netWorthTrend.length - 2].net_worth
-      )
+      netWorthTrend[netWorthTrend.length - 1].net_worth,
+      netWorthTrend[netWorthTrend.length - 2].net_worth
+    )
     : 0;
 
   const incomeChange = calculatePercentageChange(monthlyIncome, previousIncome);
@@ -318,12 +317,6 @@ export default function DashboardPage() {
 
   // Budget data
   const budgetArray = Array.isArray(budgetsVsActual) ? budgetsVsActual : [];
-  const budgetChartData = budgetArray.slice(0, 8).map((budget: any) => ({
-    name: budget.category_name?.length > 12 ? budget.category_name.substring(0, 12) + '...' : (budget.category_name || 'Unknown'),
-    budget: budget.budget_amount || 0,
-    spent: budget.spent || 0,
-  }));
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -495,10 +488,10 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* Budget Overview - Kept from original */}
+      {/* Budget Overview - Progress Graph */}
       {budgetArray.length > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex justify-between items-center mb-6">
             <div className="flex items-center gap-2">
               <Wallet className="w-5 h-5 text-primary" />
               <h2 className="text-lg font-semibold text-foreground">Budget Overview</h2>
@@ -508,14 +501,30 @@ export default function DashboardPage() {
             </Link>
           </div>
 
-          {/* Budget Chart */}
-          <div className="mb-6">
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={budgetChartData} layout="vertical" margin={{ left: 20, right: 20, top: 5, bottom: 5 }}>
+          {/* Budget Progress Graph */}
+          <div className="h-[400px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={budgetArray.slice(0, 10).map((budget: any) => {
+                  const progress = budget.budget_amount > 0 ? (budget.spent / budget.budget_amount) * 100 : 0;
+                  return {
+                    name: budget.category_name?.length > 15 ? budget.category_name.substring(0, 15) + '...' : (budget.category_name || 'Unknown'),
+                    fullName: budget.category_name || 'Unknown',
+                    progress: Math.min(progress, 100),
+                    overProgress: progress > 100 ? progress - 100 : 0,
+                    spent: budget.spent || 0,
+                    budget: budget.budget_amount || 0,
+                    isOverBudget: progress > 100,
+                  };
+                })}
+                layout="vertical"
+                margin={{ left: 130, right: 40, top: 10, bottom: 10 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} horizontal={true} vertical={false} />
                 <XAxis
                   type="number"
-                  tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                  domain={[0, 100]}
+                  tickFormatter={(value) => `${value}%`}
                   stroke="#888888"
                   fontSize={12}
                   tickLine={false}
@@ -524,64 +533,55 @@ export default function DashboardPage() {
                 <YAxis
                   dataKey="name"
                   type="category"
-                  width={110}
+                  width={120}
                   stroke="#888888"
                   fontSize={12}
                   tickLine={false}
                   axisLine={false}
                 />
                 <Tooltip
+                  cursor={false}
                   contentStyle={{
                     backgroundColor: '#0a0a0a',
                     border: '1px solid #2a2a2a',
                     borderRadius: '8px',
                     fontSize: '12px',
                   }}
-                  formatter={(value: any) => formatCurrency(value)}
+                  content={({ active, payload }) => {
+                    if (active && payload && payload.length) {
+                      const data = payload[0].payload;
+                      const totalProgress = data.progress + data.overProgress;
+                      return (
+                        <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg p-3">
+                          <p className="font-semibold text-foreground mb-2">{data.fullName}</p>
+                          <p className="text-sm text-foreground-muted">
+                            Spent: {formatCurrency(data.spent)} / {formatCurrency(data.budget)}
+                          </p>
+                          <p className={`text-sm font-medium ${data.isOverBudget ? 'text-error' : 'text-success'}`}>
+                            {totalProgress.toFixed(1)}% {data.isOverBudget ? '(Over Budget)' : 'Used'}
+                          </p>
+                        </div>
+                      );
+                    }
+                    return null;
+                  }}
                 />
-                <Legend
-                  wrapperStyle={{ paddingTop: '10px' }}
-                  iconType="circle"
+                <Bar
+                  dataKey="progress"
+                  stackId="progress"
+                  fill="#10b981"
+                  radius={[0, 4, 4, 0]}
+                  fillOpacity={0.8}
                 />
-                <Bar dataKey="budget" name="Budget" fill="#3b82f6" radius={[0, 6, 6, 0]} />
-                <Bar dataKey="spent" name="Spent" fill="#f59e0b" radius={[0, 6, 6, 0]} />
+                <Bar
+                  dataKey="overProgress"
+                  stackId="progress"
+                  fill="#ef4444"
+                  radius={[0, 4, 4, 0]}
+                  fillOpacity={0.8}
+                />
               </BarChart>
             </ResponsiveContainer>
-          </div>
-
-          {/* Budget Progress Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {budgetArray.slice(0, 8).map((budget: any) => {
-              const progress = budget.budget_amount > 0 ? (budget.spent / budget.budget_amount) * 100 : 0;
-              const remaining = budget.budget_amount - budget.spent;
-              const isOverBudget = progress > 100;
-              const progressVariant = progress < 80 ? 'success' : progress < 100 ? 'warning' : 'error';
-
-              return (
-                <div
-                  key={budget.category_name}
-                  className="p-4 rounded-xl bg-card border border-border hover:bg-surface-hover transition-colors"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="font-semibold text-foreground text-sm truncate" title={budget.category_name}>
-                      {budget.category_name}
-                    </p>
-                    <div className={`text-xs font-medium px-2 py-0.5 rounded ${isOverBudget ? 'bg-error/10 text-error' : 'bg-success/10 text-success'
-                      }`}>
-                      {progress.toFixed(0)}%
-                    </div>
-                  </div>
-                  <p className="text-xs text-foreground-muted mb-3">
-                    {formatCurrency(budget.spent)} / {formatCurrency(budget.budget_amount)}
-                  </p>
-                  <Progress value={Math.min(progress, 100)} variant={progressVariant} size="md" className="mb-2" />
-                  <p className={`text-xs font-medium ${isOverBudget ? 'text-error' : 'text-success'}`}>
-                    {isOverBudget ? 'Over by ' : 'Remaining: '}
-                    {formatCurrency(Math.abs(remaining))}
-                  </p>
-                </div>
-              );
-            })}
           </div>
         </Card>
       )}
