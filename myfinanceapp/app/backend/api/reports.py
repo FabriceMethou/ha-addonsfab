@@ -186,6 +186,10 @@ async def net_worth_trend(
         # Get user's preferred display currency
         display_currency = db.get_preference('display_currency', 'EUR')
 
+        # Get all accounts and debts to track
+        all_accounts = db.get_accounts()
+        all_debts = db.get_debts()
+
         # Calculate net worth for each month
         end_date = datetime.now()
         trends = []
@@ -193,56 +197,102 @@ async def net_worth_trend(
         for i in range(months, 0, -1):
             target_date = end_date - relativedelta(months=i)
             month_end = target_date.replace(day=1) + relativedelta(months=1) - timedelta(days=1)
+            month_end_str = month_end.strftime('%Y-%m-%d')
 
-            # Get transactions up to this month
-            filters = {'end_date': month_end.strftime('%Y-%m-%d')}
-            transactions = db.get_transactions(filters=filters)
+            # Calculate account balances at this point in time
+            # Strategy: Start with current balance and subtract transactions that happened AFTER this date
 
-            # Calculate balances
-            accounts = db.get_accounts()
-            debts = db.get_debts()
+            # Get all transactions AFTER this month_end (from month_end to now)
+            filters = {'start_date': month_end_str}
+            future_transactions = db.get_transactions(filters=filters)
 
-            # Convert all account balances to display currency
-            total_assets = sum(
-                db.convert_currency(a['balance'], a.get('currency', 'EUR'), display_currency)
-                for a in accounts
-            )
+            # Build balance per account by working backwards from current balance
+            account_balances = {}
+            for account in all_accounts:
+                account_id = account['id']
+                account_currency = account.get('currency', 'EUR')
+                current_balance = account.get('balance', 0)
 
-            # Convert all debt balances to display currency
-            total_debts = sum(
-                db.convert_currency(d['current_balance'], d.get('currency', 'EUR'), display_currency)
-                for d in debts if d.get('is_active', True)
-            )
+                # Sum all confirmed transactions for this account AFTER month_end
+                transactions_after = sum(
+                    t['amount'] for t in future_transactions
+                    if t['account_id'] == account_id and t.get('confirmed', True)
+                )
 
+                # Historical balance = current balance - transactions that happened after
+                historical_balance = current_balance - transactions_after
+
+                # Convert to display currency
+                converted_balance = db.convert_currency(historical_balance, account_currency, display_currency)
+                account_balances[account_id] = converted_balance
+
+            total_assets = sum(account_balances.values())
+
+            # Calculate debt balances at this point in time
+            # For debts, we need to track payments made up to this date
+            debt_balances = {}
+            for debt in all_debts:
+                if not debt.get('is_active', True):
+                    continue
+
+                debt_id = debt['id']
+                debt_currency = debt.get('currency', 'EUR')
+                principal = debt.get('principal_amount', 0)
+
+                # Get all debt payment transactions up to this date
+                # Note: This assumes debt payments are tracked in transactions with a specific category or link
+                # For now, we'll use the current_balance as a fallback
+                # A more accurate implementation would track debt payments in transaction history
+
+                # Simple approach: use current balance if no payment history is available
+                # TODO: Implement proper debt payment tracking in transaction history
+                current_balance = debt.get('current_balance', principal)
+
+                # Convert to display currency
+                converted_debt = db.convert_currency(current_balance, debt_currency, display_currency)
+                debt_balances[debt_id] = converted_debt
+
+            total_debts = sum(debt_balances.values())
             net_worth = total_assets - total_debts
 
             trends.append({
-                "date": month_end.strftime('%Y-%m-%d'),
+                "date": month_end_str,
                 "month": month_end.strftime('%B %Y'),
                 "assets": total_assets,
                 "debts": total_debts,
                 "net_worth": net_worth
             })
 
-        # Add current month
-        current_accounts = db.get_accounts()
-        current_debts = db.get_debts()
+        # Add current month (using actual current balances)
+        current_month_end = end_date
 
-        # Convert all account balances to display currency
-        current_assets = sum(
-            db.convert_currency(a['balance'], a.get('currency', 'EUR'), display_currency)
-            for a in current_accounts
-        )
+        # Build current account balances (use stored balances directly)
+        account_balances = {}
+        for account in all_accounts:
+            account_currency = account.get('currency', 'EUR')
+            current_balance = account.get('balance', 0)
 
-        # Convert all debt balances to display currency
-        current_debt_total = sum(
-            db.convert_currency(d['current_balance'], d.get('currency', 'EUR'), display_currency)
-            for d in current_debts if d.get('is_active', True)
-        )
+            # Convert to display currency
+            converted_balance = db.convert_currency(current_balance, account_currency, display_currency)
+            account_balances[account['id']] = converted_balance
+
+        current_assets = sum(account_balances.values())
+
+        # Current debt balances
+        debt_balances = {}
+        for debt in all_debts:
+            if not debt.get('is_active', True):
+                continue
+            debt_currency = debt.get('currency', 'EUR')
+            current_balance = debt.get('current_balance', 0)
+            converted_debt = db.convert_currency(current_balance, debt_currency, display_currency)
+            debt_balances[debt['id']] = converted_debt
+
+        current_debt_total = sum(debt_balances.values())
 
         trends.append({
-            "date": end_date.strftime('%Y-%m-%d'),
-            "month": end_date.strftime('%B %Y'),
+            "date": current_month_end.strftime('%Y-%m-%d'),
+            "month": current_month_end.strftime('%B %Y'),
             "assets": current_assets,
             "debts": current_debt_total,
             "net_worth": current_assets - current_debt_total

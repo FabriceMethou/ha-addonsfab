@@ -497,6 +497,7 @@ export default function ReportsPage() {
                       tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
                     />
                     <Tooltip
+                      cursor={false}
                       contentStyle={{
                         backgroundColor: '#0a0a0a',
                         border: '1px solid #2a2a2a',
