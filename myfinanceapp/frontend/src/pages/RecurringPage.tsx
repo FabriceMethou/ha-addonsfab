@@ -26,7 +26,6 @@ import {
   DialogFooter,
   DialogTitle,
   DialogDescription,
-  Textarea,
   Select,
   SelectContent,
   SelectItem,
@@ -42,6 +41,7 @@ import {
   TabsList,
   TabsTrigger,
   TabsContent,
+  Autocomplete,
 } from '../components/shadcn';
 import { recurringAPI, accountsAPI, categoriesAPI, transactionsAPI } from '../services/api';
 import { format } from 'date-fns';
@@ -96,6 +96,15 @@ export default function RecurringPage() {
     queryFn: async () => {
       const response = await categoriesAPI.getHierarchy();
       return response.data.categories;
+    },
+  });
+
+  // Fetch recipients
+  const { data: recipientsData } = useQuery({
+    queryKey: ['recipients'],
+    queryFn: async () => {
+      const response = await transactionsAPI.getAllRecipients();
+      return response.data.recipients;
     },
   });
 
@@ -173,7 +182,14 @@ export default function RecurringPage() {
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ['pending-transactions'] });
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
       setSelectedPending((prev) => prev.filter((selectedId) => selectedId !== id));
+      toast.success('Transaction approved successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to approve transaction:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to approve transaction: ${errorMessage}`);
     },
   });
 
@@ -183,23 +199,41 @@ export default function RecurringPage() {
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ['pending-transactions'] });
       setSelectedPending((prev) => prev.filter((selectedId) => selectedId !== id));
+      toast.success('Transaction rejected successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to reject transaction:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to reject transaction: ${errorMessage}`);
     },
   });
 
   // Batch approve selected
   const handleBatchApprove = async () => {
-    for (const id of selectedPending) {
-      await confirmMutation.mutateAsync(id);
+    try {
+      const count = selectedPending.length;
+      for (const id of selectedPending) {
+        await confirmMutation.mutateAsync(id);
+      }
+      setSelectedPending([]);
+      toast.success(`Successfully approved ${count} transaction${count !== 1 ? 's' : ''}!`);
+    } catch (error) {
+      console.error('Batch approve failed:', error);
     }
-    setSelectedPending([]);
   };
 
   // Batch reject selected
   const handleBatchReject = async () => {
-    for (const id of selectedPending) {
-      await rejectMutation.mutateAsync(id);
+    try {
+      const count = selectedPending.length;
+      for (const id of selectedPending) {
+        await rejectMutation.mutateAsync(id);
+      }
+      setSelectedPending([]);
+      toast.success(`Successfully rejected ${count} transaction${count !== 1 ? 's' : ''}!`);
+    } catch (error) {
+      console.error('Batch reject failed:', error);
     }
-    setSelectedPending([]);
   };
 
   const toggleSelectPending = (id: number) => {
@@ -262,8 +296,8 @@ export default function RecurringPage() {
       account_id: parseInt(formData.account_id),
       amount: parseFloat(formData.amount),
       currency: formData.currency,
-      description: formData.description,
-      destinataire: formData.destinataire,
+      description: formData.description.trim() || null,
+      destinataire: formData.destinataire.trim() || null,
       type_id: parseInt(formData.type_id),
       subtype_id: formData.subtype_id ? parseInt(formData.subtype_id) : null,
       recurrence_pattern: formData.recurrence_pattern,
@@ -566,6 +600,7 @@ export default function RecurringPage() {
                           />
                         </TableHead>
                         <TableHead>Date</TableHead>
+                        <TableHead>Recipient</TableHead>
                         <TableHead>Description</TableHead>
                         <TableHead>Account</TableHead>
                         <TableHead>Category</TableHead>
@@ -586,10 +621,24 @@ export default function RecurringPage() {
                             />
                           </TableCell>
                           <TableCell>{format(new Date(transaction.transaction_date), 'MMM dd, yyyy')}</TableCell>
-                          <TableCell>{transaction.description}</TableCell>
+                          <TableCell>
+                            {transaction.destinataire && transaction.destinataire.trim() !== ''
+                              ? transaction.destinataire
+                              : '-'}
+                          </TableCell>
+                          <TableCell className="text-foreground-muted">
+                            {transaction.description && transaction.description.trim() !== ''
+                              ? transaction.description
+                              : '-'}
+                          </TableCell>
                           <TableCell>{transaction.account_name}</TableCell>
                           <TableCell>
-                            <Badge variant="secondary">{transaction.type_name || 'Uncategorized'}</Badge>
+                            <div className="flex flex-col gap-1">
+                              <Badge variant="secondary">{transaction.type_name || 'Uncategorized'}</Badge>
+                              {transaction.subtype_name && (
+                                <Badge variant="outline" className="text-xs">{transaction.subtype_name}</Badge>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell
                             className={`text-right font-semibold ${
@@ -652,7 +701,7 @@ export default function RecurringPage() {
 
       {/* Add/Edit Dialog */}
       <Dialog open={openDialog} onOpenChange={setOpenDialog}>
-        <DialogContent className="max-w-4xl w-[95vw]">
+        <DialogContent size="full" className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingTemplate ? 'Edit Recurring Template' : 'Add Recurring Template'}</DialogTitle>
             <DialogDescription>
@@ -660,7 +709,7 @@ export default function RecurringPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4 max-h-[80vh] overflow-y-auto">
+          <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="name">Template Name</Label>
               <Input
@@ -812,21 +861,22 @@ export default function RecurringPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="destinataire">Recipient/Description</Label>
-              <Input
-                id="destinataire"
+              <Label htmlFor="destinataire">Recipient</Label>
+              <Autocomplete
+                options={recipientsData || []}
                 value={formData.destinataire}
-                onChange={(e) => setFormData({ ...formData, destinataire: e.target.value })}
+                onChange={(value) => setFormData({ ...formData, destinataire: value })}
+                placeholder="Enter recipient name..."
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="notes">Notes (Optional)</Label>
-              <Textarea
-                id="notes"
+              <Label htmlFor="description">Description (Optional)</Label>
+              <Input
+                id="description"
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                rows={2}
+                placeholder="Additional notes or description"
               />
             </div>
 

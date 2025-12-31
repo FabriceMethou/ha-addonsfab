@@ -23,10 +23,10 @@ class RecurringCreate(BaseModel):
     account_id: int
     amount: float
     currency: str = 'EUR'
-    description: str
-    destinataire: str
+    description: Optional[str] = None
+    destinataire: Optional[str] = None
     type_id: int
-    subtype_id: int
+    subtype_id: Optional[int] = None
     recurrence_pattern: str  # daily, weekly, monthly, yearly
     recurrence_interval: int = 1
     day_of_month: Optional[int] = None

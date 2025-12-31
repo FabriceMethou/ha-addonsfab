@@ -2855,9 +2855,9 @@ class FinanceDatabase:
         cursor = conn.cursor()
         
         cursor.execute("""
-            INSERT INTO recurring_templates 
-            (name, account_id, amount, currency, description, destinataire, 
-             type_id, subtype_id, tags, recurrence_pattern, recurrence_interval, 
+            INSERT INTO recurring_templates
+            (name, account_id, amount, currency, description, destinataire,
+             type_id, subtype_id, tags, recurrence_pattern, recurrence_interval,
              day_of_month, start_date, end_date, is_active)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
@@ -2865,10 +2865,10 @@ class FinanceDatabase:
             template_data['account_id'],
             template_data['amount'],
             template_data['currency'],
-            template_data.get('description', ''),
-            template_data['destinataire'],
+            template_data.get('description') or '',
+            template_data.get('destinataire') or '',
             template_data['type_id'],
-            template_data['subtype_id'],
+            template_data.get('subtype_id') or template_data['type_id'],
             template_data.get('tags', ''),
             template_data['recurrence_pattern'],
             template_data.get('recurrence_interval', 1),
@@ -2889,11 +2889,33 @@ class FinanceDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
-        values = list(updates.values()) + [template_id]
+        # Handle null values for NOT NULL fields
+        processed_updates = {}
+        for key, value in updates.items():
+            if key == 'destinataire' and value is None:
+                processed_updates[key] = ''
+            elif key == 'description' and value is None:
+                processed_updates[key] = ''
+            elif key == 'subtype_id' and value is None:
+                # If subtype_id is null, we need to get the type_id
+                # If type_id is also being updated, use that, otherwise fetch current type_id
+                if 'type_id' in updates:
+                    processed_updates[key] = updates['type_id']
+                else:
+                    cursor.execute("SELECT type_id FROM recurring_templates WHERE id = ?", (template_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        processed_updates[key] = row['type_id']
+                    else:
+                        processed_updates[key] = value
+            else:
+                processed_updates[key] = value
+
+        set_clause = ", ".join([f"{key} = ?" for key in processed_updates.keys()])
+        values = list(processed_updates.values()) + [template_id]
 
         cursor.execute(f"UPDATE recurring_templates SET {set_clause} WHERE id = ?", values)
-        
+
         success = cursor.rowcount > 0
         conn.commit()
         conn.close()
@@ -2921,7 +2943,7 @@ class FinanceDatabase:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT pt.*, rt.name as template_name, a.name as account_name,
+            SELECT pt.*, rt.name as recurring_template_name, a.name as account_name,
                    tt.name as type_name, tt.category, ts.name as subtype_name
             FROM pending_transactions pt
             JOIN recurring_templates rt ON pt.recurring_template_id = rt.id
@@ -3064,8 +3086,8 @@ class FinanceDatabase:
         cursor = conn.cursor()
         
         cursor.execute("""
-            INSERT INTO pending_transactions 
-            (recurring_template_id, transaction_date, amount, currency, description, 
+            INSERT INTO pending_transactions
+            (recurring_template_id, transaction_date, amount, currency, description,
              destinataire, account_id, type_id, subtype_id, tags)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
@@ -3073,12 +3095,12 @@ class FinanceDatabase:
             pending_data['transaction_date'],
             pending_data['amount'],
             pending_data['currency'],
-            pending_data.get('description', ''),
-            pending_data['destinataire'],
+            pending_data.get('description') or '',
+            pending_data.get('destinataire') or '',
             pending_data['account_id'],
             pending_data['type_id'],
             pending_data['subtype_id'],
-            pending_data.get('tags', '')
+            pending_data.get('tags') or ''
         ))
         
         pending_id = cursor.lastrowid
@@ -3088,51 +3110,63 @@ class FinanceDatabase:
         return pending_id
 
     def confirm_pending_transaction(self, pending_id: int) -> int:
-        """Confirm a pending transaction and create actual transaction."""
+        """Confirm a pending transaction and create actual transaction.
+
+        Uses add_transaction() to ensure all business logic is applied:
+        - Account balance updates
+        - Duplicate detection
+        - Historical transaction handling
+        - Transfer account updates
+        """
+        # Get pending transaction data
         conn = self._get_connection()
         cursor = conn.cursor()
-        
-        # Get pending transaction
+
         cursor.execute("SELECT * FROM pending_transactions WHERE id = ?", (pending_id,))
         pending = cursor.fetchone()
-        
+        conn.close()
+
         if not pending:
-            conn.close()
             return None
-        
-        # Create actual transaction
-        cursor.execute("""
-            INSERT INTO transactions 
-            (account_id, transaction_date, amount, currency, description, 
-             destinataire, type_id, subtype_id, tags, recurring_template_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            pending['account_id'],
-            pending['transaction_date'],
-            pending['amount'],
-            pending['currency'],
-            pending['description'],
-            pending['destinataire'],
-            pending['type_id'],
-            pending['subtype_id'],
-            pending['tags'],
-            pending['recurring_template_id']
-        ))
-        
-        transaction_id = cursor.lastrowid
-        
-        # Delete pending transaction
+
+        # Build transaction data dict from pending transaction
+        transaction_data = {
+            'account_id': pending['account_id'],
+            'transaction_date': pending['transaction_date'],
+            'amount': pending['amount'],
+            'currency': pending['currency'],
+            'description': pending['description'],
+            'destinataire': pending['destinataire'],
+            'type_id': pending['type_id'],
+            'subtype_id': pending['subtype_id'],
+            'tags': pending['tags'],
+            'recurring_template_id': pending['recurring_template_id'],
+            'confirmed': True  # Mark as confirmed
+        }
+
+        # Use add_transaction to get ALL business logic:
+        # - Balance updates via _update_account_balance
+        # - Duplicate detection
+        # - Historical transaction handling
+        # - Transfer account updates
+        # - Proper logging
+        transaction_id = self.add_transaction(transaction_data)
+
+        # Clean up pending transaction and update template
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
         cursor.execute("DELETE FROM pending_transactions WHERE id = ?", (pending_id,))
-        
-        # Update last_generated date in template
+
         cursor.execute("""
-            UPDATE recurring_templates 
-            SET last_generated = ? 
+            UPDATE recurring_templates
+            SET last_generated = ?
             WHERE id = ?
         """, (pending['transaction_date'], pending['recurring_template_id']))
-        
+
         conn.commit()
         conn.close()
+
         logger.info(f"Confirmed pending transaction {pending_id} → transaction {transaction_id}")
         return transaction_id
 
@@ -3283,12 +3317,12 @@ class FinanceDatabase:
                         transaction_date.isoformat(),
                         template_dict['amount'],
                         template_dict['currency'],
-                        template_dict['description'],
-                        template_dict['destinataire'],
+                        template_dict.get('description') or '',
+                        template_dict.get('destinataire') or '',
                         template_dict['account_id'],
                         template_dict['type_id'],
                         template_dict['subtype_id'],
-                        template_dict['tags']
+                        template_dict.get('tags') or ''
                     ))
                     count += 1
                     logger.info(f"Generated pending transaction for template '{template_dict['name']}' on {transaction_date} (pattern: {pattern})")
