@@ -65,6 +65,7 @@ RUN apk add --no-cache --virtual .build-deps \
 
 # Application code
 COPY app/backend /app/backend
+COPY app/scripts /app/scripts
 COPY app/*.py /app/
 COPY uvicorn_log.json /app/uvicorn_log.json
 RUN mkdir -p /app/data

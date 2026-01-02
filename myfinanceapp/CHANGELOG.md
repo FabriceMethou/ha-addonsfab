@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.13
+
+- Update dockerfile
+
 ## 2.0.12
 
 - Update visual of Report, Dashboard and Transaction page
