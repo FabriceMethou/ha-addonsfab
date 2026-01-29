@@ -55,10 +55,10 @@ RUN apk add --no-cache \
 # Python dependencies (use build deps only while installing)
 COPY app/backend/requirements.txt /tmp/requirements.txt
 RUN apk add --no-cache --virtual .build-deps \
-        build-base \
-        python3-dev \
-        libffi-dev \
-        openssl-dev \
+    build-base \
+    python3-dev \
+    libffi-dev \
+    openssl-dev \
     && sed -E '/^(pandas|scikit-learn|joblib|pillow)==/d' /tmp/requirements.txt > /tmp/requirements.pip.txt \
     && PIP_BREAK_SYSTEM_PACKAGES=1 pip3 install --no-cache-dir -r /tmp/requirements.pip.txt \
     && apk del .build-deps
@@ -90,7 +90,7 @@ LABEL \
     io.hass.description="Personal finance management with transaction tracking and reporting" \
     io.hass.arch="armhf|armv7|aarch64|amd64|i386" \
     io.hass.type="addon" \
-    io.hass.version="2.0.11" \
+    io.hass.version="2.0.14" \
     maintainer="Fabrice Methou" \
     org.opencontainers.image.title="Finance Tracker" \
     org.opencontainers.image.description="Personal finance management application with React frontend and FastAPI backend" \

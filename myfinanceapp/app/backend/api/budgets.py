@@ -24,6 +24,7 @@ db = FinanceDatabase(db_path=DB_PATH)
 class BudgetCreate(BaseModel):
     type_id: int
     amount: float
+    currency: str = 'EUR'  # Budget currency (EUR, SEK, DKK, etc.)
     period: str = 'monthly'  # 'monthly' or 'yearly'
     start_date: str
     end_date: Optional[str] = None
@@ -32,6 +33,7 @@ class BudgetCreate(BaseModel):
 class BudgetUpdate(BaseModel):
     type_id: Optional[int] = None
     amount: Optional[float] = None
+    currency: Optional[str] = None
     period: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -72,6 +74,7 @@ async def create_budget(
     budget_data = {
         'type_id': budget.type_id,
         'amount': budget.amount,
+        'currency': budget.currency,
         'period': budget.period,
         'start_date': budget.start_date,
         'end_date': budget.end_date,
@@ -132,11 +135,20 @@ async def get_budget_vs_actual(
     month: int,
     current_user: User = Depends(get_current_user)
 ):
-    """Get budget vs actual spending for a specific month"""
+    """Get budget vs actual spending for a specific month.
+
+    Returns budget comparisons with currency conversion. All amounts are
+    converted to the user's display currency for consistent comparison.
+
+    Response includes:
+    - categories: List of budget vs actual comparisons
+    - display_currency: The currency used for display amounts
+    """
     data = db.get_budget_vs_actual(year, month)
 
     return {
         "year": year,
         "month": month,
-        "categories": data
+        "categories": data.get('categories', []),
+        "display_currency": data.get('display_currency', 'EUR')
     }
