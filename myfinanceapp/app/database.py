@@ -563,6 +563,7 @@ class FinanceDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 type_id INTEGER NOT NULL,
                 amount REAL NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'EUR',
                 period TEXT DEFAULT 'monthly' CHECK(period IN ('monthly', 'yearly')),
                 start_date DATE NOT NULL,
                 end_date DATE,
@@ -571,6 +572,12 @@ class FinanceDatabase:
                 FOREIGN KEY (type_id) REFERENCES transaction_types(id)
             )
         """)
+
+        # Migration: Add currency column to existing budgets table if it doesn't exist
+        cursor.execute("PRAGMA table_info(budgets)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'currency' not in columns:
+            cursor.execute("ALTER TABLE budgets ADD COLUMN currency TEXT NOT NULL DEFAULT 'EUR'")
 
         # Securities master table
         cursor.execute("""
@@ -1018,6 +1025,44 @@ class FinanceDatabase:
         except Exception as e:
             logger.error(f"Failed to convert currency from {from_currency} to {to_currency}: {e}")
             return amount  # Return original amount if conversion fails
+
+    def get_exchange_rates_map(self) -> Dict[str, float]:
+        """Load all exchange rates in one query for batch conversions.
+
+        Returns a dict mapping currency code to its exchange_rate_to_eur.
+        This is more efficient than calling convert_currency() multiple times.
+        """
+        with self.db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT code, exchange_rate_to_eur FROM currencies WHERE is_active = 1")
+            return {row['code']: row['exchange_rate_to_eur'] for row in cursor.fetchall()}
+
+    def convert_with_rates(self, amount: float, from_currency: str, to_currency: str,
+                           rates: Dict[str, float]) -> float:
+        """Convert amount using pre-loaded rates map.
+
+        This is more efficient for batch conversions where you need to convert
+        many amounts. Load rates once with get_exchange_rates_map(), then call
+        this method for each conversion.
+
+        Args:
+            amount: The amount to convert
+            from_currency: Source currency code (e.g., 'SEK')
+            to_currency: Target currency code (e.g., 'EUR')
+            rates: Dict from get_exchange_rates_map()
+
+        Returns:
+            Converted amount in target currency
+        """
+        if from_currency == to_currency:
+            return amount
+
+        from_rate = rates.get(from_currency, 1.0)
+        to_rate = rates.get(to_currency, 1.0)
+
+        # Convert: amount -> EUR -> target currency
+        amount_in_eur = amount * from_rate
+        return amount_in_eur / to_rate
 
     # ==================== BANKS ====================
 
@@ -3854,26 +3899,38 @@ class FinanceDatabase:
         return [dict(row) for row in rows]
 
     def add_budget(self, budget_data: Dict[str, Any]) -> int:
-        """Add a new budget."""
+        """Add a new budget.
+
+        Args:
+            budget_data: Dict with keys:
+                - type_id: Transaction type ID
+                - amount: Budget amount
+                - currency: Currency code (default 'EUR')
+                - period: 'monthly' or 'yearly' (default 'monthly')
+                - start_date: Budget start date
+                - end_date: Optional budget end date
+                - is_active: Whether budget is active (default 1)
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
-            INSERT INTO budgets (type_id, amount, period, start_date, end_date, is_active)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO budgets (type_id, amount, currency, period, start_date, end_date, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             budget_data['type_id'],
             budget_data['amount'],
+            budget_data.get('currency', 'EUR'),
             budget_data.get('period', 'monthly'),
             budget_data['start_date'],
             budget_data.get('end_date'),
             budget_data.get('is_active', 1)
         ))
-        
+
         budget_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        logger.info(f"Added budget for type {budget_data['type_id']}")
+        logger.info(f"Added budget for type {budget_data['type_id']} in {budget_data.get('currency', 'EUR')}")
         return budget_id
 
     def update_budget(self, budget_id: int, updates: Dict[str, Any]) -> bool:
@@ -4002,71 +4059,130 @@ class FinanceDatabase:
             'trends': trends
         }
 
-    def get_budget_vs_actual(self, year: int, month: int) -> List[Dict[str, Any]]:
-        """Compare budgets vs actual spending for a month."""
+    def get_budget_vs_actual(self, year: int, month: int) -> Dict[str, Any]:
+        """Compare budgets vs actual spending for a month.
+
+        Handles multi-currency transactions by converting them to each budget's
+        currency before comparison. This ensures accurate budget tracking even
+        when spending from accounts with different currencies.
+
+        Returns:
+            Dict with:
+                - categories: List of budget vs actual comparisons
+                - display_currency: The user's preferred display currency
+        """
         from datetime import date
-        
+
         start_date = date(year, month, 1)
         if month == 12:
             end_date = date(year + 1, 1, 1)
         else:
             end_date = date(year, month + 1, 1)
-        
-        # Get active budgets
+
+        # Get user's display currency for UI formatting
+        display_currency = self.get_preference('display_currency', 'EUR')
+
+        # Get active budgets (now includes currency field)
         budgets = self.get_budgets()
-        
+
         # Get actual spending
         transactions = self.get_transactions({
             'start_date': start_date.isoformat(),
             'end_date': end_date.isoformat()
         })
-        
-        # Calculate actual by type
+
+        # Load exchange rates once for efficient batch conversion
+        exchange_rates = self.get_exchange_rates_map()
+
+        # Group budgets by type_id for quick lookup of budget currency
+        budget_currency_map = {b['type_id']: b.get('currency', 'EUR') for b in budgets}
+
+        # Calculate actual by type WITH currency conversion
+        # For each transaction, convert to the budget's currency for that type
         actual_by_type = {}
         for t in transactions:
             if t['category'] == 'expense':
-                actual_by_type[t['type_id']] = actual_by_type.get(t['type_id'], 0) + abs(t['amount'])
-        
-        # Compare
+                type_id = t['type_id']
+                account_currency = t.get('account_currency', 'EUR')
+                amount = abs(t['amount'])
+
+                # Get the budget's currency for this type (default to display_currency)
+                budget_currency = budget_currency_map.get(type_id, display_currency)
+
+                # Convert transaction amount to budget currency
+                if account_currency != budget_currency:
+                    amount = self.convert_with_rates(amount, account_currency, budget_currency, exchange_rates)
+
+                actual_by_type[type_id] = actual_by_type.get(type_id, 0) + amount
+
+        # Compare budgets vs actual
         results = []
         for budget in budgets:
+            budget_currency = budget.get('currency', 'EUR')
+
             if budget['period'] == 'monthly':
                 budget_amount = budget['amount']
             else:  # yearly
                 budget_amount = budget['amount'] / 12
-            
+
             actual = actual_by_type.get(budget['type_id'], 0)
             difference = budget_amount - actual
             percentage = (actual / budget_amount * 100) if budget_amount > 0 else 0
-            
+
+            # Convert to display currency for UI if different
+            budget_display = budget_amount
+            actual_display = actual
+            difference_display = difference
+            if budget_currency != display_currency:
+                budget_display = self.convert_with_rates(budget_amount, budget_currency, display_currency, exchange_rates)
+                actual_display = self.convert_with_rates(actual, budget_currency, display_currency, exchange_rates)
+                difference_display = self.convert_with_rates(difference, budget_currency, display_currency, exchange_rates)
+
             results.append({
                 'type_id': budget['type_id'],
                 'type_name': budget['type_name'],
                 'icon': budget['icon'],
                 'color': budget['color'],
-                'budget': budget_amount,
-                'actual': actual,
-                'difference': difference,
-                'percentage': percentage,
-                'status': 'over' if difference < 0 else 'under' if difference > 0 else 'exact'
+                'budget': round(budget_display, 2),
+                'actual': round(actual_display, 2),
+                'difference': round(difference_display, 2),
+                'percentage': round(percentage, 1),
+                'status': 'over' if difference < 0 else 'under' if difference > 0 else 'exact',
+                # Include original currency amounts for reference
+                'budget_currency': budget_currency,
+                'budget_original': round(budget_amount, 2),
+                'actual_original': round(actual, 2)
             })
-        
-        return results
+
+        return {
+            'categories': results,
+            'display_currency': display_currency
+        }
 
     def get_income_vs_expenses_trend(self, start_date: str, end_date: str, group_by: str = 'month') -> Dict[str, Any]:
-        """Get income vs expenses trend over time."""
+        """Get income vs expenses trend over time.
+
+        All amounts are converted to the user's display currency for consistent
+        comparison across accounts with different currencies.
+        """
         from datetime import datetime
-        
+
+        # Get user's display currency
+        display_currency = self.get_preference('display_currency', 'EUR')
+
         transactions = self.get_transactions({
             'start_date': start_date,
             'end_date': end_date
         })
-        
+
+        # Load exchange rates once for efficient batch conversion
+        exchange_rates = self.get_exchange_rates_map()
+
         trends = {}
-        
+
         for t in transactions:
             trans_date = datetime.fromisoformat(t['transaction_date'])
-            
+
             if group_by == 'month':
                 period_key = f"{trans_date.year}-{trans_date.month:02d}"
             elif group_by == 'quarter':
@@ -4074,22 +4190,36 @@ class FinanceDatabase:
                 period_key = f"{trans_date.year}-Q{quarter}"
             else:  # year
                 period_key = str(trans_date.year)
-            
+
             if period_key not in trends:
                 trends[period_key] = {'income': 0, 'expenses': 0, 'net': 0}
-            
+
+            # Convert amount to display currency
+            account_currency = t.get('account_currency', 'EUR')
+            amount = t['amount'] if t['category'] == 'income' else abs(t['amount'])
+
+            if account_currency != display_currency:
+                amount = self.convert_with_rates(amount, account_currency, display_currency, exchange_rates)
+
             if t['category'] == 'income':
-                trends[period_key]['income'] += t['amount']
+                trends[period_key]['income'] += amount
             elif t['category'] == 'expense':
-                trends[period_key]['expenses'] += abs(t['amount'])
+                trends[period_key]['expenses'] += amount
 
             trends[period_key]['net'] = trends[period_key]['income'] - trends[period_key]['expenses']
-        
+
+        # Round all values
+        for period_key in trends:
+            trends[period_key]['income'] = round(trends[period_key]['income'], 2)
+            trends[period_key]['expenses'] = round(trends[period_key]['expenses'], 2)
+            trends[period_key]['net'] = round(trends[period_key]['net'], 2)
+
         return {
             'start_date': start_date,
             'end_date': end_date,
             'group_by': group_by,
-            'trends': trends
+            'trends': trends,
+            'display_currency': display_currency
         }
 
     def get_net_worth(self, as_of_date: str = None) -> Dict[str, Any]:

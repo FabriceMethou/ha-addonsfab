@@ -399,8 +399,16 @@ export default function AccountsPage() {
 
   const handleOpenValidation = async (account: any) => {
     setValidatingAccount(account);
+
+    // Round balance to 2 decimal places for non-investment accounts
+    // This avoids floating-point precision issues like 1234.5600000000001
+    const isInvestment = account.account_type === 'investment';
+    const formattedBalance = isInvestment
+      ? account.balance.toString()
+      : parseFloat(account.balance).toFixed(2);
+
     setValidationForm({
-      actual_balance: account.balance.toString(),
+      actual_balance: formattedBalance,
       notes: '',
     });
     setValidationDialog(true);
@@ -605,11 +613,10 @@ export default function AccountsPage() {
                 <button
                   key={index}
                   onClick={() => setTabValue(index)}
-                  className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition-all ${
-                    tabValue === index
+                  className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition-all ${tabValue === index
                       ? 'border-primary text-primary bg-primary/5'
                       : 'border-transparent text-foreground-muted hover:text-foreground hover:bg-surface-hover'
-                  }`}
+                    }`}
                 >
                   <Icon className="w-4 h-4" />
                   {tab.label}
@@ -1088,13 +1095,13 @@ export default function AccountsPage() {
           </DialogHeader>
           <div className="py-4 space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="p-4 rounded-lg bg-info/10 border border-info/20">
+              <div className="p-4 rounded-lg bg-info/10 border border-info/20 min-w-0">
                 <p className="text-sm text-foreground-muted mb-1">System Balance:</p>
-                <p className="text-xl font-bold text-foreground">
+                <p className="text-xl font-bold text-foreground truncate">
                   {validatingAccount && formatCurrency(validatingAccount.balance, validatingAccount.currency)}
                 </p>
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 min-w-0">
                 <Label>Actual Balance (from bank statement)</Label>
                 <Input
                   type="number"
@@ -1107,6 +1114,7 @@ export default function AccountsPage() {
                     const formatted = formatBalanceInput(validationForm.actual_balance, isInvestment);
                     setValidationForm({ ...validationForm, actual_balance: formatted });
                   }}
+                  className="w-full"
                 />
                 {validatingAccount?.account_type !== 'investment' && (
                   <p className="text-xs text-foreground-muted mt-1">Limited to 2 decimal places</p>

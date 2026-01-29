@@ -77,7 +77,32 @@ async def create_recurring_transaction(
     current_user: User = Depends(get_current_user)
 ):
     """Create recurring transaction template"""
+    # Get transaction type category to determine amount sign
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (recurring.type_id,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if not result:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid transaction type"
+        )
+
+    category = result['category']
+
+    # Determine amount sign based on category (same logic as regular transactions)
+    amount = recurring.amount
+    if category == 'expense':
+        amount = -abs(amount)  # Expenses are negative
+    elif category == 'income':
+        amount = abs(amount)   # Income is positive
+    elif category == 'transfer':
+        amount = -abs(amount)  # Transfers are negative (money leaving source account)
+
     template_data = recurring.dict()
+    template_data['amount'] = amount  # Use signed amount
     template_data['tags'] = ''  # Add empty tags if needed
 
     template_id = db.add_recurring_template(template_data)
@@ -93,6 +118,49 @@ async def update_recurring_transaction(
     updates = recurring.dict(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    # If amount or type_id is being updated, we need to re-apply the sign logic
+    if 'amount' in updates or 'type_id' in updates:
+        conn = db._get_connection()
+        cursor = conn.cursor()
+
+        # Get current template data
+        cursor.execute("SELECT amount, type_id FROM recurring_templates WHERE id = ?", (template_id,))
+        current = cursor.fetchone()
+
+        if not current:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        # Determine the type_id to use (new one if provided, otherwise current)
+        type_id = updates.get('type_id', current['type_id'])
+
+        # Get category for the type
+        cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (type_id,))
+        result = cursor.fetchone()
+        conn.close()
+
+        if not result:
+            raise HTTPException(status_code=400, detail="Invalid transaction type")
+
+        category = result['category']
+
+        # Determine the amount to use (new one if provided, otherwise current absolute value)
+        if 'amount' in updates:
+            amount = updates['amount']
+        else:
+            # Use absolute value of current amount (sign will be re-applied)
+            amount = abs(current['amount'])
+
+        # Apply sign based on category
+        if category == 'expense':
+            amount = -abs(amount)
+        elif category == 'income':
+            amount = abs(amount)
+        elif category == 'transfer':
+            amount = -abs(amount)
+
+        updates['amount'] = amount
 
     success = db.update_recurring_template(template_id, updates)
     if not success:

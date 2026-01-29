@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.14
+
+- Fix budget bug with mutli-currency transactions
+- Fix recurring transactions value bugs
+- Fix validation of account balance UI/UX
+
 ## 2.0.13
 
 - Update dockerfile

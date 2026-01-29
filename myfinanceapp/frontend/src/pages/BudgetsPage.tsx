@@ -40,7 +40,7 @@ import {
   TableHeader,
   TableRow,
 } from '../components/shadcn';
-import { budgetsAPI, categoriesAPI } from '../services/api';
+import { budgetsAPI, categoriesAPI, currenciesAPI } from '../services/api';
 import { format } from 'date-fns';
 
 export default function BudgetsPage() {
@@ -53,6 +53,7 @@ export default function BudgetsPage() {
   const [formData, setFormData] = useState({
     type_id: '',
     amount: '',
+    currency: 'EUR',
     period: 'monthly',
     start_date: format(new Date(), 'yyyy-MM-dd'),
     end_date: '',
@@ -79,14 +80,27 @@ export default function BudgetsPage() {
     },
   });
 
+  // Fetch currencies for dropdown
+  const { data: currenciesData } = useQuery({
+    queryKey: ['currencies'],
+    queryFn: async () => {
+      const response = await currenciesAPI.getAll();
+      return response.data.currencies;
+    },
+  });
+
   // Fetch budget vs actual for current month
-  const { data: vsActualData } = useQuery({
+  const { data: vsActualResponse } = useQuery({
     queryKey: ['budget-vs-actual', currentYear, currentMonth],
     queryFn: async () => {
       const response = await budgetsAPI.getVsActual(currentYear, currentMonth);
-      return response.data.categories;
+      return response.data;
     },
   });
+
+  // Extract categories and display currency from response
+  const vsActualData = vsActualResponse?.categories || [];
+  const displayCurrency = vsActualResponse?.display_currency || 'EUR';
 
   // Create budget mutation
   const createMutation = useMutation({
@@ -143,6 +157,7 @@ export default function BudgetsPage() {
     setFormData({
       type_id: '',
       amount: '',
+      currency: 'EUR',
       period: 'monthly',
       start_date: format(new Date(), 'yyyy-MM-dd'),
       end_date: '',
@@ -155,6 +170,7 @@ export default function BudgetsPage() {
     setFormData({
       type_id: budget.type_id.toString(),
       amount: budget.amount.toString(),
+      currency: budget.currency || 'EUR',
       period: budget.period || 'monthly',
       start_date: budget.start_date || format(new Date(), 'yyyy-MM-dd'),
       end_date: budget.end_date || '',
@@ -167,6 +183,7 @@ export default function BudgetsPage() {
     const data = {
       type_id: parseInt(formData.type_id),
       amount: parseFloat(formData.amount),
+      currency: formData.currency,
       period: formData.period,
       start_date: formData.start_date,
       end_date: formData.end_date || null,
@@ -180,10 +197,10 @@ export default function BudgetsPage() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
+  const formatCurrency = (amount: number, currency?: string) => {
     return new Intl.NumberFormat('de-DE', {
       style: 'currency',
-      currency: 'EUR',
+      currency: currency || displayCurrency,
     }).format(amount);
   };
 
@@ -312,9 +329,14 @@ export default function BudgetsPage() {
       {/* Current Month Budget vs Actual */}
       {vsActualData && vsActualData.length > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <h2 className="text-lg font-semibold text-foreground mb-4">
-            Budget vs Actual - {format(new Date(currentYear, currentMonth - 1), 'MMMM yyyy')}
-          </h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-lg font-semibold text-foreground">
+              Budget vs Actual - {format(new Date(currentYear, currentMonth - 1), 'MMMM yyyy')}
+            </h2>
+            <Badge variant="outline" className="text-xs">
+              Amounts in {displayCurrency}
+            </Badge>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {vsActualData.map((item: any) => {
               const progress = calculateProgress(item.actual, item.budget);
@@ -359,6 +381,7 @@ export default function BudgetsPage() {
                 <TableRow>
                   <TableHead>Category</TableHead>
                   <TableHead>Amount</TableHead>
+                  <TableHead>Currency</TableHead>
                   <TableHead>Period</TableHead>
                   <TableHead>Start Date</TableHead>
                   <TableHead>End Date</TableHead>
@@ -370,7 +393,10 @@ export default function BudgetsPage() {
                 {budgetsData.map((budget: any) => (
                   <TableRow key={budget.id}>
                     <TableCell className="font-medium">{budget.type_name || 'Unknown Category'}</TableCell>
-                    <TableCell>{formatCurrency(budget.amount)}</TableCell>
+                    <TableCell>{formatCurrency(budget.amount, budget.currency)}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{budget.currency || 'EUR'}</Badge>
+                    </TableCell>
                     <TableCell>
                       <Badge variant={budget.period === 'monthly' ? 'default' : 'secondary'}>
                         {budget.period === 'monthly' ? 'Monthly' : 'Yearly'}
@@ -463,7 +489,7 @@ export default function BudgetsPage() {
               </Select>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="amount">Budget Amount</Label>
                 <Input
@@ -474,6 +500,21 @@ export default function BudgetsPage() {
                   value={formData.amount}
                   onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
                 />
+              </div>
+              <div className="space-y-2">
+                <Label>Currency</Label>
+                <Select value={formData.currency} onValueChange={(value) => setFormData({ ...formData, currency: value })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {currenciesData?.map((currency: any) => (
+                      <SelectItem key={currency.code} value={currency.code}>
+                        {currency.code} ({currency.symbol})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
                 <Label>Period</Label>
@@ -570,7 +611,10 @@ export default function BudgetsPage() {
                   <strong>Category:</strong> {deleteConfirm.type_name}
                 </p>
                 <p className="text-sm">
-                  <strong>Amount:</strong> {formatCurrency(deleteConfirm.amount)}
+                  <strong>Amount:</strong> {formatCurrency(deleteConfirm.amount, deleteConfirm.currency)}
+                </p>
+                <p className="text-sm">
+                  <strong>Currency:</strong> {deleteConfirm.currency || 'EUR'}
                 </p>
                 <p className="text-sm">
                   <strong>Period:</strong> {deleteConfirm.period}
