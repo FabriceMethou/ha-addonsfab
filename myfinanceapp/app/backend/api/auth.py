@@ -121,8 +121,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Check if MFA is enabled
-    if user_data.get("mfa_enabled"):
+    # Check if MFA is required
+    if user_data.get("mfa_required"):
         # Return temporary token that requires MFA verification
         temp_token = create_access_token(
             data={"sub": form_data.username, "mfa_pending": True},
@@ -133,6 +133,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             "token_type": "bearer",
             "user": {
                 "username": user_data["username"],
+                "is_admin": user_data.get("role") == "admin",
                 "mfa_required": True
             }
         }
