@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.15
+
+- Add MFA support
+- Fix password change flow
+- Fix admin user 
+
 ## 2.0.14
 
 - Fix budget bug with mutli-currency transactions

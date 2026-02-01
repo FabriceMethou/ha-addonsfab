@@ -4,10 +4,18 @@ import { User, AuthToken } from '../types';
 import { authAPI } from '../services/api';
 import { jwtDecode } from 'jwt-decode';
 
+interface MfaPendingState {
+  tempToken: string;
+  username: string;
+}
+
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  mfaPending: MfaPendingState | null;
   login: (username: string, password: string) => Promise<void>;
+  verifyMfa: (code: string) => Promise<void>;
+  cancelMfa: () => void;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -29,6 +37,7 @@ interface AuthProviderProps {
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mfaPending, setMfaPending] = useState<MfaPendingState | null>(null);
 
   useEffect(() => {
     // Check if user is logged in on mount
@@ -65,7 +74,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       // Check if MFA is required
       if (data.user.mfa_required) {
-        throw new Error('MFA_REQUIRED');
+        // Store temp token and trigger MFA verification UI
+        setMfaPending({ tempToken: data.access_token, username: data.user.username });
+        return;
       }
 
       // Store token and user
@@ -73,23 +84,47 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       localStorage.setItem('user', JSON.stringify(data.user));
       setUser(data.user);
     } catch (error: any) {
-      if (error.message === 'MFA_REQUIRED') {
-        throw error;
-      }
       throw new Error(error.response?.data?.detail || 'Login failed');
     }
+  };
+
+  const verifyMfa = async (code: string) => {
+    if (!mfaPending) {
+      throw new Error('No MFA verification pending');
+    }
+
+    try {
+      const response = await authAPI.verifyMFA(mfaPending.tempToken, code);
+      const data: AuthToken = response.data;
+
+      // Store token and user
+      localStorage.setItem('access_token', data.access_token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      setUser(data.user);
+      setMfaPending(null);
+    } catch (error: any) {
+      throw new Error(error.response?.data?.detail || 'Invalid MFA code');
+    }
+  };
+
+  const cancelMfa = () => {
+    setMfaPending(null);
   };
 
   const logout = () => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('user');
     setUser(null);
+    setMfaPending(null);
   };
 
   const value = {
     user,
     loading,
+    mfaPending,
     login,
+    verifyMfa,
+    cancelMfa,
     logout,
     isAuthenticated: !!user,
   };

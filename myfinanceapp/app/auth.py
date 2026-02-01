@@ -373,7 +373,14 @@ class AuthManager:
         if user['mfa_enabled']:
             # Return partial success - MFA verification needed
             self._reset_failed_attempts(user['id'])
-            return True, "MFA_REQUIRED", {'id': user['id'], 'username': user['username'], 'mfa_required': True}
+            return True, "MFA_REQUIRED", {
+                'id': user['id'],
+                'username': user['username'],
+                'email': user['email'],
+                'role': user['role'],
+                'mfa_enabled': True,
+                'mfa_required': True
+            }
 
         # Full authentication success
         self._reset_failed_attempts(user['id'])
