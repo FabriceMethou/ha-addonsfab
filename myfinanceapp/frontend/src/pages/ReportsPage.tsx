@@ -1,5 +1,5 @@
 // Reports Page - Financial Analytics with Modern Design
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Card,
@@ -22,6 +22,7 @@ import {
   SelectContent,
   SelectItem,
   Autocomplete,
+  ReportsSkeleton,
 } from '../components/shadcn';
 import {
   Cell,
@@ -46,13 +47,21 @@ import {
   Wallet,
   ArrowUpCircle,
   ArrowDownCircle,
+  Calendar,
+  Search,
+  Users,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
-import { reportsAPI, transactionsAPI } from '../services/api';
+import { reportsAPI, transactionsAPI, settingsAPI } from '../services/api';
 import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns';
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
+import { absMoney, sumMoney, percentOf, percentChange, addMoney } from '../lib/money';
 
 // Nivo
 import { ResponsivePie } from '@nivo/pie';
 import { ResponsiveSunburst } from '@nivo/sunburst';
+import { ResponsiveSankey } from '@nivo/sankey';
 
 // Enhanced KPI Card with percentage changes (matching Dashboard style)
 function KPICard({ title, value, change, changeLabel, icon, iconColor, colorClass, loading }: any) {
@@ -113,6 +122,11 @@ export default function ReportsPage() {
   const [netWorthMonths, setNetWorthMonths] = useState('12');
   const [summaryYear, setSummaryYear] = useState(new Date().getFullYear().toString());
   const [summaryMonth, setSummaryMonth] = useState((new Date().getMonth() + 1).toString());
+  const [yearByYearSelected, setYearByYearSelected] = useState(new Date().getFullYear().toString());
+  const [yearByYearMonth, setYearByYearMonth] = useState<string>(''); // Empty string = all year
+  const [yearByYearSearch, setYearByYearSearch] = useState('');
+  const [expandedIncomeCategories, setExpandedIncomeCategories] = useState<Set<string>>(new Set());
+  const [expandedExpenseCategories, setExpandedExpenseCategories] = useState<Set<string>>(new Set());
 
   // Handle date range selection
   const handleDateRangeChange = (range: string) => {
@@ -227,6 +241,42 @@ export default function ReportsPage() {
     enabled: currentTab === 'networth',
   });
 
+  // Fetch year-by-year stats
+  const { data: yearByYearData, isLoading: yearByYearLoading } = useQuery({
+    queryKey: ['year-by-year', yearByYearSelected, yearByYearMonth],
+    queryFn: async () => {
+      const month = yearByYearMonth ? Number(yearByYearMonth) : undefined;
+      const response = await reportsAPI.getYearByYear(Number(yearByYearSelected), month);
+      return response.data;
+    },
+    enabled: currentTab === 'yearbyyear',
+  });
+
+  // Generate year options for year-by-year selector
+  const yearByYearOptions = yearByYearData
+    ? Array.from(
+        { length: new Date().getFullYear() - yearByYearData.year_of_first_transaction + 1 },
+        (_, i) => (yearByYearData.year_of_first_transaction + i).toString()
+      ).reverse()
+    : Array.from({ length: 5 }, (_, i) => (new Date().getFullYear() - i).toString());
+
+  // Month options for year-by-year filter
+  const monthOptions = [
+    { value: '', label: 'All Year' },
+    { value: '1', label: 'January' },
+    { value: '2', label: 'February' },
+    { value: '3', label: 'March' },
+    { value: '4', label: 'April' },
+    { value: '5', label: 'May' },
+    { value: '6', label: 'June' },
+    { value: '7', label: 'July' },
+    { value: '8', label: 'August' },
+    { value: '9', label: 'September' },
+    { value: '10', label: 'October' },
+    { value: '11', label: 'November' },
+    { value: '12', label: 'December' },
+  ];
+
   // Fetch previous period data for comparisons (for percentage changes)
   const { data: previousIncomeExpensesData } = useQuery({
     queryKey: ['income-expenses-previous', startDate, endDate],
@@ -258,19 +308,27 @@ export default function ReportsPage() {
     },
   });
 
+  // Fetch user settings for display currency
+  const { data: settingsData } = useQuery({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const response = await settingsAPI.getAll();
+      return response.data.settings || {};
+    },
+  });
+
+  const displayCurrency = settingsData?.display_currency || 'EUR';
+
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: 'EUR',
-    }).format(amount);
+    return formatCurrencyUtil(amount, displayCurrency);
   };
 
-  // Helper function to safely calculate percentage change
+  // Helper function to safely calculate percentage change using precise decimal arithmetic
   const calculatePercentageChange = (current: number, previous: number): number => {
     if (previous === 0) {
       return current > 0 ? 100 : 0;
     }
-    return ((current - previous) / Math.abs(previous)) * 100;
+    return percentChange(current, previous);
   };
 
   // Prepare data for income vs expenses chart (showing just income and expenses)
@@ -287,41 +345,40 @@ export default function ReportsPage() {
     spendingData?.categories?.map((cat: any) => ({
       id: cat.category,
       label: cat.category,
-      value: Math.abs(cat.total ?? 0),
+      value: absMoney(cat.total ?? 0),
     })) || [];
 
-  // Prepare data for cash flow line chart
+  // Prepare data for cash flow line chart using precise decimal arithmetic
+  // Use ISO date as key for proper sorting, then format for display
   const cashFlowData = transactionsData
-    ? transactionsData.reduce((acc: any[], transaction: any) => {
-        if (!transaction.transaction_date) return acc;
-        try {
-          const transactionDate = new Date(transaction.transaction_date);
-          if (isNaN(transactionDate.getTime())) return acc;
-          const date = format(transactionDate, 'MMM dd');
-          const existing = acc.find((item) => item.date === date);
-          if (existing) {
-            if (transaction.amount > 0) existing.income += transaction.amount;
-            else existing.expenses += Math.abs(transaction.amount);
-          } else {
-            acc.push({
-              date,
-              income: transaction.amount > 0 ? transaction.amount : 0,
-              expenses: transaction.amount < 0 ? Math.abs(transaction.amount) : 0,
-            });
+    ? Object.values(
+        transactionsData.reduce((acc: Record<string, any>, transaction: any) => {
+          if (!transaction.transaction_date) return acc;
+          try {
+            const transactionDate = new Date(transaction.transaction_date);
+            if (isNaN(transactionDate.getTime())) return acc;
+            // Use ISO date substring as key to avoid merging dates across years
+            const dateKey = transaction.transaction_date.substring(0, 10);
+            const displayDate = format(transactionDate, 'MMM dd');
+
+            if (!acc[dateKey]) {
+              acc[dateKey] = { date: displayDate, dateKey, income: 0, expenses: 0 };
+            }
+            if (transaction.amount > 0) {
+              acc[dateKey].income = addMoney(acc[dateKey].income, transaction.amount);
+            } else {
+              acc[dateKey].expenses = addMoney(acc[dateKey].expenses, absMoney(transaction.amount));
+            }
+          } catch (error) {
+            console.warn('Invalid transaction date:', transaction.transaction_date);
           }
-        } catch (error) {
-          console.warn('Invalid transaction date:', transaction.transaction_date);
-        }
-        return acc;
-      }, [])
+          return acc;
+        }, {})
+      ).sort((a: any, b: any) => a.dateKey.localeCompare(b.dateKey))
     : [];
 
   if (netWorthLoading || incomeExpensesLoading || spendingLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <ReportsSkeleton />;
   }
 
   const hasErrors = netWorthError || incomeExpensesError || spendingError;
@@ -336,6 +393,10 @@ export default function ReportsPage() {
           <TabsTrigger value="trends">Spending Trends</TabsTrigger>
           <TabsTrigger value="monthly">Monthly Summary</TabsTrigger>
           <TabsTrigger value="networth">Net Worth History</TabsTrigger>
+          <TabsTrigger value="yearbyyear" className="flex items-center gap-1">
+            <Calendar className="w-4 h-4" />
+            Money Flow
+          </TabsTrigger>
           <TabsTrigger value="tags" className="flex items-center gap-1">
             <Tag className="w-4 h-4" />
             Tag Reports
@@ -504,6 +565,8 @@ export default function ReportsPage() {
                         borderRadius: '8px',
                         fontSize: '12px',
                       }}
+                      labelStyle={{ color: '#888888' }}
+                      itemStyle={{ color: '#e5e5e5' }}
                       formatter={(value: any) => formatCurrency(value)}
                     />
                     <Bar dataKey="amount" radius={[8, 8, 0, 0]}>
@@ -602,6 +665,8 @@ export default function ReportsPage() {
                         borderRadius: '8px',
                         fontSize: '12px',
                       }}
+                      labelStyle={{ color: '#888888' }}
+                      itemStyle={{ color: '#e5e5e5' }}
                       formatter={(value: any) => formatCurrency(value)}
                     />
                     <Legend iconType="circle" wrapperStyle={{ paddingTop: '10px' }} />
@@ -643,7 +708,7 @@ export default function ReportsPage() {
                   <p className="text-xl font-bold text-foreground">
                     {transactionsData?.length
                       ? formatCurrency(
-                          transactionsData.reduce((sum: number, t: any) => sum + Math.abs(t.amount), 0) /
+                          sumMoney(transactionsData, (t: any) => absMoney(t.amount)) /
                             transactionsData.length
                         )
                       : formatCurrency(0)}
@@ -653,7 +718,7 @@ export default function ReportsPage() {
                   <p className="text-sm text-foreground-muted mb-1">Savings Rate</p>
                   <p className={`text-xl font-bold ${incomeExpensesData?.net >= 0 ? 'text-success' : 'text-error'}`}>
                     {incomeExpensesData?.income > 0
-                      ? `${((incomeExpensesData.net / incomeExpensesData.income) * 100).toFixed(1)}%`
+                      ? `${percentOf(incomeExpensesData.net, incomeExpensesData.income)}%`
                       : '0%'}
                   </p>
                 </div>
@@ -709,11 +774,10 @@ export default function ReportsPage() {
                         data={{
                           name: 'Spending',
                           children: spendingTrendsData.all_categories.slice(0, 8).map((cat: string) => {
-                            // Calculate total for this category across all months
-                            const total = spendingTrendsData.trends.reduce((sum: number, month: any) => {
-                              const catData = month.categories?.[cat] || 0;
-                              return sum + Math.abs(catData);
-                            }, 0);
+                            // Calculate total for this category across all months using precise arithmetic
+                            const total = sumMoney(spendingTrendsData.trends, (month: any) =>
+                              absMoney(month.categories?.[cat] || 0)
+                            );
                             return {
                               name: cat,
                               value: total,
@@ -789,6 +853,8 @@ export default function ReportsPage() {
                           borderRadius: '8px',
                           fontSize: '12px',
                         }}
+                        labelStyle={{ color: '#888888' }}
+                        itemStyle={{ color: '#e5e5e5' }}
                         formatter={(value: any) => formatCurrency(value)}
                       />
                       <Legend iconType="circle" wrapperStyle={{ paddingTop: '10px' }} />
@@ -989,7 +1055,7 @@ export default function ReportsPage() {
                               <TableRow key={cat.category}>
                                 <TableCell>{cat.category}</TableCell>
                                 <TableCell className="text-right">{formatCurrency(cat.amount)}</TableCell>
-                                <TableCell className="text-right">{((cat.amount / monthlySummaryData.expenses) * 100).toFixed(1)}%</TableCell>
+                                <TableCell className="text-right">{percentOf(cat.amount, monthlySummaryData.expenses)}%</TableCell>
                               </TableRow>
                             ))}
                           </TableBody>
@@ -1004,7 +1070,7 @@ export default function ReportsPage() {
                           data={monthlySummaryData.spending_by_category.slice(0, 8).map((cat: any) => ({
                             id: cat.category,
                             label: cat.category,
-                            value: Math.abs(cat.amount)
+                            value: absMoney(cat.amount)
                           }))}
                           margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
                           innerRadius={0.5}
@@ -1088,6 +1154,7 @@ export default function ReportsPage() {
                         fontSize={12}
                         tickLine={false}
                         axisLine={false}
+                        tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
                       />
                       <Tooltip
                         contentStyle={{
@@ -1096,6 +1163,8 @@ export default function ReportsPage() {
                           borderRadius: '8px',
                           fontSize: '12px',
                         }}
+                        labelStyle={{ color: '#888888' }}
+                        itemStyle={{ color: '#e5e5e5' }}
                         formatter={(value: any) => formatCurrency(value)}
                       />
                       <Legend iconType="circle" wrapperStyle={{ paddingTop: '10px' }} />
@@ -1146,6 +1215,473 @@ export default function ReportsPage() {
             ) : (
               <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
                 <p className="text-foreground-muted">No net worth history available</p>
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        {/* Money Flow Tab */}
+        <TabsContent value="yearbyyear">
+          <div className="space-y-6 mt-4">
+            {/* Year and Month Selector */}
+            <div className="flex flex-wrap gap-2 items-center">
+              <Autocomplete
+                options={yearByYearOptions}
+                value={yearByYearSelected}
+                onChange={(value) => setYearByYearSelected(value)}
+                placeholder="Select year"
+                className="w-[150px]"
+              />
+              <Select value={yearByYearMonth} onValueChange={setYearByYearMonth}>
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue placeholder="All Year" />
+                </SelectTrigger>
+                <SelectContent>
+                  {monthOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-foreground-muted text-sm">
+                {yearByYearMonth
+                  ? `${monthOptions.find(m => m.value === yearByYearMonth)?.label} ${yearByYearSelected}`
+                  : `Full year ${yearByYearSelected}`}
+              </span>
+            </div>
+
+            {yearByYearLoading ? (
+              <div className="flex justify-center items-center min-h-[40vh]">
+                <Spinner size="lg" />
+              </div>
+            ) : yearByYearData ? (
+              <>
+                {/* Summary KPI Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <KPICard
+                    title="Total Income"
+                    value={formatCurrency(yearByYearData.summary.total_income)}
+                    icon={<ArrowUpCircle size={24} className="text-emerald-500" />}
+                    iconColor="bg-emerald-500"
+                    colorClass="text-success"
+                  />
+                  <KPICard
+                    title="Total Expenses"
+                    value={formatCurrency(yearByYearData.summary.total_expenses)}
+                    icon={<ArrowDownCircle size={24} className="text-rose-500" />}
+                    iconColor="bg-rose-500"
+                    colorClass="text-error"
+                  />
+                  <KPICard
+                    title="Net Savings"
+                    value={formatCurrency(yearByYearData.summary.net)}
+                    icon={<Wallet size={24} className={yearByYearData.summary.net >= 0 ? 'text-emerald-500' : 'text-rose-500'} />}
+                    iconColor={yearByYearData.summary.net >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}
+                    colorClass={yearByYearData.summary.net >= 0 ? 'text-success' : 'text-error'}
+                  />
+                </div>
+
+                {/* Sankey Diagram - Money Flow */}
+                {yearByYearData.sankey && yearByYearData.sankey.links.length > 0 && (
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                    <h3 className="text-lg font-semibold text-foreground mb-4">Money Flow</h3>
+                    <div className="h-[400px]">
+                      <ResponsiveSankey
+                        data={{
+                          nodes: yearByYearData.sankey.nodes.map((node: any) => ({
+                            id: node.id,
+                            nodeColor: node.type === 'income' ? '#10b981' : node.type === 'expense' ? '#ef4444' : '#3b82f6'
+                          })),
+                          links: yearByYearData.sankey.links
+                        }}
+                        margin={{ top: 20, right: 160, bottom: 20, left: 160 }}
+                        align="justify"
+                        colors={(node: any) => {
+                          const nodeData = yearByYearData.sankey.nodes.find((n: any) => n.id === node.id);
+                          if (nodeData?.type === 'income') return '#10b981';
+                          if (nodeData?.type === 'expense') return '#ef4444';
+                          return '#3b82f6';
+                        }}
+                        nodeOpacity={1}
+                        nodeHoverOpacity={1}
+                        nodeThickness={18}
+                        nodeSpacing={24}
+                        nodeBorderWidth={0}
+                        nodeBorderRadius={3}
+                        linkOpacity={0.5}
+                        linkHoverOpacity={0.8}
+                        linkContract={3}
+                        enableLinkGradient={true}
+                        labelPosition="outside"
+                        labelOrientation="horizontal"
+                        labelPadding={16}
+                        labelTextColor="#888888"
+                        label={(node: any) => {
+                          const nodeData = yearByYearData.sankey.nodes.find((n: any) => n.id === node.id);
+                          return nodeData?.label || node.id;
+                        }}
+                        theme={{
+                          tooltip: {
+                            container: {
+                              background: '#0a0a0a',
+                              border: '1px solid #2a2a2a',
+                              borderRadius: '8px',
+                              fontSize: '12px',
+                            },
+                          },
+                        }}
+                        valueFormat={(value) => formatCurrency(value)}
+                      />
+                    </div>
+                  </Card>
+                )}
+
+                {/* Search input for tables */}
+                <div className="flex items-center gap-2">
+                  <Search className="w-4 h-4 text-foreground-muted" />
+                  <Input
+                    placeholder="Search categories, vendors, or tags..."
+                    value={yearByYearSearch}
+                    onChange={(e) => setYearByYearSearch(e.target.value)}
+                    className="max-w-sm"
+                  />
+                </div>
+
+                {/* 6 Tables in 2-column grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Income by Category with Subcategories */}
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                    <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
+                      <ArrowUpCircle className="w-5 h-5 text-emerald-500" />
+                      Income by Category
+                    </h3>
+                    <div className="max-h-[400px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Category</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {yearByYearData.categories.income
+                            .filter((item: any) =>
+                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase()) ||
+                              item.subcategories?.some((sub: any) =>
+                                sub.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                              )
+                            )
+                            .map((item: any) => {
+                              const isExpanded = expandedIncomeCategories.has(item.name);
+                              const hasSubcategories = item.subcategories && item.subcategories.length > 0;
+                              return (
+                                <React.Fragment key={item.id || item.name}>
+                                  <TableRow
+                                    className={hasSubcategories ? 'cursor-pointer hover:bg-muted/50' : ''}
+                                    onClick={() => {
+                                      if (hasSubcategories) {
+                                        setExpandedIncomeCategories(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(item.name)) {
+                                            next.delete(item.name);
+                                          } else {
+                                            next.add(item.name);
+                                          }
+                                          return next;
+                                        });
+                                      }
+                                    }}
+                                  >
+                                    <TableCell className="flex items-center gap-2">
+                                      {hasSubcategories && (
+                                        isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />
+                                      )}
+                                      <span className="font-medium">{item.name}</span>
+                                    </TableCell>
+                                    <TableCell className="text-right text-success font-medium">
+                                      {formatCurrency(item.amount)}
+                                    </TableCell>
+                                  </TableRow>
+                                  {isExpanded && item.subcategories?.map((sub: any) => (
+                                    <TableRow key={`${item.name}-${sub.name}`} className="bg-muted/30">
+                                      <TableCell className="pl-10 text-foreground-muted">
+                                        {sub.name}
+                                      </TableCell>
+                                      <TableCell className="text-right text-success/80">
+                                        {formatCurrency(sub.amount)}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </React.Fragment>
+                              );
+                            })}
+                          {yearByYearData.categories.income.filter((item: any) =>
+                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                          ).length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={2} className="text-center text-foreground-muted">
+                                No income data
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+
+                  {/* Expenses by Category with Subcategories */}
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                    <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
+                      <ArrowDownCircle className="w-5 h-5 text-rose-500" />
+                      Expenses by Category
+                    </h3>
+                    <div className="max-h-[400px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Category</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {yearByYearData.categories.expenses
+                            .filter((item: any) =>
+                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase()) ||
+                              item.subcategories?.some((sub: any) =>
+                                sub.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                              )
+                            )
+                            .map((item: any) => {
+                              const isExpanded = expandedExpenseCategories.has(item.name);
+                              const hasSubcategories = item.subcategories && item.subcategories.length > 0;
+                              return (
+                                <React.Fragment key={item.id || item.name}>
+                                  <TableRow
+                                    className={hasSubcategories ? 'cursor-pointer hover:bg-muted/50' : ''}
+                                    onClick={() => {
+                                      if (hasSubcategories) {
+                                        setExpandedExpenseCategories(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(item.name)) {
+                                            next.delete(item.name);
+                                          } else {
+                                            next.add(item.name);
+                                          }
+                                          return next;
+                                        });
+                                      }
+                                    }}
+                                  >
+                                    <TableCell className="flex items-center gap-2">
+                                      {hasSubcategories && (
+                                        isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />
+                                      )}
+                                      <span className="font-medium">{item.name}</span>
+                                    </TableCell>
+                                    <TableCell className="text-right text-error font-medium">
+                                      {formatCurrency(item.amount)}
+                                    </TableCell>
+                                  </TableRow>
+                                  {isExpanded && item.subcategories?.map((sub: any) => (
+                                    <TableRow key={`${item.name}-${sub.name}`} className="bg-muted/30">
+                                      <TableCell className="pl-10 text-foreground-muted">
+                                        {sub.name}
+                                      </TableCell>
+                                      <TableCell className="text-right text-error/80">
+                                        {formatCurrency(sub.amount)}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </React.Fragment>
+                              );
+                            })}
+                          {yearByYearData.categories.expenses.filter((item: any) =>
+                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                          ).length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={2} className="text-center text-foreground-muted">
+                                No expense data
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+
+                  {/* Income by Vendor */}
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                    <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
+                      <Users className="w-5 h-5 text-emerald-500" />
+                      Income by Vendor
+                    </h3>
+                    <div className="max-h-[300px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Vendor</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {yearByYearData.entities.income
+                            .filter((item: any) =>
+                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                            )
+                            .map((item: any, index: number) => (
+                              <TableRow key={item.name + index}>
+                                <TableCell>{item.name}</TableCell>
+                                <TableCell className="text-right text-success">
+                                  {formatCurrency(item.amount)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          {yearByYearData.entities.income.filter((item: any) =>
+                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                          ).length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={2} className="text-center text-foreground-muted">
+                                No income vendors
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+
+                  {/* Expenses by Vendor */}
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                    <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
+                      <Users className="w-5 h-5 text-rose-500" />
+                      Expenses by Vendor
+                    </h3>
+                    <div className="max-h-[300px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Vendor</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {yearByYearData.entities.expenses
+                            .filter((item: any) =>
+                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                            )
+                            .map((item: any, index: number) => (
+                              <TableRow key={item.name + index}>
+                                <TableCell>{item.name}</TableCell>
+                                <TableCell className="text-right text-error">
+                                  {formatCurrency(item.amount)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          {yearByYearData.entities.expenses.filter((item: any) =>
+                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                          ).length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={2} className="text-center text-foreground-muted">
+                                No expense vendors
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+
+                  {/* Income by Tag */}
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                    <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
+                      <Tag className="w-5 h-5 text-emerald-500" />
+                      Income by Tag
+                    </h3>
+                    <div className="max-h-[300px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Tag</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {yearByYearData.tags.income
+                            .filter((item: any) =>
+                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                            )
+                            .map((item: any, index: number) => (
+                              <TableRow key={item.name + index}>
+                                <TableCell>
+                                  <Badge variant="secondary">{item.name}</Badge>
+                                </TableCell>
+                                <TableCell className="text-right text-success">
+                                  {formatCurrency(item.amount)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          {yearByYearData.tags.income.filter((item: any) =>
+                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                          ).length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={2} className="text-center text-foreground-muted">
+                                No income tags
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+
+                  {/* Expenses by Tag */}
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                    <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center gap-2">
+                      <Tag className="w-5 h-5 text-rose-500" />
+                      Expenses by Tag
+                    </h3>
+                    <div className="max-h-[300px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Tag</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {yearByYearData.tags.expenses
+                            .filter((item: any) =>
+                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                            )
+                            .map((item: any, index: number) => (
+                              <TableRow key={item.name + index}>
+                                <TableCell>
+                                  <Badge variant="secondary">{item.name}</Badge>
+                                </TableCell>
+                                <TableCell className="text-right text-error">
+                                  {formatCurrency(item.amount)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          {yearByYearData.tags.expenses.filter((item: any) =>
+                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+                          ).length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={2} className="text-center text-foreground-muted">
+                                No expense tags
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+                </div>
+              </>
+            ) : (
+              <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
+                <p className="text-foreground-muted">No data available for {yearByYearSelected}</p>
               </div>
             )}
           </div>
@@ -1242,7 +1778,7 @@ export default function ReportsPage() {
                           data={tagReportData.spending_by_category.map((cat: any) => ({
                             id: cat.category,
                             label: cat.category,
-                            value: Math.abs(cat.amount)
+                            value: absMoney(cat.amount)
                           }))}
                           margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
                           innerRadius={0.5}
@@ -1287,7 +1823,7 @@ export default function ReportsPage() {
                           data={tagReportData.distribution_by_account.map((acc: any) => ({
                             id: acc.account,
                             label: acc.account,
-                            value: Math.abs(acc.amount)
+                            value: absMoney(acc.amount)
                           }))}
                           margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
                           innerRadius={0.5}
@@ -1362,6 +1898,8 @@ export default function ReportsPage() {
                             borderRadius: '8px',
                             fontSize: '12px',
                           }}
+                          labelStyle={{ color: '#888888' }}
+                          itemStyle={{ color: '#e5e5e5' }}
                           formatter={(value: any) => formatCurrency(value)}
                         />
                         <Legend iconType="circle" wrapperStyle={{ paddingTop: '10px' }} />

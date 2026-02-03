@@ -130,82 +130,102 @@ async def create_transaction(
     current_user: User = Depends(get_current_user)
 ):
     """Create new transaction"""
-    # Get transaction type category from database directly
-    conn = db._get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (transaction.type_id,))
-    result = cursor.fetchone()
+    try:
+        # Get transaction type category from database directly
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (transaction.type_id,))
+        result = cursor.fetchone()
 
-    if not result:
-        conn.close()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid transaction type"
-        )
+        if not result:
+            conn.close()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid transaction type: type_id {transaction.type_id} not found"
+            )
 
-    category = result['category']
+        category = result['category']
 
-    # Determine amount sign based on category
-    amount = transaction.amount
-    if category == 'expense':
-        amount = -abs(amount)  # Expenses are negative
-    elif category == 'income':
-        amount = abs(amount)  # Income is positive
-    elif category == 'transfer':
-        amount = -abs(amount)  # Transfers are negative (money leaving source account)
+        # Validate account exists
+        cursor.execute("SELECT currency FROM accounts WHERE id = ?", (transaction.account_id,))
+        account_result = cursor.fetchone()
 
-    # Get account currency
-    cursor.execute("SELECT currency FROM accounts WHERE id = ?", (transaction.account_id,))
-    account_result = cursor.fetchone()
-    account_currency = account_result['currency'] if account_result else 'EUR'
+        if not account_result:
+            conn.close()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid account: account_id {transaction.account_id} not found"
+            )
 
-    # Determine destinataire - priority: explicit destinataire > transfer account name > description
-    if transaction.destinataire:
-        destinataire = transaction.destinataire
-    elif category == 'transfer' and transaction.transfer_account_id:
-        cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
-        dest_account_result = cursor.fetchone()
-        if dest_account_result:
-            destinataire = dest_account_result['name']
+        account_currency = account_result['currency']
+
+        # Determine amount sign based on category
+        amount = transaction.amount
+        if category == 'expense':
+            amount = -abs(amount)  # Expenses are negative
+        elif category == 'income':
+            amount = abs(amount)  # Income is positive
+        elif category == 'transfer':
+            amount = -abs(amount)  # Transfers are negative (money leaving source account)
+
+        # Determine destinataire - priority: explicit destinataire > transfer account name > description
+        if transaction.destinataire:
+            destinataire = transaction.destinataire
+        elif category == 'transfer' and transaction.transfer_account_id:
+            cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
+            dest_account_result = cursor.fetchone()
+            if dest_account_result:
+                destinataire = dest_account_result['name']
+            else:
+                destinataire = transaction.description
         else:
             destinataire = transaction.description
-    else:
-        destinataire = transaction.description
 
-    conn.close()
+        conn.close()
 
-    # Auto-detect and set is_transfer flag
-    # Transfers should update BOTH accounts (source and destination)
-    is_transfer = bool(category == 'transfer' and transaction.transfer_account_id)
+        # Auto-detect and set is_transfer flag
+        # Transfers should update BOTH accounts (source and destination)
+        is_transfer = bool(category == 'transfer' and transaction.transfer_account_id)
 
-    # Add transaction - map API fields to database fields
-    transaction_data = {
-        'account_id': transaction.account_id,
-        'transaction_date': transaction.date,  # API uses 'date', DB uses 'transaction_date'
-        'amount': amount,
-        'type_id': transaction.type_id,
-        'subtype_id': transaction.subtype_id,
-        'description': transaction.description,
-        'destinataire': destinataire,
-        'currency': account_currency,  # Use account's currency
-        'transfer_account_id': transaction.transfer_account_id,
-        'transfer_amount': transaction.transfer_amount,  # For cross-currency transfers
-        'is_transfer': is_transfer,  # Auto-detected: True when it's a transfer with destination
-        'confirmed': not transaction.is_pending,  # Inverted: pending=True means confirmed=False
-        'tags': transaction.tags,
-    }
-    transaction_id = db.add_transaction(transaction_data)
+        # Add transaction - map API fields to database fields
+        transaction_data = {
+            'account_id': transaction.account_id,
+            'transaction_date': transaction.date,  # API uses 'date', DB uses 'transaction_date'
+            'amount': amount,
+            'type_id': transaction.type_id,
+            'subtype_id': transaction.subtype_id,
+            'description': transaction.description,
+            'destinataire': destinataire,
+            'currency': account_currency,  # Use account's currency
+            'transfer_account_id': transaction.transfer_account_id,
+            'transfer_amount': transaction.transfer_amount,  # For cross-currency transfers
+            'is_transfer': is_transfer,  # Auto-detected: True when it's a transfer with destination
+            'confirmed': not transaction.is_pending,  # Inverted: pending=True means confirmed=False
+            'tags': transaction.tags,
+        }
+        transaction_id = db.add_transaction(transaction_data)
 
-    if not transaction_id:
+        if not transaction_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to create transaction"
+            )
+
+        return {
+            "message": "Transaction created successfully",
+            "transaction_id": transaction_id
+        }
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        import traceback
+        error_detail = f"Failed to create transaction: {str(e)}"
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to create transaction"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_detail
         )
-
-    return {
-        "message": "Transaction created successfully",
-        "transaction_id": transaction_id
-    }
 
 @router.post("/bulk")
 async def create_transactions_bulk(

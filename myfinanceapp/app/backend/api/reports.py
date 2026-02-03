@@ -181,128 +181,45 @@ async def net_worth_trend(
     months: int = 12,
     current_user: User = Depends(get_current_user)
 ):
-    """Get net worth trend over time in user's preferred currency"""
+    """Get net worth trend over time in user's preferred currency.
+
+    Uses the database's get_net_worth_trend method which properly handles:
+    - Account opening dates (doesn't show balances before account existed)
+    - Opening balances as starting point
+    - Forward calculation from opening balance + transactions
+    """
     try:
-        # Get user's preferred display currency
-        display_currency = db.get_preference('display_currency', 'EUR')
-
-        # Get all accounts and debts to track
-        all_accounts = db.get_accounts()
-        all_debts = db.get_debts()
-
-        # Calculate net worth for each month
+        # Calculate date range based on months parameter
         end_date = datetime.now()
+        start_date = end_date - relativedelta(months=months)
+
+        # Use the database method that properly handles opening dates
+        result = db.get_net_worth_trend(
+            start_date=start_date.strftime('%Y-%m-%d'),
+            end_date=end_date.strftime('%Y-%m-%d'),
+            frequency='monthly'
+        )
+
+        # Transform data to match expected API format (add 'month' display name)
         trends = []
-
-        for i in range(months, 0, -1):
-            target_date = end_date - relativedelta(months=i)
-            month_end = target_date.replace(day=1) + relativedelta(months=1) - timedelta(days=1)
-            month_end_str = month_end.strftime('%Y-%m-%d')
-
-            # Calculate account balances at this point in time
-            # Strategy: Start with current balance and subtract transactions that happened AFTER this date
-
-            # Get all transactions AFTER this month_end (from month_end to now)
-            filters = {'start_date': month_end_str}
-            future_transactions = db.get_transactions(filters=filters)
-
-            # Build balance per account by working backwards from current balance
-            account_balances = {}
-            for account in all_accounts:
-                account_id = account['id']
-                account_currency = account.get('currency', 'EUR')
-                current_balance = account.get('balance', 0)
-
-                # Sum all confirmed transactions for this account AFTER month_end
-                transactions_after = sum(
-                    t['amount'] for t in future_transactions
-                    if t['account_id'] == account_id and t.get('confirmed', True)
-                )
-
-                # Historical balance = current balance - transactions that happened after
-                historical_balance = current_balance - transactions_after
-
-                # Convert to display currency
-                converted_balance = db.convert_currency(historical_balance, account_currency, display_currency)
-                account_balances[account_id] = converted_balance
-
-            total_assets = sum(account_balances.values())
-
-            # Calculate debt balances at this point in time
-            # For debts, we need to track payments made up to this date
-            debt_balances = {}
-            for debt in all_debts:
-                if not debt.get('is_active', True):
-                    continue
-
-                debt_id = debt['id']
-                debt_currency = debt.get('currency', 'EUR')
-                principal = debt.get('principal_amount', 0)
-
-                # Get all debt payment transactions up to this date
-                # Note: This assumes debt payments are tracked in transactions with a specific category or link
-                # For now, we'll use the current_balance as a fallback
-                # A more accurate implementation would track debt payments in transaction history
-
-                # Simple approach: use current balance if no payment history is available
-                # TODO: Implement proper debt payment tracking in transaction history
-                current_balance = debt.get('current_balance', principal)
-
-                # Convert to display currency
-                converted_debt = db.convert_currency(current_balance, debt_currency, display_currency)
-                debt_balances[debt_id] = converted_debt
-
-            total_debts = sum(debt_balances.values())
-            net_worth = total_assets - total_debts
-
+        for item in result['data']:
+            date_obj = datetime.strptime(item['date'], '%Y-%m-%d')
             trends.append({
-                "date": month_end_str,
-                "month": month_end.strftime('%B %Y'),
-                "assets": total_assets,
-                "debts": total_debts,
-                "net_worth": net_worth
+                "date": item['date'],
+                "month": date_obj.strftime('%B %Y'),
+                "assets": item['assets'],
+                "debts": item['debts'],
+                "net_worth": item['net_worth']
             })
 
-        # Add current month (using actual current balances)
-        current_month_end = end_date
-
-        # Build current account balances (use stored balances directly)
-        account_balances = {}
-        for account in all_accounts:
-            account_currency = account.get('currency', 'EUR')
-            current_balance = account.get('balance', 0)
-
-            # Convert to display currency
-            converted_balance = db.convert_currency(current_balance, account_currency, display_currency)
-            account_balances[account['id']] = converted_balance
-
-        current_assets = sum(account_balances.values())
-
-        # Current debt balances
-        debt_balances = {}
-        for debt in all_debts:
-            if not debt.get('is_active', True):
-                continue
-            debt_currency = debt.get('currency', 'EUR')
-            current_balance = debt.get('current_balance', 0)
-            converted_debt = db.convert_currency(current_balance, debt_currency, display_currency)
-            debt_balances[debt['id']] = converted_debt
-
-        current_debt_total = sum(debt_balances.values())
-
-        trends.append({
-            "date": current_month_end.strftime('%Y-%m-%d'),
-            "month": current_month_end.strftime('%B %Y'),
-            "assets": current_assets,
-            "debts": current_debt_total,
-            "net_worth": current_assets - current_debt_total
-        })
+        # Get current net worth from last item
+        current_net_worth = trends[-1]['net_worth'] if trends else 0
 
         return {
             "months": months,
             "trend": trends,
-            "current_net_worth": current_assets - current_debt_total,
-            "currency": display_currency
+            "current_net_worth": current_net_worth,
+            "currency": result['currency']
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trend calculation failed: {str(e)}")
@@ -313,8 +230,11 @@ async def monthly_summary(
     month: int,
     current_user: User = Depends(get_current_user)
 ):
-    """Get comprehensive monthly summary with budgets"""
+    """Get comprehensive monthly summary with budgets in user's preferred currency"""
     try:
+        # Get user's preferred display currency
+        display_currency = db.get_preference('display_currency', 'EUR')
+
         # Build date range for the month
         start_date = datetime(year, month, 1).strftime('%Y-%m-%d')
         if month == 12:
@@ -327,21 +247,28 @@ async def monthly_summary(
         filters = {'start_date': start_date, 'end_date': end_date}
         transactions = db.get_transactions(filters=filters)
 
-        # Calculate totals (exclude transfers)
-        income = sum(t['amount'] for t in transactions if t['amount'] > 0 and t.get('category') != 'transfer')
-        expenses = sum(abs(t['amount']) for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer')
+        # Calculate totals with currency conversion (exclude transfers)
+        income = sum(
+            db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
+            for t in transactions if t['amount'] > 0 and t.get('category') != 'transfer'
+        )
+        expenses = sum(
+            db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+            for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
+        )
 
         # Get budget vs actual
         budget_data = db.get_budget_vs_actual(year, month)
 
-        # Spending by category (exclude transfers)
+        # Spending by category with currency conversion (exclude transfers)
         category_spending = {}
         for t in transactions:
             if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
                 category = t.get('type_name', 'Uncategorized')
                 if category not in category_spending:
                     category_spending[category] = 0
-                category_spending[category] += abs(t['amount'])
+                converted_amount = db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+                category_spending[category] += converted_amount
 
         return {
             "year": year,
@@ -354,7 +281,8 @@ async def monthly_summary(
             "spending_by_category": [
                 {"category": cat, "amount": amt}
                 for cat, amt in sorted(category_spending.items(), key=lambda x: x[1], reverse=True)
-            ]
+            ],
+            "currency": display_currency
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Summary calculation failed: {str(e)}")
@@ -366,8 +294,11 @@ async def tag_report(
     end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get detailed report for a specific tag"""
+    """Get detailed report for a specific tag in user's preferred currency"""
     try:
+        # Get user's preferred display currency
+        display_currency = db.get_preference('display_currency', 'EUR')
+
         # Build filters
         filters = {}
         if start_date:
@@ -394,41 +325,51 @@ async def tag_report(
                 "transactions": [],
                 "spending_by_category": [],
                 "distribution_by_account": [],
-                "monthly_trend": []
+                "monthly_trend": [],
+                "currency": display_currency
             }
 
-        # Calculate summary metrics (exclude transfers)
-        total_income = sum(t['amount'] for t in tagged_transactions if t['amount'] > 0 and t.get('category') != 'transfer')
-        total_expenses = sum(abs(t['amount']) for t in tagged_transactions if t['amount'] < 0 and t.get('category') != 'transfer')
+        # Calculate summary metrics with currency conversion (exclude transfers)
+        total_income = sum(
+            db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
+            for t in tagged_transactions if t['amount'] > 0 and t.get('category') != 'transfer'
+        )
+        total_expenses = sum(
+            db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+            for t in tagged_transactions if t['amount'] < 0 and t.get('category') != 'transfer'
+        )
 
-        # Spending by category (exclude transfers)
+        # Spending by category with currency conversion (exclude transfers)
         category_spending = {}
         for t in tagged_transactions:
             if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
                 category = t.get('type_name', 'Uncategorized')
                 if category not in category_spending:
                     category_spending[category] = 0
-                category_spending[category] += abs(t['amount'])
+                converted_amount = db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+                category_spending[category] += converted_amount
 
-        # Distribution by account
+        # Distribution by account with currency conversion
         account_distribution = {}
         for t in tagged_transactions:
             account = t.get('account_name', 'Unknown')
             if account not in account_distribution:
                 account_distribution[account] = 0
-            account_distribution[account] += abs(t['amount'])
+            converted_amount = db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+            account_distribution[account] += converted_amount
 
-        # Monthly trend (exclude transfers)
+        # Monthly trend with currency conversion (exclude transfers)
         from collections import defaultdict
         monthly_data = defaultdict(lambda: {'income': 0, 'expenses': 0})
         for t in tagged_transactions:
             if t.get('category') == 'transfer':
                 continue
             month_key = t['transaction_date'][:7]  # YYYY-MM
+            converted_amount = db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
             if t['amount'] > 0:
-                monthly_data[month_key]['income'] += t['amount']
+                monthly_data[month_key]['income'] += converted_amount
             else:
-                monthly_data[month_key]['expenses'] += abs(t['amount'])
+                monthly_data[month_key]['expenses'] += converted_amount
 
         monthly_trend = [
             {
@@ -455,7 +396,8 @@ async def tag_report(
                 {"account": acc, "amount": amt}
                 for acc, amt in sorted(account_distribution.items(), key=lambda x: x[1], reverse=True)
             ],
-            "monthly_trend": monthly_trend
+            "monthly_trend": monthly_trend,
+            "currency": display_currency
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tag report failed: {str(e)}")
@@ -466,8 +408,11 @@ async def spending_trends(
     category: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get spending trends by category over time"""
+    """Get spending trends by category over time in user's preferred currency"""
     try:
+        # Get user's preferred display currency
+        display_currency = db.get_preference('display_currency', 'EUR')
+
         end_date = datetime.now()
         trends = []
 
@@ -485,7 +430,7 @@ async def spending_trends(
             }
             transactions = db.get_transactions(filters=filters)
 
-            # Calculate spending by category for this month
+            # Calculate spending by category for this month with currency conversion
             month_data = {
                 "month": month_start.strftime('%B %Y'),
                 "date": month_start.strftime('%Y-%m'),
@@ -495,6 +440,7 @@ async def spending_trends(
             total_expenses = 0
             total_income = 0
             for t in transactions:
+                account_currency = t.get('account_currency', 'EUR')
                 # Calculate expenses (exclude transfers)
                 if t['amount'] < 0 and t.get('category') != 'transfer':
                     cat = t.get('type_name', 'Uncategorized')
@@ -504,14 +450,16 @@ async def spending_trends(
                     if category and cat != category:
                         continue
 
+                    converted_amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
                     if cat not in month_data["categories"]:
                         month_data["categories"][cat] = 0
-                    month_data["categories"][cat] += abs(t['amount'])
-                    total_expenses += abs(t['amount'])
-                
+                    month_data["categories"][cat] += converted_amount
+                    total_expenses += converted_amount
+
                 # Calculate income (exclude transfers)
                 elif t['amount'] > 0 and t.get('category') != 'transfer':
-                    total_income += t['amount']
+                    converted_amount = db.convert_currency(t['amount'], account_currency, display_currency)
+                    total_income += converted_amount
 
             month_data["total_expenses"] = total_expenses
             month_data["total_income"] = total_income
@@ -534,6 +482,7 @@ async def spending_trends(
         total_expenses = 0
         total_income = 0
         for t in transactions:
+            account_currency = t.get('account_currency', 'EUR')
             # Calculate expenses (exclude transfers)
             if t['amount'] < 0 and t.get('category') != 'transfer':
                 cat = t.get('type_name', 'Uncategorized')
@@ -542,14 +491,16 @@ async def spending_trends(
                 if category and cat != category:
                     continue
 
+                converted_amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
                 if cat not in month_data["categories"]:
                     month_data["categories"][cat] = 0
-                month_data["categories"][cat] += abs(t['amount'])
-                total_expenses += abs(t['amount'])
-            
+                month_data["categories"][cat] += converted_amount
+                total_expenses += converted_amount
+
             # Calculate income (exclude transfers)
             elif t['amount'] > 0 and t.get('category') != 'transfer':
-                total_income += t['amount']
+                converted_amount = db.convert_currency(t['amount'], account_currency, display_currency)
+                total_income += converted_amount
 
         month_data["total_expenses"] = total_expenses
         month_data["total_income"] = total_income
@@ -583,7 +534,230 @@ async def spending_trends(
             "category_filter": category,
             "trends": trends,
             "all_categories": sorted(list(categories_set)),
-            "trend_analysis": trend_analysis
+            "trend_analysis": trend_analysis,
+            "currency": display_currency
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Spending trends failed: {str(e)}")
+
+@router.get("/year-by-year")
+async def year_by_year_stats(
+    year: int,
+    month: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get year-by-year income/expense breakdown by category, entity (destinataire), and tag.
+
+    Args:
+        year: The year to get stats for
+        month: Optional month (1-12) to filter to a specific month
+    """
+    try:
+        display_currency = db.get_preference('display_currency', 'EUR')
+
+        # Get date range for the year or specific month
+        if month:
+            # Specific month selected
+            start_date = f"{year}-{month:02d}-01"
+            if month == 12:
+                end_date = f"{year}-12-31"
+            else:
+                # Last day of the selected month
+                next_month = datetime(year, month + 1, 1)
+                last_day = (next_month - timedelta(days=1)).day
+                end_date = f"{year}-{month:02d}-{last_day:02d}"
+        else:
+            # Full year
+            start_date = f"{year}-01-01"
+            end_date = f"{year}-12-31"
+
+        # Fetch all transactions for the year
+        transactions = db.get_transactions({
+            'start_date': start_date,
+            'end_date': end_date
+        })
+
+        # Get year of first transaction
+        first_trx_year = db.get_first_transaction_year()
+
+        # Initialize aggregation dictionaries
+        income_by_category = {}
+        expense_by_category = {}
+        income_by_entity = {}
+        expense_by_entity = {}
+        income_by_tag = {}
+        expense_by_tag = {}
+
+        total_income = 0
+        total_expenses = 0
+
+        for t in transactions:
+            # Skip transfers
+            if t.get('category') == 'transfer':
+                continue
+
+            # Currency conversion
+            account_currency = t.get('account_currency', 'EUR')
+            amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
+
+            category_name = t.get('type_name', 'Uncategorized')
+            category_id = t.get('type_id')
+            subtype_name = t.get('subtype_name', 'Other')
+            subtype_id = t.get('subtype_id')
+            entity = t.get('destinataire', '') or 'Unknown'
+            tags_str = t.get('tags', '') or ''
+
+            if t['category'] == 'income':
+                total_income += amount
+
+                # By category with subcategories
+                if category_name not in income_by_category:
+                    income_by_category[category_name] = {'id': category_id, 'amount': 0, 'subcategories': {}}
+                income_by_category[category_name]['amount'] += amount
+
+                # Track subcategory
+                if subtype_name not in income_by_category[category_name]['subcategories']:
+                    income_by_category[category_name]['subcategories'][subtype_name] = {'id': subtype_id, 'amount': 0}
+                income_by_category[category_name]['subcategories'][subtype_name]['amount'] += amount
+
+                # By entity
+                income_by_entity[entity] = income_by_entity.get(entity, 0) + amount
+
+                # By tag
+                for tag in [t.strip() for t in tags_str.split(',') if t.strip()]:
+                    income_by_tag[tag] = income_by_tag.get(tag, 0) + amount
+
+            elif t['category'] == 'expense':
+                total_expenses += amount
+
+                # By category with subcategories
+                if category_name not in expense_by_category:
+                    expense_by_category[category_name] = {'id': category_id, 'amount': 0, 'subcategories': {}}
+                expense_by_category[category_name]['amount'] += amount
+
+                # Track subcategory
+                if subtype_name not in expense_by_category[category_name]['subcategories']:
+                    expense_by_category[category_name]['subcategories'][subtype_name] = {'id': subtype_id, 'amount': 0}
+                expense_by_category[category_name]['subcategories'][subtype_name]['amount'] += amount
+
+                # By entity
+                expense_by_entity[entity] = expense_by_entity.get(entity, 0) + amount
+
+                # By tag
+                for tag in [t.strip() for t in tags_str.split(',') if t.strip()]:
+                    expense_by_tag[tag] = expense_by_tag.get(tag, 0) + amount
+
+        # Format categories with subcategories
+        def format_category_with_subcategories(cat_dict):
+            return sorted(
+                [{
+                    "id": v['id'],
+                    "name": k,
+                    "amount": v['amount'],
+                    "subcategories": sorted(
+                        [{"id": sub['id'], "name": sub_name, "amount": sub['amount']}
+                         for sub_name, sub in v['subcategories'].items()],
+                        key=lambda x: x['amount'], reverse=True
+                    )
+                } for k, v in cat_dict.items()],
+                key=lambda x: x['amount'], reverse=True
+            )
+
+        # Build Sankey diagram data
+        # Nodes: Income sources + "Total Income" + Expense categories
+        # Links: Income sources -> Total Income -> Expense categories
+        sankey_nodes = []
+        sankey_links = []
+        node_index = {}
+
+        # Add income category nodes
+        for cat_name in income_by_category.keys():
+            node_index[f"income_{cat_name}"] = len(sankey_nodes)
+            sankey_nodes.append({"id": f"income_{cat_name}", "label": cat_name, "type": "income"})
+
+        # Add central "Budget" node
+        node_index["budget"] = len(sankey_nodes)
+        sankey_nodes.append({"id": "budget", "label": "Budget", "type": "central"})
+
+        # Add expense category nodes (top 10 + "Other")
+        expense_items = sorted(expense_by_category.items(), key=lambda x: x[1]['amount'], reverse=True)
+        top_expenses = expense_items[:10]
+        other_expenses = expense_items[10:]
+
+        for cat_name, _ in top_expenses:
+            node_index[f"expense_{cat_name}"] = len(sankey_nodes)
+            sankey_nodes.append({"id": f"expense_{cat_name}", "label": cat_name, "type": "expense"})
+
+        if other_expenses:
+            node_index["expense_Other"] = len(sankey_nodes)
+            sankey_nodes.append({"id": "expense_Other", "label": "Other", "type": "expense"})
+
+        # Create links: Income -> Budget
+        for cat_name, cat_data in income_by_category.items():
+            if cat_data['amount'] > 0:
+                sankey_links.append({
+                    "source": f"income_{cat_name}",
+                    "target": "budget",
+                    "value": round(cat_data['amount'], 2)
+                })
+
+        # Create links: Budget -> Expenses
+        for cat_name, cat_data in top_expenses:
+            if cat_data['amount'] > 0:
+                sankey_links.append({
+                    "source": "budget",
+                    "target": f"expense_{cat_name}",
+                    "value": round(cat_data['amount'], 2)
+                })
+
+        if other_expenses:
+            other_total = sum(cat_data['amount'] for _, cat_data in other_expenses)
+            if other_total > 0:
+                sankey_links.append({
+                    "source": "budget",
+                    "target": "expense_Other",
+                    "value": round(other_total, 2)
+                })
+
+        # Format response with sorted lists
+        return {
+            "year": year,
+            "month": month,
+            "year_of_first_transaction": first_trx_year,
+            "currency": display_currency,
+            "summary": {
+                "total_income": total_income,
+                "total_expenses": total_expenses,
+                "net": total_income - total_expenses
+            },
+            "categories": {
+                "income": format_category_with_subcategories(income_by_category),
+                "expenses": format_category_with_subcategories(expense_by_category)
+            },
+            "entities": {
+                "income": sorted(
+                    [{"name": k, "amount": v} for k, v in income_by_entity.items()],
+                    key=lambda x: x['amount'], reverse=True
+                ),
+                "expenses": sorted(
+                    [{"name": k, "amount": v} for k, v in expense_by_entity.items()],
+                    key=lambda x: x['amount'], reverse=True
+                )
+            },
+            "tags": {
+                "income": sorted(
+                    [{"name": k, "amount": v} for k, v in income_by_tag.items()],
+                    key=lambda x: x['amount'], reverse=True
+                ),
+                "expenses": sorted(
+                    [{"name": k, "amount": v} for k, v in expense_by_tag.items()],
+                    key=lambda x: x['amount'], reverse=True
+                )
+            },
+            "sankey": {
+                "nodes": sankey_nodes,
+                "links": sankey_links
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Year-by-year stats failed: {str(e)}")

@@ -1,11 +1,10 @@
 """
 Finance Tracker - Enhanced Reporting Module
-Phase 3B: Advanced Reports with Excel Export
+Advanced Reports: Cash Flow, Tax, Year-over-Year, Quarterly
 """
 import pandas as pd
 from datetime import datetime, date
 from typing import Dict, List, Any, Optional
-import io
 
 
 class ReportGenerator:
@@ -314,147 +313,5 @@ class ReportGenerator:
                     quarterly_summary['category_breakdown']['expense'].get(cat, 0) + amt
         
         quarterly_summary['net'] = quarterly_summary['total_income'] - quarterly_summary['total_expenses']
-        
+
         return quarterly_summary
-    
-    # ==================== EXCEL EXPORT ====================
-    
-    def export_to_excel(self, report_data: Dict[str, Any], report_type: str) -> bytes:
-        """Export report to Excel format with formatting."""
-        output = io.BytesIO()
-        
-        try:
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                workbook = writer.book
-                
-                header_format = workbook.add_format({
-                    'bold': True,
-                    'bg_color': '#4ECDC4',
-                    'font_color': 'white',
-                    'border': 1
-                })
-                
-                currency_format = workbook.add_format({
-                    'num_format': '#,##0.00 €',
-                    'border': 1
-                })
-                
-                if report_type == 'cash_flow':
-                    self._export_cash_flow_excel(report_data, writer, header_format, currency_format)
-                elif report_type == 'tax_report':
-                    self._export_tax_report_excel(report_data, writer, header_format, currency_format)
-                elif report_type == 'yoy_comparison':
-                    self._export_yoy_excel(report_data, writer, header_format, currency_format)
-        except ImportError:
-            raise ImportError("xlsxwriter required for Excel export. Run: pip install xlsxwriter")
-        
-        output.seek(0)
-        return output.getvalue()
-    
-    def _export_cash_flow_excel(self, data: Dict, writer, header_fmt, curr_fmt):
-        """Export cash flow statement to Excel."""
-        rows = []
-        rows.append(['CASH FLOW STATEMENT', ''])
-        rows.append([f"Period: {data['period']['start_date']} to {data['period']['end_date']}", ''])
-        rows.append(['', ''])
-        rows.append(['OPERATING ACTIVITIES', ''])
-        rows.append(['Income:', ''])
-        
-        for cat, amt in data['operating_activities']['income'].items():
-            rows.append([f"  {cat}", amt])
-        
-        rows.append(['Total Operating Inflows', data['operating_activities']['total_inflow']])
-        rows.append(['', ''])
-        rows.append(['Expenses:', ''])
-        
-        for cat, amt in data['operating_activities']['expenses'].items():
-            rows.append([f"  {cat}", amt])
-        
-        rows.append(['Total Operating Outflows', data['operating_activities']['total_outflow']])
-        rows.append(['Net Cash from Operating', data['operating_activities']['net_operating']])
-        rows.append(['', ''])
-        rows.append(['INVESTING ACTIVITIES', ''])
-        rows.append(['Purchases', data['investing_activities']['purchases']])
-        rows.append(['Sales', data['investing_activities']['sales']])
-        rows.append(['Dividends', data['investing_activities']['dividends']])
-        rows.append(['Net Cash from Investing', data['investing_activities']['net_investing']])
-        rows.append(['', ''])
-        rows.append(['FINANCING ACTIVITIES', ''])
-        rows.append(['Debt Payments', data['financing_activities']['debt_payments']])
-        rows.append(['Net Cash from Financing', data['financing_activities']['net_financing']])
-        rows.append(['', ''])
-        rows.append(['NET CHANGE IN CASH', data['net_cash_flow']])
-        
-        df = pd.DataFrame(rows, columns=['Category', 'Amount'])
-        df.to_excel(writer, sheet_name='Cash Flow', index=False)
-        
-        worksheet = writer.sheets['Cash Flow']
-        worksheet.set_column('A:A', 40)
-        worksheet.set_column('B:B', 15, curr_fmt)
-    
-    def _export_tax_report_excel(self, data: Dict, writer, header_fmt, curr_fmt):
-        """Export tax report to Excel."""
-        # Income sheet
-        income_rows = []
-        for key, value in data['taxable_income'].items():
-            if key != 'total':
-                income_rows.append([key.replace('_', ' ').title(), value])
-        income_rows.append(['TOTAL', data['taxable_income']['total']])
-        
-        df_income = pd.DataFrame(income_rows, columns=['Category', 'Amount'])
-        df_income.to_excel(writer, sheet_name='Income', index=False)
-        
-        # Deductions sheet
-        deduction_rows = []
-        for key, value in data['deductible_expenses'].items():
-            if key != 'total':
-                deduction_rows.append([key.replace('_', ' ').title(), value])
-        deduction_rows.append(['TOTAL', data['deductible_expenses']['total']])
-        
-        df_deduct = pd.DataFrame(deduction_rows, columns=['Category', 'Amount'])
-        df_deduct.to_excel(writer, sheet_name='Deductions', index=False)
-        
-        # Summary sheet
-        summary_rows = [
-            ['Tax Year', data['tax_year']],
-            ['', ''],
-            ['Total Income', data['taxable_income']['total']],
-            ['Total Deductions', data['deductible_expenses']['total']],
-            ['Net Taxable Income', data['net_taxable_income']],
-            ['Estimated Tax (25%)', data['estimated_tax']]
-        ]
-        
-        df_summary = pd.DataFrame(summary_rows, columns=['Item', 'Value'])
-        df_summary.to_excel(writer, sheet_name='Summary', index=False)
-        
-        for sheet in writer.sheets:
-            worksheet = writer.sheets[sheet]
-            worksheet.set_column('A:A', 30)
-            worksheet.set_column('B:B', 15, curr_fmt)
-    
-    def _export_yoy_excel(self, data: Dict, writer, header_fmt, curr_fmt):
-        """Export year-over-year comparison to Excel."""
-        years = sorted(data['years_compared'])
-        
-        rows = []
-        income_row = ['Income']
-        expense_row = ['Expenses']
-        net_row = ['Net']
-        
-        for year in years:
-            income_row.append(data['comparison_data'][year]['total_income'])
-            expense_row.append(data['comparison_data'][year]['total_expenses'])
-            net_row.append(data['comparison_data'][year]['net'])
-        
-        rows.append(income_row)
-        rows.append(expense_row)
-        rows.append(net_row)
-        
-        columns = ['Category'] + [str(y) for y in years]
-        df = pd.DataFrame(rows, columns=columns)
-        df.to_excel(writer, sheet_name='Comparison', index=False)
-        
-        worksheet = writer.sheets['Comparison']
-        worksheet.set_column('A:A', 20)
-        for i in range(len(years)):
-            worksheet.set_column(i+1, i+1, 15, curr_fmt)

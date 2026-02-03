@@ -1,8 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { transactionsAPI, accountsAPI, categoriesAPI } from '../services/api';
 import { format } from 'date-fns';
 import { useToast } from '../contexts/ToastContext';
+import { transactionSchema, type TransactionFormData } from '../lib/validations';
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
+import { sumMoney, subtractMoney, absMoney } from '../lib/money';
 import {
   Card,
   Button,
@@ -15,12 +20,15 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
+  FormField,
+  TransactionsSkeleton,
 } from '../components/shadcn';
 import {
   Plus,
@@ -68,25 +76,25 @@ interface KPICardProps {
 
 function KPICard({ title, value, icon, iconColor, loading }: KPICardProps) {
   return (
-    <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+    <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
       {/* Background gradient effect */}
       <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
 
       <div className="relative">
-        <div className="flex items-start justify-between mb-4">
-          <div className={`p-3 rounded-lg ${iconColor} bg-opacity-10`}>
+        <div className="flex items-start justify-between mb-2 sm:mb-4">
+          <div className={`p-2 sm:p-3 rounded-lg ${iconColor} bg-opacity-10 [&>svg]:w-5 [&>svg]:h-5 sm:[&>svg]:w-6 sm:[&>svg]:h-6`}>
             {icon}
           </div>
         </div>
 
         <div>
-          <p className="text-sm text-foreground-muted mb-1">{title}</p>
+          <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">{title}</p>
           {loading ? (
-            <div className="h-8 flex items-center">
-              <Spinner className="w-5 h-5" />
+            <div className="h-6 sm:h-8 flex items-center">
+              <Spinner className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           ) : (
-            <p className="text-2xl font-bold text-foreground">{value}</p>
+            <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{value}</p>
           )}
         </div>
       </div>
@@ -119,19 +127,36 @@ export default function TransactionsPage() {
   // Debounce text-based filters
   const debouncedFilters = useDebounce(filters, 500);
 
-  const [formData, setFormData] = useState({
-    account_id: '',
-    date: format(new Date(), 'yyyy-MM-dd'),
-    due_date: '',
-    amount: '',
-    type_id: '',
-    subtype_id: '',
-    description: '',
-    recipient: '',
-    transfer_account_id: '',
-    transfer_amount: '',
-    tags: '',
+  // Form with validation
+  const {
+    control,
+    register,
+    handleSubmit: handleFormSubmit,
+    formState: { errors, isValid },
+    reset: resetForm,
+    watch,
+    setValue,
+    trigger,
+  } = useForm<TransactionFormData>({
+    resolver: zodResolver(transactionSchema),
+    mode: 'onChange', // Validate on change for immediate feedback
+    defaultValues: {
+      account_id: '',
+      date: format(new Date(), 'yyyy-MM-dd'),
+      due_date: '',
+      amount: '',
+      type_id: '',
+      subtype_id: '',
+      description: '',
+      recipient: '',
+      transfer_account_id: '',
+      transfer_amount: '',
+      tags: '',
+    },
   });
+
+  // Watch form values for conditional rendering
+  const formData = watch();
   const [autoCategorizingDescription, setAutoCategorizingDescription] = useState(false);
 
   const queryClient = useQueryClient();
@@ -208,66 +233,179 @@ export default function TransactionsPage() {
 
   const createMutation = useMutation({
     mutationFn: (data: any) => transactionsAPI.create(data),
+    onMutate: async (newData: any) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['transactions', debouncedFilters] });
+
+      // Snapshot the previous value
+      const previousTransactions = queryClient.getQueryData(['transactions', debouncedFilters]);
+
+      // Build optimistic transaction with available info
+      const account = accountsData?.find((a: any) => a.id === newData.account_id);
+      const category = categoriesData?.find((c: any) => c.id === newData.type_id);
+      const subtype = category?.subtypes?.find((s: any) => s.id === newData.subtype_id);
+
+      const optimisticTransaction = {
+        id: Date.now(), // Temporary ID
+        ...newData,
+        account_name: account?.name || '',
+        bank_name: account?.bank_name || '',
+        account_currency: account?.currency || 'EUR',
+        type_name: category?.name || '',
+        subtype_name: subtype?.name || '',
+        category: category?.category || '',
+        // Amount sign based on category
+        amount: category?.category === 'expense' ? -Math.abs(newData.amount) : Math.abs(newData.amount),
+        _optimistic: true, // Flag for visual indication
+      };
+
+      // Optimistically update to the new value
+      queryClient.setQueryData(['transactions', debouncedFilters], (old: any[] | undefined) => {
+        if (!old) return [optimisticTransaction];
+        return [optimisticTransaction, ...old];
+      });
+
+      // Return context with the previous value
+      return { previousTransactions };
+    },
+    onError: (error: any, _newData, context) => {
+      // Rollback to previous state on error
+      if (context?.previousTransactions) {
+        queryClient.setQueryData(['transactions', debouncedFilters], context.previousTransactions);
+      }
+      console.error('Failed to create transaction:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create transaction: ${errorMessage}`);
+    },
     onSuccess: () => {
+      // Don't close dialog - allow adding multiple transactions
+      resetFormPartial();
+      toast.success('Transaction created successfully!');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure data consistency
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
       queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
       queryClient.invalidateQueries({ queryKey: ['recipients'] });
       queryClient.invalidateQueries({ queryKey: ['tags'] });
-      // Don't close dialog - allow adding multiple transactions
-      // setOpenDialog(false);
-      resetForm();
-      toast.success('Transaction created successfully!');
-    },
-    onError: (error: any) => {
-      console.error('Failed to create transaction:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      toast.error(`Failed to create transaction: ${errorMessage}`);
     },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: any }) => transactionsAPI.update(id, data),
+    onMutate: async ({ id, data: updatedData }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['transactions', debouncedFilters] });
+
+      // Snapshot the previous value
+      const previousTransactions = queryClient.getQueryData(['transactions', debouncedFilters]);
+
+      // Build optimistic transaction with available info
+      const account = accountsData?.find((a: any) => a.id === updatedData.account_id);
+      const category = categoriesData?.find((c: any) => c.id === updatedData.type_id);
+      const subtype = category?.subtypes?.find((s: any) => s.id === updatedData.subtype_id);
+
+      // Optimistically update to the new value
+      queryClient.setQueryData(['transactions', debouncedFilters], (old: any[] | undefined) => {
+        if (!old) return old;
+        return old.map((t: any) => {
+          if (t.id === id) {
+            return {
+              ...t,
+              ...updatedData,
+              account_name: account?.name || t.account_name,
+              bank_name: account?.bank_name || t.bank_name,
+              account_currency: account?.currency || t.account_currency,
+              type_name: category?.name || t.type_name,
+              subtype_name: subtype?.name || t.subtype_name,
+              category: category?.category || t.category,
+              amount: category?.category === 'expense' ? -Math.abs(updatedData.amount) : Math.abs(updatedData.amount),
+              _optimistic: true,
+            };
+          }
+          return t;
+        });
+      });
+
+      // Return context with the previous value
+      return { previousTransactions };
+    },
+    onError: (error: any, _variables, context) => {
+      // Rollback to previous state on error
+      if (context?.previousTransactions) {
+        queryClient.setQueryData(['transactions', debouncedFilters], context.previousTransactions);
+      }
+      console.error('Failed to update transaction:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update transaction: ${errorMessage}`);
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['recipients'] });
-      queryClient.invalidateQueries({ queryKey: ['tags'] });
       setOpenDialog(false);
       setEditingTransaction(null);
       resetFormCompletely();
       toast.success('Transaction updated successfully!');
     },
-    onError: (error: any) => {
-      console.error('Failed to update transaction:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      toast.error(`Failed to update transaction: ${errorMessage}`);
+    onSettled: () => {
+      // Always refetch after error or success to ensure data consistency
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['recipients'] });
+      queryClient.invalidateQueries({ queryKey: ['tags'] });
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => transactionsAPI.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
+    onMutate: async (deletedId: number) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['transactions', debouncedFilters] });
+
+      // Snapshot the previous value
+      const previousTransactions = queryClient.getQueryData(['transactions', debouncedFilters]);
+
+      // Optimistically remove from the list
+      queryClient.setQueryData(['transactions', debouncedFilters], (old: any[] | undefined) => {
+        if (!old) return old;
+        return old.filter((t: any) => t.id !== deletedId);
+      });
+
+      // Close UI elements immediately for better UX
       setDeleteConfirm(null);
       setExpandedRow(null);
-      toast.success('Transaction deleted successfully!');
+
+      // Return context with the previous value
+      return { previousTransactions };
     },
-    onError: (error: any) => {
+    onError: (error: any, _deletedId, context) => {
+      // Rollback to previous state on error
+      if (context?.previousTransactions) {
+        queryClient.setQueryData(['transactions', debouncedFilters], context.previousTransactions);
+      }
       console.error('Failed to delete transaction:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
       toast.error(`Failed to delete transaction: ${errorMessage}`);
     },
+    onSuccess: () => {
+      toast.success('Transaction deleted successfully!');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure data consistency
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
+    },
   });
 
-  const resetForm = () => {
+  const resetFormPartial = () => {
     // Only reset amount, category, description, and recipient fields
     // Keep account, date, and tags for easier multiple transaction entry
-    setFormData((prev) => ({
-      ...prev,
+    const currentValues = watch();
+    resetForm({
+      account_id: currentValues.account_id,
+      date: currentValues.date,
+      due_date: currentValues.due_date,
       amount: '',
       type_id: '',
       subtype_id: '',
@@ -275,11 +413,12 @@ export default function TransactionsPage() {
       recipient: '',
       transfer_account_id: '',
       transfer_amount: '',
-    }));
+      tags: currentValues.tags,
+    });
   };
 
   const resetFormCompletely = () => {
-    setFormData({
+    resetForm({
       account_id: '',
       date: format(new Date(), 'yyyy-MM-dd'),
       due_date: '',
@@ -309,7 +448,7 @@ export default function TransactionsPage() {
 
   const handleEdit = (transaction: any) => {
     setEditingTransaction(transaction);
-    setFormData({
+    resetForm({
       account_id: transaction.account_id.toString(),
       date: transaction.date || format(new Date(), 'yyyy-MM-dd'),
       due_date: transaction.due_date || '',
@@ -323,19 +462,21 @@ export default function TransactionsPage() {
       tags: transaction.tags || '',
     });
     setOpenDialog(true);
+    // Trigger validation after reset to enable the Update button
+    setTimeout(() => trigger(), 0);
   };
 
-  const selectedType = categoriesData?.find((c: any) => c.id === parseInt(formData.type_id));
+  const selectedType = categoriesData?.find((c: any) => c.id === parseInt(formData.type_id || '0'));
   const isTransfer = selectedType?.category === 'transfer';
 
-  const sourceAccount = accountsData?.find((a: any) => a.id === parseInt(formData.account_id));
-  const destinationAccount = accountsData?.find((a: any) => a.id === parseInt(formData.transfer_account_id));
+  const sourceAccount = accountsData?.find((a: any) => a.id === parseInt(formData.account_id || '0'));
+  const destinationAccount = accountsData?.find((a: any) => a.id === parseInt(formData.transfer_account_id || '0'));
   const isDifferentCurrency = isTransfer && sourceAccount && destinationAccount &&
                               sourceAccount.currency !== destinationAccount.currency;
 
   const handleAutoCategorize = async () => {
     // Prioritize recipient for auto-categorization as it's more indicative of category
-    const textToAnalyze = formData.recipient.trim() || formData.description.trim();
+    const textToAnalyze = formData.recipient?.trim() || formData.description?.trim();
     if (!textToAnalyze) return;
 
     setAutoCategorizingDescription(true);
@@ -344,11 +485,10 @@ export default function TransactionsPage() {
       const data = response.data;
 
       if (data.type_id) {
-        setFormData({
-          ...formData,
-          type_id: data.type_id.toString(),
-          subtype_id: data.subtype_id ? data.subtype_id.toString() : '',
-        });
+        setValue('type_id', data.type_id.toString());
+        setValue('subtype_id', data.subtype_id ? data.subtype_id.toString() : '');
+        // Trigger validation after setting values
+        trigger(['type_id', 'subtype_id']);
       }
     } catch (error) {
       console.error('Auto-categorization failed:', error);
@@ -357,24 +497,24 @@ export default function TransactionsPage() {
     }
   };
 
-  const handleSubmit = () => {
+  const onSubmit = (formValues: TransactionFormData) => {
     const data = {
-      account_id: parseInt(formData.account_id),
-      date: formData.date,
-      due_date: formData.due_date || null,
-      amount: parseFloat(formData.amount),
-      type_id: parseInt(formData.type_id),
-      subtype_id: formData.subtype_id ? parseInt(formData.subtype_id) : null,
-      description: formData.description || null,
-      destinataire: formData.recipient || null,
-      transfer_account_id: isTransfer && formData.transfer_account_id
-        ? parseInt(formData.transfer_account_id)
+      account_id: parseInt(formValues.account_id),
+      date: formValues.date,
+      due_date: formValues.due_date || null,
+      amount: parseFloat(formValues.amount),
+      type_id: parseInt(formValues.type_id),
+      subtype_id: formValues.subtype_id ? parseInt(formValues.subtype_id) : null,
+      description: formValues.description || null,
+      destinataire: formValues.recipient || null,
+      transfer_account_id: isTransfer && formValues.transfer_account_id
+        ? parseInt(formValues.transfer_account_id)
         : null,
-      transfer_amount: isDifferentCurrency && formData.transfer_amount
-        ? parseFloat(formData.transfer_amount)
+      transfer_amount: isDifferentCurrency && formValues.transfer_amount
+        ? parseFloat(formValues.transfer_amount)
         : null,
       is_pending: false,
-      tags: formData.tags || null,
+      tags: formValues.tags || null,
     };
 
     if (editingTransaction) {
@@ -385,10 +525,7 @@ export default function TransactionsPage() {
   };
 
   const formatCurrency = (amount: number, currency: string = 'EUR') => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: currency,
-    }).format(Math.abs(amount));
+    return formatCurrencyUtil(Math.abs(amount), currency);
   };
 
   const formatTransactionDate = (dateString: string | null | undefined): string => {
@@ -444,12 +581,12 @@ export default function TransactionsPage() {
     URL.revokeObjectURL(url);
   };
 
-  // Calculate summary statistics
-  const totalIncome = transactionsData?.reduce((sum: number, t: any) =>
-    t.amount > 0 && t.category !== 'transfer' ? sum + t.amount : sum, 0) || 0;
-  const totalExpenses = Math.abs(transactionsData?.reduce((sum: number, t: any) =>
-    t.amount < 0 && t.category !== 'transfer' ? sum + t.amount : sum, 0) || 0);
-  const netChange = totalIncome - totalExpenses;
+  // Calculate summary statistics using precise decimal arithmetic
+  const incomeTransactions = (transactionsData || []).filter((t: any) => t.amount > 0 && t.category !== 'transfer');
+  const expenseTransactions = (transactionsData || []).filter((t: any) => t.amount < 0 && t.category !== 'transfer');
+  const totalIncome = sumMoney(incomeTransactions, (t: any) => t.amount);
+  const totalExpenses = absMoney(sumMoney(expenseTransactions, (t: any) => t.amount));
+  const netChange = subtractMoney(totalIncome, totalExpenses);
 
   // Pagination logic
   const totalTransactions = transactionsData?.length || 0;
@@ -463,11 +600,7 @@ export default function TransactionsPage() {
   };
 
   if (transactionsLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <TransactionsSkeleton />;
   }
 
   return (
@@ -481,7 +614,7 @@ export default function TransactionsPage() {
       </div>
 
       {/* Summary KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
         <KPICard
           title="Total Transactions"
           value={totalTransactions.toString()}
@@ -544,12 +677,12 @@ export default function TransactionsPage() {
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="space-y-1.5">
-              <Label>Account</Label>
+              <Label htmlFor="filter-account">Account</Label>
               <Select
                 value={filters.account_id}
                 onValueChange={(value) => setFilters({ ...filters, account_id: value })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="filter-account">
                   <SelectValue placeholder="All Accounts" />
                 </SelectTrigger>
                 <SelectContent>
@@ -563,12 +696,12 @@ export default function TransactionsPage() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Category</Label>
+              <Label htmlFor="filter-category">Category</Label>
               <Select
                 value={filters.category_id}
                 onValueChange={(value) => setFilters({ ...filters, category_id: value })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="filter-category">
                   <SelectValue placeholder="All Categories" />
                 </SelectTrigger>
                 <SelectContent>
@@ -582,8 +715,9 @@ export default function TransactionsPage() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Recipient</Label>
+              <Label htmlFor="filter-recipient">Recipient</Label>
               <Autocomplete
+                id="filter-recipient"
                 options={recipientsData || []}
                 value={filters.recipient}
                 onChange={(value) => setFilters({ ...filters, recipient: value })}
@@ -592,24 +726,27 @@ export default function TransactionsPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Start Date</Label>
+              <Label htmlFor="filter-start-date">Start Date</Label>
               <Input
+                id="filter-start-date"
                 type="date"
                 value={filters.start_date}
                 onChange={(e) => setFilters({ ...filters, start_date: e.target.value })}
               />
             </div>
             <div className="space-y-1.5">
-              <Label>End Date</Label>
+              <Label htmlFor="filter-end-date">End Date</Label>
               <Input
+                id="filter-end-date"
                 type="date"
                 value={filters.end_date}
                 onChange={(e) => setFilters({ ...filters, end_date: e.target.value })}
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Tag</Label>
+              <Label htmlFor="filter-tag">Tag</Label>
               <Autocomplete
+                id="filter-tag"
                 options={tagsData || []}
                 value={filters.tags}
                 onChange={(value) => setFilters({ ...filters, tags: value })}
@@ -927,192 +1064,249 @@ export default function TransactionsPage() {
         <DialogContent size="2xl" className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingTransaction ? 'Edit Transaction' : 'Add Transaction'}</DialogTitle>
+            <DialogDescription>
+              {editingTransaction ? 'Update the transaction details below.' : 'Enter the details for your new transaction.'}
+            </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
-            <div className="sm:col-span-2 space-y-1.5">
-              <Label>Account</Label>
-              <Select
-                value={formData.account_id}
-                onValueChange={(value) => setFormData({ ...formData, account_id: value })}
+          <form onSubmit={handleFormSubmit(onSubmit)}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
+              {/* Account Field */}
+              <FormField
+                label="Account"
+                required
+                error={errors.account_id?.message}
+                className="sm:col-span-2"
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select account" />
-                </SelectTrigger>
-                <SelectContent>
-                  {accountsData?.map((account: any) => (
-                    <SelectItem key={account.id} value={account.id.toString()}>
-                      {account.name} - {account.bank_name} ({account.currency})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Date</Label>
-              <Input
-                type="date"
-                value={formData.date}
-                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Due Date (Optional)</Label>
-              <Input
-                type="date"
-                value={formData.due_date}
-                onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Amount</Label>
-              <Input
-                type="number"
-                step="0.01"
-                value={formData.amount}
-                onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Category</Label>
-              <Select
-                value={formData.type_id}
-                onValueChange={(value) => setFormData({ ...formData, type_id: value, subtype_id: '' })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select category" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categoriesData?.map((category: any) => (
-                    <SelectItem key={category.id} value={category.id.toString()}>
-                      {category.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {formData.type_id && (
-              <div className="space-y-1.5">
-                <Label>Subcategory (Optional)</Label>
-                <Select
-                  value={formData.subtype_id}
-                  onValueChange={(value) => setFormData({ ...formData, subtype_id: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select subcategory" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categoriesData
-                      ?.find((c: any) => c.id === parseInt(formData.type_id))
-                      ?.subtypes?.map((subtype: any) => (
-                        <SelectItem key={subtype.id} value={subtype.id.toString()}>
-                          {subtype.name}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {isTransfer && (
-              <div className="sm:col-span-2 space-y-1.5">
-                <Label>Destination Account</Label>
-                <Select
-                  value={formData.transfer_account_id}
-                  onValueChange={(value) => setFormData({ ...formData, transfer_account_id: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select destination account" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {accountsData
-                      ?.filter((account: any) => account.id !== parseInt(formData.account_id))
-                      ?.map((account: any) => (
-                        <SelectItem key={account.id} value={account.id.toString()}>
-                          {account.name} - {account.bank_name} ({account.currency})
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {isDifferentCurrency && (
-              <div className="sm:col-span-2 space-y-1.5">
-                <Label>Amount in {destinationAccount?.currency || 'destination currency'}</Label>
+                <Controller
+                  name="account_id"
+                  control={control}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger className={errors.account_id ? 'border-error' : ''}>
+                        <SelectValue placeholder="Select account" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {accountsData?.map((account: any) => (
+                          <SelectItem key={account.id} value={account.id.toString()}>
+                            {account.name} - {account.bank_name} ({account.currency})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
+
+              {/* Date Field */}
+              <FormField label="Date" required error={errors.date?.message}>
+                <Input
+                  type="date"
+                  {...register('date')}
+                  className={errors.date ? 'border-error' : ''}
+                />
+              </FormField>
+
+              {/* Due Date Field */}
+              <FormField label="Due Date (Optional)">
+                <Input type="date" {...register('due_date')} />
+              </FormField>
+
+              {/* Amount Field */}
+              <FormField label="Amount" required error={errors.amount?.message}>
                 <Input
                   type="number"
                   step="0.01"
-                  value={formData.transfer_amount}
-                  onChange={(e) => setFormData({ ...formData, transfer_amount: e.target.value })}
-                  placeholder={`Amount in ${destinationAccount?.currency || ''}`}
+                  {...register('amount')}
+                  className={errors.amount ? 'border-error' : ''}
+                  placeholder="0.00"
                 />
-                <p className="text-xs text-foreground-muted">
-                  Source: {formData.amount} {sourceAccount?.currency || ''} → Destination: {destinationAccount?.currency || ''}
-                </p>
-              </div>
-            )}
-            {!isTransfer && (
-              <div className="sm:col-span-2 space-y-1.5">
-                <Label>Recipient</Label>
-                <div className="flex gap-2">
-                  <div className="flex-1">
-                    <Autocomplete
-                      options={recipientsData || []}
-                      value={formData.recipient}
-                      onChange={(value) => setFormData({ ...formData, recipient: value })}
-                      placeholder="Select or enter recipient"
-                      freeSolo
-                      helperText="Select from previous recipients or enter a new one"
-                    />
+              </FormField>
+
+              {/* Category Field */}
+              <FormField label="Category" required error={errors.type_id?.message}>
+                <Controller
+                  name="type_id"
+                  control={control}
+                  render={({ field }) => (
+                    <Select
+                      value={field.value}
+                      onValueChange={(value) => {
+                        field.onChange(value);
+                        setValue('subtype_id', ''); // Reset subcategory when category changes
+                      }}
+                    >
+                      <SelectTrigger className={errors.type_id ? 'border-error' : ''}>
+                        <SelectValue placeholder="Select category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categoriesData?.map((category: any) => (
+                          <SelectItem key={category.id} value={category.id.toString()}>
+                            {category.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
+
+              {/* Subcategory Field */}
+              {formData.type_id && (
+                <FormField label="Subcategory (Optional)">
+                  <Controller
+                    name="subtype_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value || ''} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select subcategory" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categoriesData
+                            ?.find((c: any) => c.id === parseInt(formData.type_id))
+                            ?.subtypes?.map((subtype: any) => (
+                              <SelectItem key={subtype.id} value={subtype.id.toString()}>
+                                {subtype.name}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+              )}
+
+              {/* Transfer Destination Account */}
+              {isTransfer && (
+                <FormField label="Destination Account" className="sm:col-span-2">
+                  <Controller
+                    name="transfer_account_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value || ''} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select destination account" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {accountsData
+                            ?.filter((account: any) => account.id !== parseInt(formData.account_id))
+                            ?.map((account: any) => (
+                              <SelectItem key={account.id} value={account.id.toString()}>
+                                {account.name} - {account.bank_name} ({account.currency})
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+              )}
+
+              {/* Cross-currency Transfer Amount */}
+              {isDifferentCurrency && (
+                <FormField
+                  label={`Amount in ${destinationAccount?.currency || 'destination currency'}`}
+                  className="sm:col-span-2"
+                  helperText={`Source: ${formData.amount} ${sourceAccount?.currency || ''} → Destination: ${destinationAccount?.currency || ''}`}
+                >
+                  <Input
+                    type="number"
+                    step="0.01"
+                    {...register('transfer_amount')}
+                    placeholder={`Amount in ${destinationAccount?.currency || ''}`}
+                  />
+                </FormField>
+              )}
+
+              {/* Recipient Field (non-transfer) */}
+              {!isTransfer && (
+                <div className="sm:col-span-2 space-y-1.5">
+                  <Label htmlFor="transaction-recipient">Recipient</Label>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <Controller
+                        name="recipient"
+                        control={control}
+                        render={({ field }) => (
+                          <Autocomplete
+                            id="transaction-recipient"
+                            options={recipientsData || []}
+                            value={field.value || ''}
+                            onChange={field.onChange}
+                            placeholder="Select or enter recipient"
+                            freeSolo
+                            helperText="Select from previous recipients or enter a new one"
+                          />
+                        )}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleAutoCategorize}
+                      disabled={!formData.recipient?.trim() || autoCategorizingDescription}
+                      className="shrink-0"
+                    >
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      {autoCategorizingDescription ? 'Analyzing...' : 'Auto-Categorize'}
+                    </Button>
                   </div>
-                  <Button
-                    variant="outline"
-                    onClick={handleAutoCategorize}
-                    disabled={!formData.recipient.trim() || autoCategorizingDescription}
-                    className="shrink-0"
-                  >
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    {autoCategorizingDescription ? 'Analyzing...' : 'Auto-Categorize'}
-                  </Button>
                 </div>
+              )}
+
+              {/* Description Field */}
+              <FormField label="Description (Optional)" htmlFor="transaction-description" className="sm:col-span-2">
+                <Input
+                  id="transaction-description"
+                  {...register('description')}
+                  placeholder="Additional notes or description"
+                />
+              </FormField>
+
+              {/* Tags Field */}
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label htmlFor="transaction-tags">Tags (Optional)</Label>
+                <Controller
+                  name="tags"
+                  control={control}
+                  render={({ field }) => (
+                    <Autocomplete
+                      id="transaction-tags"
+                      options={tagsData || []}
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      placeholder="Select or type tags (comma-separated)"
+                      freeSolo
+                      helperText="E.g., grocery, monthly, vacation"
+                    />
+                  )}
+                />
               </div>
-            )}
-            <div className="sm:col-span-2 space-y-1.5">
-              <Label>Description (Optional)</Label>
-              <Input
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Additional notes or description"
-              />
             </div>
-            <div className="sm:col-span-2 space-y-1.5">
-              <Label>Tags (Optional)</Label>
-              <Autocomplete
-                options={tagsData || []}
-                value={formData.tags}
-                onChange={(value) => setFormData({ ...formData, tags: value })}
-                placeholder="Select or type tags (comma-separated)"
-                freeSolo
-                helperText="E.g., grocery, monthly, vacation"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setOpenDialog(false);
-              setEditingTransaction(null);
-              resetFormCompletely();
-            }}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              loading={createMutation.isPending || updateMutation.isPending}
-            >
-              {editingTransaction
-                ? (updateMutation.isPending ? 'Updating...' : 'Update Transaction')
-                : (createMutation.isPending ? 'Adding...' : 'Add Transaction')
-              }
-            </Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setOpenDialog(false);
+                  setEditingTransaction(null);
+                  resetFormCompletely();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={!isValid}
+                loading={createMutation.isPending || updateMutation.isPending}
+              >
+                {editingTransaction
+                  ? (updateMutation.isPending ? 'Updating...' : 'Update Transaction')
+                  : (createMutation.isPending ? 'Adding...' : 'Add Transaction')
+                }
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -1121,6 +1315,9 @@ export default function TransactionsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this transaction from your records.
+            </DialogDescription>
           </DialogHeader>
           <div className="py-4">
             <p className="text-foreground-muted mb-4">

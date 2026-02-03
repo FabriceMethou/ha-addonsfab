@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns';
 import { accountsAPI, transactionsAPI, reportsAPI, budgetsAPI, envelopesAPI, settingsAPI } from '../services/api';
-import { Card, Badge, Progress, Spinner, Button } from '../components/shadcn';
+import { Card, Badge, Progress, Spinner, Button, DashboardSkeleton } from '../components/shadcn';
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
+import { absMoney, subtractMoney, percentChange } from '../lib/money';
 import {
   TrendingUp,
   TrendingDown,
@@ -45,38 +47,39 @@ function KPICard({ title, value, change, changeLabel, icon, iconColor, loading }
   const isNegative = change && change < 0;
 
   return (
-    <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+    <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
       {/* Background gradient effect */}
       <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
 
       <div className="relative">
-        <div className="flex items-start justify-between mb-4">
-          <div className={`p-3 rounded-lg ${iconColor} bg-opacity-10`}>
+        <div className="flex items-start justify-between mb-2 sm:mb-4">
+          <div className={`p-2 sm:p-3 rounded-lg ${iconColor} bg-opacity-10 [&>svg]:w-5 [&>svg]:h-5 sm:[&>svg]:w-6 sm:[&>svg]:h-6`}>
             {icon}
           </div>
           {change !== undefined && (
-            <div className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${isPositive ? 'bg-success/10 text-success' :
+            <div className={`flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md text-[10px] sm:text-xs font-medium ${isPositive ? 'bg-success/10 text-success' :
               isNegative ? 'bg-error/10 text-error' :
                 'bg-foreground-muted/10 text-foreground-muted'
               }`}>
-              {isPositive && <TrendingUp size={12} />}
-              {isNegative && <TrendingDown size={12} />}
-              {change > 0 ? '+' : ''}{change.toFixed(1)}%
+              {isPositive && <TrendingUp size={10} className="sm:w-3 sm:h-3" />}
+              {isNegative && <TrendingDown size={10} className="sm:w-3 sm:h-3" />}
+              <span className="hidden sm:inline">{change > 0 ? '+' : ''}{change.toFixed(1)}%</span>
+              <span className="sm:hidden">{change > 0 ? '+' : ''}{Math.round(change)}%</span>
             </div>
           )}
         </div>
 
         <div>
-          <p className="text-sm text-foreground-muted mb-1">{title}</p>
+          <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">{title}</p>
           {loading ? (
-            <div className="h-8 flex items-center">
-              <Spinner className="w-5 h-5" />
+            <div className="h-6 sm:h-8 flex items-center">
+              <Spinner className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           ) : (
-            <p className="text-2xl font-bold text-foreground">{value}</p>
+            <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{value}</p>
           )}
           {changeLabel && (
-            <p className="text-xs text-foreground-muted mt-1">{changeLabel}</p>
+            <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">{changeLabel}</p>
           )}
         </div>
       </div>
@@ -96,7 +99,7 @@ function AccountBalanceItem({ name, balance, currency }: AccountBalanceItemProps
       <div className="flex-1">
         <p className="text-sm font-medium text-foreground">{name}</p>
         <p className="text-lg font-bold text-foreground">
-          {new Intl.NumberFormat('de-DE', { style: 'currency', currency }).format(balance)}
+          {formatCurrencyUtil(balance, currency)}
         </p>
       </div>
     </div>
@@ -230,29 +233,22 @@ export default function DashboardPage() {
   });
 
   const formatCurrency = (amount: number, currency?: string) => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: currency || displayCurrency,
-    }).format(amount);
+    return formatCurrencyUtil(amount, currency || displayCurrency);
   };
 
-  // Helper function to safely calculate percentage change
+  // Helper function to safely calculate percentage change using precise decimal arithmetic
   const calculatePercentageChange = (current: number, previous: number): number => {
     if (previous === 0) {
       // If previous is 0 and current is positive, that's technically infinite growth
       // Return 0 to avoid NaN/Infinity in UI
       return current > 0 ? 100 : 0;
     }
-    return ((current - previous) / Math.abs(previous)) * 100;
+    return percentChange(current, previous);
   };
 
   // Loading state
   if (transactionsLoading || netWorthLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   // Error state
@@ -270,15 +266,15 @@ export default function DashboardPage() {
     );
   }
 
-  // Calculate KPIs
+  // Calculate KPIs using precise decimal arithmetic
   const netWorth = netWorthData?.net_worth ?? 0;
   const monthlyIncome = transactionsSummary?.total_income ?? 0;
-  const monthlyExpenses = Math.abs(transactionsSummary?.total_expense ?? 0);
-  const monthlySavings = monthlyIncome - monthlyExpenses;
+  const monthlyExpenses = absMoney(transactionsSummary?.total_expense ?? 0);
+  const monthlySavings = subtractMoney(monthlyIncome, monthlyExpenses);
 
   const previousIncome = previousTransactionsSummary?.total_income ?? 0;
-  const previousExpenses = Math.abs(previousTransactionsSummary?.total_expense ?? 0);
-  const previousSavings = previousIncome - previousExpenses;
+  const previousExpenses = absMoney(previousTransactionsSummary?.total_expense ?? 0);
+  const previousSavings = subtractMoney(previousIncome, previousExpenses);
 
   // Calculate deltas with safe percentage calculation
   const netWorthChange = netWorthTrend && netWorthTrend.length >= 2
@@ -292,11 +288,11 @@ export default function DashboardPage() {
   const expensesChange = calculatePercentageChange(monthlyExpenses, previousExpenses);
   const savingsChange = calculatePercentageChange(monthlySavings, previousSavings);
 
-  // Prepare chart data
+  // Prepare chart data using precise decimal arithmetic
   const incomeExpenseChartData = spendingTrends?.map((item: any) => ({
     month: item.month,
     income: item.total_income ?? 0,
-    expenses: Math.abs(item.total_expenses ?? 0),
+    expenses: absMoney(item.total_expenses ?? 0),
   })) ?? [];
 
   // Prepare sunburst data
@@ -304,7 +300,7 @@ export default function DashboardPage() {
     name: 'Expenses',
     children: spendingByCategory?.slice(0, 8).map((cat: any) => ({
       name: cat.category || 'Other',
-      value: Math.abs(cat.total ?? 0),
+      value: absMoney(cat.total ?? 0),
     })) ?? [],
   };
 
@@ -328,7 +324,7 @@ export default function DashboardPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
         <KPICard
           title="Net Worth"
           value={formatCurrency(netWorth)}

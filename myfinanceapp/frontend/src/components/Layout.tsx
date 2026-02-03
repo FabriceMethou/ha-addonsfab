@@ -129,19 +129,6 @@ export default function Layout() {
         })}
       </nav>
 
-      {/* Logout */}
-      <div className="p-3 border-t border-border">
-        <button
-          onClick={handleLogout}
-          title={collapsed ? 'Logout' : undefined}
-          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-foreground-muted hover:bg-error/10 hover:text-error transition-all ${
-            collapsed ? 'justify-center' : ''
-          }`}
-        >
-          <LogOut className="w-5 h-5 flex-shrink-0" />
-          {!collapsed && <span>Logout</span>}
-        </button>
-      </div>
     </div>
   );
 

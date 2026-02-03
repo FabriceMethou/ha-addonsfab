@@ -1,7 +1,10 @@
 // Budgets Page
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useToast } from '../contexts/ToastContext';
+import { budgetSchema, type BudgetFormData } from '../lib/validations';
 import {
   Plus,
   Pencil,
@@ -18,9 +21,7 @@ import {
   Button,
   Card,
   Input,
-  Label,
   Badge,
-  Spinner,
   Progress,
   Dialog,
   DialogContent,
@@ -39,9 +40,13 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  FormField,
+  BudgetsSkeleton,
 } from '../components/shadcn';
 import { budgetsAPI, categoriesAPI, currenciesAPI } from '../services/api';
 import { format } from 'date-fns';
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
+import { sumMoney, absMoney } from '../lib/money';
 
 export default function BudgetsPage() {
   const toast = useToast();
@@ -50,14 +55,27 @@ export default function BudgetsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
   const [currentYear] = useState(new Date().getFullYear());
   const [currentMonth] = useState(new Date().getMonth() + 1);
-  const [formData, setFormData] = useState({
-    type_id: '',
-    amount: '',
-    currency: 'EUR',
-    period: 'monthly',
-    start_date: format(new Date(), 'yyyy-MM-dd'),
-    end_date: '',
-    is_active: true,
+
+  // Budget form with validation
+  const {
+    control,
+    register,
+    handleSubmit: handleFormSubmit,
+    formState: { errors, isValid },
+    reset: resetForm,
+    trigger,
+  } = useForm<BudgetFormData>({
+    resolver: zodResolver(budgetSchema),
+    mode: 'onChange',
+    defaultValues: {
+      type_id: '',
+      amount: '',
+      currency: 'EUR',
+      period: 'monthly',
+      start_date: format(new Date(), 'yyyy-MM-dd'),
+      end_date: '',
+      is_active: true,
+    },
   });
 
   const queryClient = useQueryClient();
@@ -153,21 +171,9 @@ export default function BudgetsPage() {
     },
   });
 
-  const resetForm = () => {
-    setFormData({
-      type_id: '',
-      amount: '',
-      currency: 'EUR',
-      period: 'monthly',
-      start_date: format(new Date(), 'yyyy-MM-dd'),
-      end_date: '',
-      is_active: true,
-    });
-  };
-
   const handleEdit = (budget: any) => {
     setEditingBudget(budget);
-    setFormData({
+    resetForm({
       type_id: budget.type_id.toString(),
       amount: budget.amount.toString(),
       currency: budget.currency || 'EUR',
@@ -177,9 +183,11 @@ export default function BudgetsPage() {
       is_active: budget.is_active !== false,
     });
     setOpenDialog(true);
+    // Trigger validation after reset to enable the Update button
+    setTimeout(() => trigger(), 0);
   };
 
-  const handleSubmit = () => {
+  const onSubmit = (formData: BudgetFormData) => {
     const data = {
       type_id: parseInt(formData.type_id),
       amount: parseFloat(formData.amount),
@@ -198,10 +206,7 @@ export default function BudgetsPage() {
   };
 
   const formatCurrency = (amount: number, currency?: string) => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: currency || displayCurrency,
-    }).format(amount);
+    return formatCurrencyUtil(amount, currency || displayCurrency);
   };
 
   const calculateProgress = (spent: number, budget: number) => {
@@ -217,19 +222,14 @@ export default function BudgetsPage() {
   };
 
   if (budgetsLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <BudgetsSkeleton />;
   }
 
-  // Calculate KPI metrics
+  // Calculate KPI metrics using precise decimal arithmetic
   const totalBudgets = budgetsData?.length || 0;
   const activeBudgets = budgetsData?.filter((b: any) => b.is_active).length || 0;
-  const totalMonthlyBudget = budgetsData
-    ?.filter((b: any) => b.period === 'monthly' && b.is_active)
-    .reduce((sum: number, b: any) => sum + b.amount, 0) || 0;
+  const monthlyActiveBudgets = (budgetsData || []).filter((b: any) => b.period === 'monthly' && b.is_active);
+  const totalMonthlyBudget = sumMoney(monthlyActiveBudgets, (b: any) => b.amount);
   const budgetsOnTrack = vsActualData?.filter((item: any) => item.actual <= item.budget).length || 0;
   const totalTrackedBudgets = vsActualData?.length || 0;
 
@@ -355,7 +355,7 @@ export default function BudgetsPage() {
                       )}
                       {remaining >= 0
                         ? `${formatCurrency(remaining)} left`
-                        : `${formatCurrency(Math.abs(remaining))} over`}
+                        : `${formatCurrency(absMoney(remaining))} over`}
                     </Badge>
                   </div>
                   <div className="flex justify-between text-sm text-foreground-muted mb-2">
@@ -470,126 +470,136 @@ export default function BudgetsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label>Category</Label>
-              <Select value={formData.type_id} onValueChange={(value) => setFormData({ ...formData, type_id: value })}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select category" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categoriesData
-                    ?.filter((cat: any) => cat.category === 'expense')
-                    ?.map((category: any) => (
-                      <SelectItem key={category.id} value={category.id.toString()}>
-                        {category.name}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+          <form onSubmit={handleFormSubmit(onSubmit)}>
+            <div className="space-y-4 py-4">
+              <FormField label="Category" error={errors.type_id?.message} required>
+                <Controller
+                  name="type_id"
+                  control={control}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categoriesData
+                          ?.filter((cat: any) => cat.category === 'expense')
+                          ?.map((category: any) => (
+                            <SelectItem key={category.id} value={category.id.toString()}>
+                              {category.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
+
+              <div className="grid grid-cols-3 gap-4">
+                <FormField label="Budget Amount" error={errors.amount?.message} required>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    {...register('amount')}
+                  />
+                </FormField>
+                <FormField label="Currency" error={errors.currency?.message} required>
+                  <Controller
+                    name="currency"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {currenciesData?.map((currency: any) => (
+                            <SelectItem key={currency.code} value={currency.code}>
+                              {currency.code} ({currency.symbol})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+                <FormField label="Period" error={errors.period?.message} required>
+                  <Controller
+                    name="period"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                          <SelectItem value="yearly">Yearly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Start Date" error={errors.start_date?.message} required>
+                  <Input type="date" {...register('start_date')} />
+                </FormField>
+                <FormField label="End Date (Optional)" helperText="Leave empty for ongoing budget">
+                  <Input type="date" {...register('end_date')} />
+                </FormField>
+              </div>
+
+              <FormField label="Status">
+                <Controller
+                  name="is_active"
+                  control={control}
+                  render={({ field }) => (
+                    <Select
+                      value={field.value ? 'true' : 'false'}
+                      onValueChange={(value) => field.onChange(value === 'true')}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="true">Active</SelectItem>
+                        <SelectItem value="false">Inactive</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="amount">Budget Amount</Label>
-                <Input
-                  id="amount"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={formData.amount}
-                  onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Currency</Label>
-                <Select value={formData.currency} onValueChange={(value) => setFormData({ ...formData, currency: value })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {currenciesData?.map((currency: any) => (
-                      <SelectItem key={currency.code} value={currency.code}>
-                        {currency.code} ({currency.symbol})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Period</Label>
-                <Select value={formData.period} onValueChange={(value) => setFormData({ ...formData, period: value })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                    <SelectItem value="yearly">Yearly</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="startDate">Start Date</Label>
-                <Input
-                  id="startDate"
-                  type="date"
-                  value={formData.start_date}
-                  onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="endDate">End Date (Optional)</Label>
-                <Input
-                  id="endDate"
-                  type="date"
-                  value={formData.end_date}
-                  onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-                />
-                <p className="text-xs text-foreground-muted">Leave empty for ongoing budget</p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Status</Label>
-              <Select
-                value={formData.is_active ? 'true' : 'false'}
-                onValueChange={(value) => setFormData({ ...formData, is_active: value === 'true' })}
+            <DialogFooter>
+              <Button
+                variant="outline"
+                type="button"
+                onClick={() => {
+                  setOpenDialog(false);
+                  setEditingBudget(null);
+                  resetForm();
+                }}
               >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="true">Active</SelectItem>
-                  <SelectItem value="false">Inactive</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setOpenDialog(false);
-                setEditingBudget(null);
-                resetForm();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button onClick={handleSubmit} disabled={createMutation.isPending || updateMutation.isPending}>
-              {editingBudget
-                ? updateMutation.isPending
-                  ? 'Updating...'
-                  : 'Update Budget'
-                : createMutation.isPending
-                  ? 'Adding...'
-                  : 'Add Budget'}
-            </Button>
-          </DialogFooter>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={!isValid || createMutation.isPending || updateMutation.isPending}
+              >
+                {editingBudget
+                  ? updateMutation.isPending
+                    ? 'Updating...'
+                    : 'Update Budget'
+                  : createMutation.isPending
+                    ? 'Adding...'
+                    : 'Add Budget'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -598,6 +608,9 @@ export default function BudgetsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this budget.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4 space-y-4">

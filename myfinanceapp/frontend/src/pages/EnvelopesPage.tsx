@@ -1,6 +1,9 @@
 // Envelopes Page - Savings Goals with Progress Tracking
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { envelopeSchema, type EnvelopeFormData } from '../lib/validations';
 import {
   Plus,
   Pencil,
@@ -44,20 +47,17 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  FormField,
+  EnvelopesSkeleton,
 } from '../components/shadcn';
 import { envelopesAPI, accountsAPI } from '../services/api';
+import { useToast } from '../contexts/ToastContext';
 import { format, parseISO, isPast, differenceInDays } from 'date-fns';
-
-interface EnvelopeFormData {
-  name: string;
-  target_amount: string;
-  deadline: string;
-  description: string;
-  tags: string;
-  color: string;
-}
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
+import { sumMoney, absMoney, negateMoney } from '../lib/money';
 
 export default function EnvelopesPage() {
+  const toast = useToast();
   const [openDialog, setOpenDialog] = useState(false);
   const [openTransactionDialog, setOpenTransactionDialog] = useState(false);
   const [editingEnvelope, setEditingEnvelope] = useState<any>(null);
@@ -73,14 +73,29 @@ export default function EnvelopesPage() {
     account_id: '',
   });
 
-  const [formData, setFormData] = useState<EnvelopeFormData>({
-    name: '',
-    target_amount: '',
-    deadline: '',
-    description: '',
-    tags: '',
-    color: '#4ECDC4',
+  // Envelope form with validation
+  const {
+    register,
+    handleSubmit: handleFormSubmit,
+    formState: { errors, isValid },
+    reset: resetForm,
+    watch,
+    trigger,
+  } = useForm<EnvelopeFormData>({
+    resolver: zodResolver(envelopeSchema),
+    mode: 'onChange',
+    defaultValues: {
+      name: '',
+      target_amount: '',
+      deadline: '',
+      description: '',
+      tags: '',
+      color: '#4ECDC4',
+    },
   });
+
+  // Watch color value for the color picker
+  const colorValue = watch('color');
 
   const queryClient = useQueryClient();
 
@@ -109,6 +124,12 @@ export default function EnvelopesPage() {
       queryClient.invalidateQueries({ queryKey: ['envelopes'] });
       setOpenDialog(false);
       resetForm();
+      toast.success('Envelope created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create envelope:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create envelope: ${errorMessage}`);
     },
   });
 
@@ -120,6 +141,12 @@ export default function EnvelopesPage() {
       setOpenDialog(false);
       resetForm();
       setEditingEnvelope(null);
+      toast.success('Envelope updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update envelope:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update envelope: ${errorMessage}`);
     },
   });
 
@@ -129,6 +156,12 @@ export default function EnvelopesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['envelopes'] });
       setDeleteConfirm(null);
+      toast.success('Envelope deactivated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to deactivate envelope:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to deactivate envelope: ${errorMessage}`);
     },
   });
 
@@ -138,6 +171,12 @@ export default function EnvelopesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['envelopes'] });
       setPermanentDeleteConfirm(null);
+      toast.success('Envelope permanently deleted!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to delete envelope:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to delete envelope: ${errorMessage}`);
     },
   });
 
@@ -146,6 +185,12 @@ export default function EnvelopesPage() {
     mutationFn: (id: number) => envelopesAPI.reactivate(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['envelopes'] });
+      toast.success('Envelope reactivated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to reactivate envelope:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to reactivate envelope: ${errorMessage}`);
     },
   });
 
@@ -157,23 +202,18 @@ export default function EnvelopesPage() {
       queryClient.invalidateQueries({ queryKey: ['envelope-transactions', selectedEnvelope?.id] });
       setOpenTransactionDialog(false);
       setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '' });
+      toast.success('Transaction added successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to add transaction:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to add transaction: ${errorMessage}`);
     },
   });
 
-  const resetForm = () => {
-    setFormData({
-      name: '',
-      target_amount: '',
-      deadline: '',
-      description: '',
-      tags: '',
-      color: '#4ECDC4',
-    });
-  };
-
   const handleEdit = (envelope: any) => {
     setEditingEnvelope(envelope);
-    setFormData({
+    resetForm({
       name: envelope.name,
       target_amount: envelope.target_amount.toString(),
       deadline: envelope.deadline || '',
@@ -182,9 +222,11 @@ export default function EnvelopesPage() {
       color: envelope.color || '#4ECDC4',
     });
     setOpenDialog(true);
+    // Trigger validation after reset to enable the Update button
+    setTimeout(() => trigger(), 0);
   };
 
-  const handleSubmit = () => {
+  const onSubmit = (formData: EnvelopeFormData) => {
     const data = {
       name: formData.name,
       target_amount: parseFloat(formData.target_amount),
@@ -206,7 +248,7 @@ export default function EnvelopesPage() {
       const amount = parseFloat(transactionForm.amount);
       const data: any = {
         envelope_id: selectedEnvelope.id,
-        amount: transactionType === 'withdraw' ? -Math.abs(amount) : Math.abs(amount),
+        amount: transactionType === 'withdraw' ? negateMoney(absMoney(amount)) : absMoney(amount),
         description: transactionForm.description || (transactionType === 'withdraw' ? 'Withdrawal' : 'Deposit'),
         date: transactionForm.transaction_date,  // API expects 'date' field
       };
@@ -235,10 +277,7 @@ export default function EnvelopesPage() {
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: 'EUR',
-    }).format(amount);
+    return formatCurrencyUtil(amount, 'EUR');
   };
 
   const getProgressVariant = (percentage: number): 'error' | 'warning' | 'info' | 'success' => {
@@ -302,11 +341,7 @@ export default function EnvelopesPage() {
   };
 
   if (envelopesLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <EnvelopesSkeleton />;
   }
 
   if (envelopesError) {
@@ -320,9 +355,9 @@ export default function EnvelopesPage() {
     );
   }
 
-  // Calculate summary statistics
-  const totalTarget = envelopesData?.reduce((sum: number, env: any) => sum + env.target_amount, 0) || 0;
-  const totalCurrent = envelopesData?.reduce((sum: number, env: any) => sum + env.current_amount, 0) || 0;
+  // Calculate summary statistics using precise decimal arithmetic
+  const totalTarget = sumMoney(envelopesData || [], (env: any) => env.target_amount);
+  const totalCurrent = sumMoney(envelopesData || [], (env: any) => env.current_amount);
   const completedGoals = envelopesData?.filter((env: any) => env.current_amount >= env.target_amount).length || 0;
 
   return (
@@ -614,92 +649,76 @@ export default function EnvelopesPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="name">Name</Label>
-              <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="e.g., Emergency Fund, Vacation"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="target">Target Amount</Label>
+          <form onSubmit={handleFormSubmit(onSubmit)}>
+            <div className="space-y-4 py-4">
+              <FormField label="Name" error={errors.name?.message} required>
                 <Input
-                  id="target"
-                  type="number"
-                  value={formData.target_amount}
-                  onChange={(e) => setFormData({ ...formData, target_amount: e.target.value })}
-                  placeholder="0.00"
+                  {...register('name')}
+                  placeholder="e.g., Emergency Fund, Vacation"
                 />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="deadline">Deadline (Optional)</Label>
-                <Input
-                  id="deadline"
-                  type="date"
-                  value={formData.deadline}
-                  onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
-                />
-              </div>
-            </div>
+              </FormField>
 
-            <div className="space-y-2">
-              <Label htmlFor="description">Description (Optional)</Label>
-              <Textarea
-                id="description"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="What are you saving for?"
-                rows={2}
-              />
-            </div>
-
-            <div className="grid grid-cols-3 gap-4">
-              <div className="col-span-2 space-y-2">
-                <Label htmlFor="tags">Tags (comma-separated)</Label>
-                <Input
-                  id="tags"
-                  value={formData.tags}
-                  onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-                  placeholder="e.g., savings, emergency, short-term"
-                />
-                <p className="text-xs text-foreground-muted">Add tags to organize your envelopes</p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="color">Color</Label>
-                <div className="flex items-center gap-2">
-                  <input
-                    id="color"
-                    type="color"
-                    value={formData.color}
-                    onChange={(e) => setFormData({ ...formData, color: e.target.value })}
-                    className="w-10 h-10 rounded cursor-pointer border border-border"
-                  />
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Target Amount" error={errors.target_amount?.message} required>
                   <Input
-                    value={formData.color}
-                    onChange={(e) => setFormData({ ...formData, color: e.target.value })}
-                    className="flex-1"
+                    type="number"
+                    step="0.01"
+                    {...register('target_amount')}
+                    placeholder="0.00"
                   />
-                </div>
+                </FormField>
+                <FormField label="Deadline (Optional)">
+                  <Input
+                    type="date"
+                    {...register('deadline')}
+                  />
+                </FormField>
+              </div>
+
+              <FormField label="Description (Optional)">
+                <Textarea
+                  {...register('description')}
+                  placeholder="What are you saving for?"
+                  rows={2}
+                />
+              </FormField>
+
+              <div className="grid grid-cols-3 gap-4">
+                <FormField label="Tags (comma-separated)" helperText="Add tags to organize your envelopes" className="col-span-2">
+                  <Input
+                    {...register('tags')}
+                    placeholder="e.g., savings, emergency, short-term"
+                  />
+                </FormField>
+                <FormField label="Color">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      {...register('color')}
+                      className="w-10 h-10 rounded cursor-pointer border border-border"
+                    />
+                    <Input
+                      value={colorValue}
+                      {...register('color')}
+                      className="flex-1"
+                    />
+                  </div>
+                </FormField>
               </div>
             </div>
-          </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpenDialog(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={createMutation.isPending || updateMutation.isPending || !formData.name || !formData.target_amount}
-            >
-              {editingEnvelope ? 'Update' : 'Create'}
-            </Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setOpenDialog(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={!isValid || createMutation.isPending || updateMutation.isPending}
+              >
+                {editingEnvelope ? 'Update' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -710,6 +729,11 @@ export default function EnvelopesPage() {
             <DialogTitle>
               {transactionType === 'withdraw' ? 'Withdraw from' : 'Add Funds to'} {selectedEnvelope?.name}
             </DialogTitle>
+            <DialogDescription>
+              {transactionType === 'withdraw'
+                ? 'Withdraw funds from this envelope allocation.'
+                : 'Add funds to this envelope allocation.'}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4 space-y-4">
@@ -725,6 +749,7 @@ export default function EnvelopesPage() {
               <Input
                 id="amount"
                 type="number"
+                step="0.01"
                 value={transactionForm.amount}
                 onChange={(e) => setTransactionForm({ ...transactionForm, amount: e.target.value })}
                 min={0}
@@ -814,6 +839,9 @@ export default function EnvelopesPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Deactivate Envelope</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deactivation of this envelope.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4">
@@ -846,6 +874,9 @@ export default function EnvelopesPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Permanently Delete Envelope</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm permanent deletion of this envelope and all associated transactions.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4">
@@ -890,10 +921,7 @@ function EnvelopeTransactions({ envelopeId }: { envelopeId: number }) {
   });
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: 'EUR',
-    }).format(amount);
+    return formatCurrencyUtil(amount, 'EUR');
   };
 
   if (isLoading) {

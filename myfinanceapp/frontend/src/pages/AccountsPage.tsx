@@ -1,7 +1,19 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { accountsAPI, currenciesAPI, settingsAPI } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
+import {
+  accountSchema,
+  bankSchema,
+  ownerSchema,
+  type AccountFormData,
+  type BankFormData,
+  type OwnerFormData,
+} from '../lib/validations';
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
+import { sumMoney, roundMoney } from '../lib/money';
 import {
   Card,
   Button,
@@ -14,6 +26,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
   Table,
   TableBody,
@@ -26,6 +39,8 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  FormField,
+  AccountsSkeleton,
 } from '../components/shadcn';
 import {
   Plus,
@@ -65,28 +80,28 @@ interface KPICardProps {
 
 function KPICard({ title, value, subtitle, icon, iconColor, loading }: KPICardProps) {
   return (
-    <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+    <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
       {/* Background gradient effect */}
       <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
 
       <div className="relative">
-        <div className="flex items-start justify-between mb-4">
-          <div className={`p-3 rounded-lg ${iconColor} bg-opacity-10`}>
+        <div className="flex items-start justify-between mb-2 sm:mb-4">
+          <div className={`p-2 sm:p-3 rounded-lg ${iconColor} bg-opacity-10 [&>svg]:w-5 [&>svg]:h-5 sm:[&>svg]:w-6 sm:[&>svg]:h-6`}>
             {icon}
           </div>
         </div>
 
         <div>
-          <p className="text-sm text-foreground-muted mb-1">{title}</p>
+          <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">{title}</p>
           {loading ? (
-            <div className="h-8 flex items-center">
-              <Spinner className="w-5 h-5" />
+            <div className="h-6 sm:h-8 flex items-center">
+              <Spinner className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           ) : (
             <>
-              <p className="text-2xl font-bold text-foreground">{value}</p>
+              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{value}</p>
               {subtitle && (
-                <p className="text-xs text-foreground-muted mt-1">{subtitle}</p>
+                <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">{subtitle}</p>
               )}
             </>
           )}
@@ -170,20 +185,58 @@ export default function AccountsPage() {
     },
   });
 
-  const [accountForm, setAccountForm] = useState({
-    name: '',
-    bank_id: '',
-    owner_id: '',
-    account_type: '',
-    balance: '',
-    currency: 'EUR',
-    opening_date: '',
-    opening_balance: '',
-    linked_account_id: '',
+  // Account form with validation
+  const {
+    control: accountControl,
+    register: accountRegister,
+    handleSubmit: handleAccountSubmit,
+    formState: { errors: accountErrors, isValid: isAccountValid },
+    reset: resetAccountForm,
+    watch: watchAccount,
+    setValue: setAccountValue,
+    trigger: triggerAccountForm,
+  } = useForm<AccountFormData>({
+    resolver: zodResolver(accountSchema),
+    mode: 'onChange',
+    defaultValues: {
+      name: '',
+      bank_id: '',
+      owner_id: '',
+      account_type: '',
+      balance: '',
+      currency: 'EUR',
+      opening_date: '',
+      opening_balance: '',
+      linked_account_id: '',
+    },
   });
 
-  const [bankForm, setBankForm] = useState({ name: '' });
-  const [ownerForm, setOwnerForm] = useState({ name: '' });
+  // Bank form with validation
+  const {
+    register: bankRegister,
+    handleSubmit: handleBankSubmit,
+    formState: { errors: bankErrors, isValid: isBankValid },
+    reset: resetBankForm,
+    trigger: triggerBankForm,
+  } = useForm<BankFormData>({
+    resolver: zodResolver(bankSchema),
+    mode: 'onChange',
+    defaultValues: { name: '' },
+  });
+
+  // Owner form with validation
+  const {
+    register: ownerRegister,
+    handleSubmit: handleOwnerSubmit,
+    formState: { errors: ownerErrors, isValid: isOwnerValid },
+    reset: resetOwnerForm,
+    trigger: triggerOwnerForm,
+  } = useForm<OwnerFormData>({
+    resolver: zodResolver(ownerSchema),
+    mode: 'onChange',
+    defaultValues: { name: '' },
+  });
+
   const [editingBank, setEditingBank] = useState<any>(null);
   const [editingOwner, setEditingOwner] = useState<any>(null);
   const [deleteBankConfirm, setDeleteBankConfirm] = useState<any>(null);
@@ -225,36 +278,47 @@ export default function AccountsPage() {
 
   const deleteAccountMutation = useMutation({
     mutationFn: (id: number) => accountsAPI.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['accounts'] });
-      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
+    onMutate: async (deletedId: number) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['accounts'] });
+
+      // Snapshot the previous value
+      const previousAccounts = queryClient.getQueryData(['accounts']);
+
+      // Optimistically remove from the list
+      queryClient.setQueryData(['accounts'], (old: any[] | undefined) => {
+        if (!old) return old;
+        return old.filter((a: any) => a.id !== deletedId);
+      });
+
+      // Close UI elements immediately for better UX
       setDeleteConfirm(null);
-      toast.success('Account deleted successfully!');
+
+      // Return context with the previous value
+      return { previousAccounts };
     },
-    onError: (error: any) => {
+    onError: (error: any, _deletedId, context) => {
+      // Rollback to previous state on error
+      if (context?.previousAccounts) {
+        queryClient.setQueryData(['accounts'], context.previousAccounts);
+      }
       console.error('Failed to delete account:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
       toast.error(`Failed to delete account: ${errorMessage}`);
     },
+    onSuccess: () => {
+      toast.success('Account deleted successfully!');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure data consistency
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
+    },
   });
-
-  const resetAccountForm = () => {
-    setAccountForm({
-      name: '',
-      bank_id: '',
-      owner_id: '',
-      account_type: '',
-      balance: '',
-      currency: 'EUR',
-      opening_date: '',
-      opening_balance: '',
-      linked_account_id: '',
-    });
-  };
 
   const handleEditAccount = (account: any) => {
     setEditingItem(account);
-    setAccountForm({
+    resetAccountForm({
       name: account.name || '',
       bank_id: account.bank_id.toString(),
       owner_id: account.owner_id.toString(),
@@ -266,22 +330,23 @@ export default function AccountsPage() {
       linked_account_id: account.linked_account_id?.toString() || '',
     });
     setAccountDialog(true);
+    setTimeout(() => triggerAccountForm(), 0);
   };
 
-  const handleSaveAccount = () => {
-    const name = accountForm.name.trim();
+  const onAccountSubmit = (formData: AccountFormData) => {
+    const name = formData.name?.trim() || '';
     const data: any = {
       name,
-      bank_id: parseInt(accountForm.bank_id),
-      owner_id: parseInt(accountForm.owner_id),
-      account_type: accountForm.account_type,
-      balance: parseFloat(accountForm.balance),
-      currency: accountForm.currency,
+      bank_id: parseInt(formData.bank_id),
+      owner_id: parseInt(formData.owner_id),
+      account_type: formData.account_type,
+      balance: parseFloat(formData.balance),
+      currency: formData.currency,
     };
 
-    if (accountForm.opening_date) data.opening_date = accountForm.opening_date;
-    if (accountForm.opening_balance) data.opening_balance = parseFloat(accountForm.opening_balance);
-    if (accountForm.linked_account_id) data.linked_account_id = parseInt(accountForm.linked_account_id);
+    if (formData.opening_date) data.opening_date = formData.opening_date;
+    if (formData.opening_balance) data.opening_balance = parseFloat(formData.opening_balance);
+    if (formData.linked_account_id) data.linked_account_id = parseInt(formData.linked_account_id);
 
     if (editingItem) {
       updateAccountMutation.mutate({ id: editingItem.id, data });
@@ -296,9 +361,14 @@ export default function AccountsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['banks'] });
       setBankDialog(false);
-      setBankForm({ name: '' });
+      resetBankForm();
       setEditingBank(null);
       toast.success('Bank created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create bank:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create bank: ${errorMessage}`);
     },
   });
 
@@ -308,23 +378,53 @@ export default function AccountsPage() {
       queryClient.invalidateQueries({ queryKey: ['banks'] });
       queryClient.invalidateQueries({ queryKey: ['accounts'] });
       setBankDialog(false);
-      setBankForm({ name: '' });
+      resetBankForm();
       setEditingBank(null);
       toast.success('Bank updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update bank:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update bank: ${errorMessage}`);
     },
   });
 
   const deleteBankMutation = useMutation({
     mutationFn: (id: number) => accountsAPI.deleteBank(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['banks'] });
+    onMutate: async (deletedId: number) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['banks'] });
+
+      // Snapshot the previous value
+      const previousBanks = queryClient.getQueryData(['banks']);
+
+      // Optimistically remove from the list
+      queryClient.setQueryData(['banks'], (old: any[] | undefined) => {
+        if (!old) return old;
+        return old.filter((b: any) => b.id !== deletedId);
+      });
+
+      // Close UI elements immediately for better UX
       setDeleteBankConfirm(null);
-      toast.success('Bank deleted successfully!');
+
+      // Return context with the previous value
+      return { previousBanks };
     },
-    onError: (error: any) => {
+    onError: (error: any, _deletedId, context) => {
+      // Rollback to previous state on error
+      if (context?.previousBanks) {
+        queryClient.setQueryData(['banks'], context.previousBanks);
+      }
       console.error('Failed to delete bank:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
       toast.error(`Failed to delete bank: ${errorMessage}`);
+    },
+    onSuccess: () => {
+      toast.success('Bank deleted successfully!');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure data consistency
+      queryClient.invalidateQueries({ queryKey: ['banks'] });
     },
   });
 
@@ -335,9 +435,14 @@ export default function AccountsPage() {
       queryClient.invalidateQueries({ queryKey: ['owners'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
       setOwnerDialog(false);
-      setOwnerForm({ name: '' });
+      resetOwnerForm();
       setEditingOwner(null);
       toast.success('Owner created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create owner:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create owner: ${errorMessage}`);
     },
   });
 
@@ -348,52 +453,84 @@ export default function AccountsPage() {
       queryClient.invalidateQueries({ queryKey: ['accounts'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
       setOwnerDialog(false);
-      setOwnerForm({ name: '' });
+      resetOwnerForm();
       setEditingOwner(null);
       toast.success('Owner updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update owner:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update owner: ${errorMessage}`);
     },
   });
 
   const deleteOwnerMutation = useMutation({
     mutationFn: (id: number) => accountsAPI.deleteOwner(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['owners'] });
-      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
+    onMutate: async (deletedId: number) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['owners'] });
+
+      // Snapshot the previous value
+      const previousOwners = queryClient.getQueryData(['owners']);
+
+      // Optimistically remove from the list
+      queryClient.setQueryData(['owners'], (old: any[] | undefined) => {
+        if (!old) return old;
+        return old.filter((o: any) => o.id !== deletedId);
+      });
+
+      // Close UI elements immediately for better UX
       setDeleteOwnerConfirm(null);
-      toast.success('Owner deleted successfully!');
+
+      // Return context with the previous value
+      return { previousOwners };
     },
-    onError: (error: any) => {
+    onError: (error: any, _deletedId, context) => {
+      // Rollback to previous state on error
+      if (context?.previousOwners) {
+        queryClient.setQueryData(['owners'], context.previousOwners);
+      }
       console.error('Failed to delete owner:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
       toast.error(`Failed to delete owner: ${errorMessage}`);
+    },
+    onSuccess: () => {
+      toast.success('Owner deleted successfully!');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure data consistency
+      queryClient.invalidateQueries({ queryKey: ['owners'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
     },
   });
 
   const handleEditBank = (bank: any) => {
     setEditingBank(bank);
-    setBankForm({ name: bank.name });
+    resetBankForm({ name: bank.name });
     setBankDialog(true);
+    setTimeout(() => triggerBankForm(), 0);
   };
 
-  const handleSaveBank = () => {
+  const onBankSubmit = (formData: BankFormData) => {
     if (editingBank) {
-      updateBankMutation.mutate({ id: editingBank.id, data: bankForm });
+      updateBankMutation.mutate({ id: editingBank.id, data: formData });
     } else {
-      createBankMutation.mutate(bankForm);
+      createBankMutation.mutate(formData);
     }
   };
 
   const handleEditOwner = (owner: any) => {
     setEditingOwner(owner);
-    setOwnerForm({ name: owner.name });
+    resetOwnerForm({ name: owner.name });
     setOwnerDialog(true);
+    setTimeout(() => triggerOwnerForm(), 0);
   };
 
-  const handleSaveOwner = () => {
+  const onOwnerSubmit = (formData: OwnerFormData) => {
     if (editingOwner) {
-      updateOwnerMutation.mutate({ id: editingOwner.id, data: ownerForm });
+      updateOwnerMutation.mutate({ id: editingOwner.id, data: formData });
     } else {
-      createOwnerMutation.mutate(ownerForm);
+      createOwnerMutation.mutate(formData);
     }
   };
 
@@ -488,10 +625,7 @@ export default function AccountsPage() {
   };
 
   const formatCurrency = (amount: number, currency: string = 'EUR') => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: currency,
-    }).format(amount);
+    return formatCurrencyUtil(amount, currency);
   };
 
   // Format balance to 2 decimal places (except for investment accounts)
@@ -501,37 +635,32 @@ export default function AccountsPage() {
     if (isNaN(num)) return value;
     // Investment accounts can have more precision
     if (isInvestment) return value;
-    // Round to 2 decimal places
-    return num.toFixed(2);
+    // Round to 2 decimal places using precise decimal arithmetic
+    return roundMoney(num).toString();
   };
 
-  // Handle balance change with decimal limit
-  const handleBalanceChange = (value: string, field: 'balance' | 'opening_balance') => {
-    // Allow typing (don't format on every keystroke)
-    setAccountForm({ ...accountForm, [field]: value });
-  };
+  // Watch account form values
+  const accountFormValues = watchAccount();
 
   // Format balance on blur (when user leaves field)
   const handleBalanceBlur = (field: 'balance' | 'opening_balance') => {
-    const value = accountForm[field];
+    const value = accountFormValues[field];
     if (!value) return;
-    const isInvestment = accountForm.account_type === 'investment';
+    const isInvestment = accountFormValues.account_type === 'investment';
     const formatted = formatBalanceInput(value, isInvestment);
-    setAccountForm({ ...accountForm, [field]: formatted });
+    setAccountValue(field, formatted);
   };
 
-  // Calculate summary metrics
-  const totalBalance = accountsData?.reduce((sum: number, a: any) => sum + a.balance, 0) || 0;
+  // Calculate summary metrics using precise decimal arithmetic
+  // Use summaryData for total balance - it's already converted to display currency by the backend
+  const displayCurrency = settings?.display_currency || 'EUR';
+  const totalBalance = sumMoney(summaryData || [], (owner: any) => owner.total_balance);
   const totalAccounts = accountsData?.length || 0;
   const totalBanks = banksData?.length || 0;
   const totalOwners = ownersData?.length || 0;
 
   if (accountsLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <AccountsSkeleton />;
   }
 
   const tabs = [
@@ -551,11 +680,11 @@ export default function AccountsPage() {
       </div>
 
       {/* KPI Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
         <KPICard
           title="Total Balance"
-          value={formatCurrency(totalBalance)}
-          subtitle="All accounts combined"
+          value={formatCurrency(totalBalance, displayCurrency)}
+          subtitle={`All accounts in ${displayCurrency}`}
           icon={<Wallet size={24} className="text-blue-500" />}
           iconColor="bg-blue-500"
           loading={accountsLoading}
@@ -613,10 +742,11 @@ export default function AccountsPage() {
                 <button
                   key={index}
                   onClick={() => setTabValue(index)}
-                  className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition-all ${tabValue === index
+                  className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition-all ${
+                    tabValue === index
                       ? 'border-primary text-primary bg-primary/5'
                       : 'border-transparent text-foreground-muted hover:text-foreground hover:bg-surface-hover'
-                    }`}
+                  }`}
                 >
                   <Icon className="w-4 h-4" />
                   {tab.label}
@@ -724,7 +854,7 @@ export default function AccountsPage() {
             <div className="flex justify-end mb-4">
               <Button onClick={() => {
                 setEditingBank(null);
-                setBankForm({ name: '' });
+                resetBankForm();
                 setBankDialog(true);
               }}>
                 <Plus className="w-4 h-4 mr-2" />
@@ -778,7 +908,7 @@ export default function AccountsPage() {
                           <p>No banks found</p>
                           <Button onClick={() => {
                             setEditingBank(null);
-                            setBankForm({ name: '' });
+                            resetBankForm();
                             setBankDialog(true);
                           }} className="mt-4" size="sm">
                             <Plus className="w-4 h-4 mr-2" />
@@ -800,7 +930,7 @@ export default function AccountsPage() {
             <div className="flex justify-end mb-4">
               <Button onClick={() => {
                 setEditingOwner(null);
-                setOwnerForm({ name: '' });
+                resetOwnerForm();
                 setOwnerDialog(true);
               }}>
                 <Plus className="w-4 h-4 mr-2" />
@@ -822,7 +952,9 @@ export default function AccountsPage() {
                   {ownersData && ownersData.length > 0 ? (
                     ownersData.map((owner: any) => {
                       const ownerAccounts = accountsData?.filter((a: any) => a.owner_id === owner.id) || [];
-                      const totalBalance = ownerAccounts.reduce((sum: number, a: any) => sum + a.balance, 0);
+                      // Use summaryData for total balance - it's already converted to display currency
+                      const ownerSummary = summaryData?.find((s: any) => s.owner_id === owner.id);
+                      const ownerTotalBalance = ownerSummary?.total_balance || 0;
 
                       return (
                         <TableRow key={owner.id}>
@@ -831,7 +963,7 @@ export default function AccountsPage() {
                             <Badge variant="default" size="sm">{ownerAccounts.length}</Badge>
                           </TableCell>
                           <TableCell className="text-right font-bold">
-                            {formatCurrency(totalBalance)}
+                            {formatCurrency(ownerTotalBalance, displayCurrency)}
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-1 justify-end">
@@ -860,7 +992,7 @@ export default function AccountsPage() {
                           <p>No owners found</p>
                           <Button onClick={() => {
                             setEditingOwner(null);
-                            setOwnerForm({ name: '' });
+                            resetOwnerForm();
                             setOwnerDialog(true);
                           }} className="mt-4" size="sm">
                             <Plus className="w-4 h-4 mr-2" />
@@ -882,111 +1014,140 @@ export default function AccountsPage() {
         <DialogContent size="lg">
           <DialogHeader>
             <DialogTitle>{editingItem ? 'Edit Account' : 'Add Account'}</DialogTitle>
+            <DialogDescription>
+              {editingItem ? 'Update the account details below.' : 'Enter the details for your new account.'}
+            </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
-            <div className="sm:col-span-2 space-y-1.5">
-              <Label>Account Name</Label>
-              <Input
-                value={accountForm.name}
-                onChange={(e) => setAccountForm({ ...accountForm, name: e.target.value })}
-                placeholder="e.g., Main Checking"
-              />
+          <form onSubmit={handleAccountSubmit(onAccountSubmit)}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
+              <FormField label="Account Name" className="sm:col-span-2">
+                <Input
+                  {...accountRegister('name')}
+                  placeholder="e.g., Main Checking"
+                />
+              </FormField>
+              <FormField label="Bank" error={accountErrors.bank_id?.message} required className="sm:col-span-2">
+                <Controller
+                  name="bank_id"
+                  control={accountControl}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger><SelectValue placeholder="Select bank" /></SelectTrigger>
+                      <SelectContent>
+                        {banksData?.map((bank: any) => (
+                          <SelectItem key={bank.id} value={bank.id.toString()}>{bank.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
+              <FormField label="Owner" error={accountErrors.owner_id?.message} required className="sm:col-span-2">
+                <Controller
+                  name="owner_id"
+                  control={accountControl}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger><SelectValue placeholder="Select owner" /></SelectTrigger>
+                      <SelectContent>
+                        {ownersData?.map((owner: any) => (
+                          <SelectItem key={owner.id} value={owner.id.toString()}>{owner.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
+              <FormField label="Account Type" error={accountErrors.account_type?.message} required>
+                <Controller
+                  name="account_type"
+                  control={accountControl}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
+                      <SelectContent>
+                        {accountTypesData?.map((type: string) => (
+                          <SelectItem key={type} value={type}>{type.charAt(0).toUpperCase() + type.slice(1)}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
+              <FormField label="Currency" error={accountErrors.currency?.message} required>
+                <Controller
+                  name="currency"
+                  control={accountControl}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger><SelectValue placeholder="Select currency" /></SelectTrigger>
+                      <SelectContent>
+                        {currenciesData?.map((currency: any) => (
+                          <SelectItem key={currency.code} value={currency.code}>
+                            {currency.code} - {currency.name} ({currency.symbol})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
+              <FormField
+                label="Current Balance"
+                error={accountErrors.balance?.message}
+                required
+                helperText={accountFormValues.account_type !== 'investment' ? 'Limited to 2 decimal places' : undefined}
+              >
+                <Input
+                  type="number"
+                  step={accountFormValues.account_type === 'investment' ? 'any' : '0.01'}
+                  {...accountRegister('balance')}
+                  onBlur={() => handleBalanceBlur('balance')}
+                />
+              </FormField>
+              <FormField label="Opening Balance" error={accountErrors.opening_balance?.message}>
+                <Input
+                  type="number"
+                  step={accountFormValues.account_type === 'investment' ? 'any' : '0.01'}
+                  {...accountRegister('opening_balance')}
+                  onBlur={() => handleBalanceBlur('opening_balance')}
+                  placeholder="Initial balance"
+                />
+              </FormField>
+              <FormField label="Opening Date">
+                <Input type="date" {...accountRegister('opening_date')} />
+              </FormField>
+              <FormField label="Linked Account (for investments)">
+                <Controller
+                  name="linked_account_id"
+                  control={accountControl}
+                  render={({ field }) => (
+                    <Select value={field.value || ''} onValueChange={field.onChange}>
+                      <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">None</SelectItem>
+                        {accountsData?.filter((a: any) => a.account_type !== 'investment' && a.id !== editingItem?.id).map((account: any) => (
+                          <SelectItem key={account.id} value={account.id.toString()}>
+                            {account.name || `${account.bank_name} - ${account.account_type}`} ({account.currency})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
             </div>
-            <div className="sm:col-span-2 space-y-1.5">
-              <Label>Bank</Label>
-              <Select value={accountForm.bank_id} onValueChange={(value) => setAccountForm({ ...accountForm, bank_id: value })}>
-                <SelectTrigger><SelectValue placeholder="Select bank" /></SelectTrigger>
-                <SelectContent>
-                  {banksData?.map((bank: any) => (
-                    <SelectItem key={bank.id} value={bank.id.toString()}>{bank.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="sm:col-span-2 space-y-1.5">
-              <Label>Owner</Label>
-              <Select value={accountForm.owner_id} onValueChange={(value) => setAccountForm({ ...accountForm, owner_id: value })}>
-                <SelectTrigger><SelectValue placeholder="Select owner" /></SelectTrigger>
-                <SelectContent>
-                  {ownersData?.map((owner: any) => (
-                    <SelectItem key={owner.id} value={owner.id.toString()}>{owner.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Account Type</Label>
-              <Select value={accountForm.account_type} onValueChange={(value) => setAccountForm({ ...accountForm, account_type: value })}>
-                <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
-                <SelectContent>
-                  {accountTypesData?.map((type: string) => (
-                    <SelectItem key={type} value={type}>{type.charAt(0).toUpperCase() + type.slice(1)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Currency</Label>
-              <Select value={accountForm.currency} onValueChange={(value) => setAccountForm({ ...accountForm, currency: value })}>
-                <SelectTrigger><SelectValue placeholder="Select currency" /></SelectTrigger>
-                <SelectContent>
-                  {currenciesData?.map((currency: any) => (
-                    <SelectItem key={currency.code} value={currency.code}>
-                      {currency.code} - {currency.name} ({currency.symbol})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Current Balance</Label>
-              <Input
-                type="number"
-                step={accountForm.account_type === 'investment' ? 'any' : '0.01'}
-                value={accountForm.balance}
-                onChange={(e) => handleBalanceChange(e.target.value, 'balance')}
-                onBlur={() => handleBalanceBlur('balance')}
-              />
-              {accountForm.account_type !== 'investment' && (
-                <p className="text-xs text-foreground-muted mt-1">Limited to 2 decimal places</p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <Label>Opening Balance</Label>
-              <Input
-                type="number"
-                step={accountForm.account_type === 'investment' ? 'any' : '0.01'}
-                value={accountForm.opening_balance}
-                onChange={(e) => handleBalanceChange(e.target.value, 'opening_balance')}
-                onBlur={() => handleBalanceBlur('opening_balance')}
-                placeholder="Initial balance"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Opening Date</Label>
-              <Input type="date" value={accountForm.opening_date} onChange={(e) => setAccountForm({ ...accountForm, opening_date: e.target.value })} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Linked Account (for investments)</Label>
-              <Select value={accountForm.linked_account_id} onValueChange={(value) => setAccountForm({ ...accountForm, linked_account_id: value })}>
-                <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">None</SelectItem>
-                  {accountsData?.filter((a: any) => a.account_type !== 'investment' && a.id !== editingItem?.id).map((account: any) => (
-                    <SelectItem key={account.id} value={account.id.toString()}>
-                      {account.name || `${account.bank_name} - ${account.account_type}`} ({account.currency})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAccountDialog(false)}>Cancel</Button>
-            <Button onClick={handleSaveAccount} loading={createAccountMutation.isPending || updateAccountMutation.isPending}>
-              {editingItem ? 'Update' : 'Create'}
-            </Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setAccountDialog(false)}>Cancel</Button>
+              <Button
+                type="submit"
+                loading={createAccountMutation.isPending || updateAccountMutation.isPending}
+                disabled={!isAccountValid}
+              >
+                {editingItem ? 'Update' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -995,17 +1156,23 @@ export default function AccountsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>{editingBank ? 'Edit Bank' : 'Add Bank'}</DialogTitle>
+            <DialogDescription>
+              {editingBank ? 'Update the bank name.' : 'Add a new bank to organize your accounts.'}
+            </DialogDescription>
           </DialogHeader>
-          <div className="py-4 space-y-1.5">
-            <Label>Bank Name</Label>
-            <Input value={bankForm.name} onChange={(e) => setBankForm({ name: e.target.value })} />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setBankDialog(false); setEditingBank(null); setBankForm({ name: '' }); }}>Cancel</Button>
-            <Button onClick={handleSaveBank} loading={createBankMutation.isPending || updateBankMutation.isPending} disabled={!bankForm.name}>
-              {editingBank ? 'Update' : 'Create'}
-            </Button>
-          </DialogFooter>
+          <form onSubmit={handleBankSubmit(onBankSubmit)}>
+            <div className="py-4">
+              <FormField label="Bank Name" error={bankErrors.name?.message} required>
+                <Input {...bankRegister('name')} placeholder="e.g., Chase Bank" />
+              </FormField>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => { setBankDialog(false); setEditingBank(null); resetBankForm(); }}>Cancel</Button>
+              <Button type="submit" loading={createBankMutation.isPending || updateBankMutation.isPending} disabled={!isBankValid}>
+                {editingBank ? 'Update' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -1014,17 +1181,23 @@ export default function AccountsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>{editingOwner ? 'Edit Owner' : 'Add Owner'}</DialogTitle>
+            <DialogDescription>
+              {editingOwner ? 'Update the owner name.' : 'Add a new owner to assign to accounts.'}
+            </DialogDescription>
           </DialogHeader>
-          <div className="py-4 space-y-1.5">
-            <Label>Owner Name</Label>
-            <Input value={ownerForm.name} onChange={(e) => setOwnerForm({ name: e.target.value })} />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setOwnerDialog(false); setEditingOwner(null); setOwnerForm({ name: '' }); }}>Cancel</Button>
-            <Button onClick={handleSaveOwner} loading={createOwnerMutation.isPending || updateOwnerMutation.isPending} disabled={!ownerForm.name}>
-              {editingOwner ? 'Update' : 'Create'}
-            </Button>
-          </DialogFooter>
+          <form onSubmit={handleOwnerSubmit(onOwnerSubmit)}>
+            <div className="py-4">
+              <FormField label="Owner Name" error={ownerErrors.name?.message} required>
+                <Input {...ownerRegister('name')} placeholder="e.g., John Doe" />
+              </FormField>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => { setOwnerDialog(false); setEditingOwner(null); resetOwnerForm(); }}>Cancel</Button>
+              <Button type="submit" loading={createOwnerMutation.isPending || updateOwnerMutation.isPending} disabled={!isOwnerValid}>
+                {editingOwner ? 'Update' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -1033,6 +1206,9 @@ export default function AccountsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete Bank</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this bank from your account list.
+            </DialogDescription>
           </DialogHeader>
           <div className="py-4">
             <div className="flex items-center gap-2 p-3 rounded-lg bg-warning/10 border border-warning/20 text-warning">
@@ -1052,6 +1228,9 @@ export default function AccountsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete Owner</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this owner from your account list.
+            </DialogDescription>
           </DialogHeader>
           <div className="py-4">
             <div className="flex items-center gap-2 p-3 rounded-lg bg-warning/10 border border-warning/20 text-warning">
@@ -1071,6 +1250,9 @@ export default function AccountsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this account and its associated data.
+            </DialogDescription>
           </DialogHeader>
           <div className="py-4">
             <div className="flex items-center gap-2 p-3 rounded-lg bg-warning/10 border border-warning/20 text-warning">
@@ -1092,6 +1274,9 @@ export default function AccountsPage() {
             <DialogTitle>
               Validate Account Balance: {validatingAccount?.name ? `${validatingAccount.name} (${validatingAccount.bank_name})` : `${validatingAccount?.bank_name} - ${validatingAccount?.account_type}`}
             </DialogTitle>
+            <DialogDescription>
+              Compare the system balance with your actual account balance to identify discrepancies.
+            </DialogDescription>
           </DialogHeader>
           <div className="py-4 space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1102,8 +1287,9 @@ export default function AccountsPage() {
                 </p>
               </div>
               <div className="space-y-1.5 min-w-0">
-                <Label>Actual Balance (from bank statement)</Label>
+                <Label htmlFor="validation-actual-balance">Actual Balance (from bank statement)</Label>
                 <Input
+                  id="validation-actual-balance"
                   type="number"
                   step={validatingAccount?.account_type === 'investment' ? 'any' : '0.01'}
                   value={validationForm.actual_balance}
@@ -1122,8 +1308,9 @@ export default function AccountsPage() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Notes (optional)</Label>
+              <Label htmlFor="validation-notes">Notes (optional)</Label>
               <Textarea
+                id="validation-notes"
                 value={validationForm.notes}
                 onChange={(e) => setValidationForm({ ...validationForm, notes: e.target.value })}
                 placeholder="Add any notes about this validation..."

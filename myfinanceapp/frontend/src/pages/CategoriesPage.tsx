@@ -48,6 +48,7 @@ import {
   Popover,
   PopoverTrigger,
   PopoverContent,
+  CategoriesSkeleton,
 } from '../components/shadcn';
 import { categoriesAPI } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
@@ -183,15 +184,40 @@ export default function CategoriesPage() {
   // Delete type mutation
   const deleteTypeMutation = useMutation({
     mutationFn: (id: number) => categoriesAPI.deleteType(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['categories-hierarchy'] });
+    onMutate: async (deletedId: number) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['categories-hierarchy'] });
+
+      // Snapshot the previous value
+      const previousCategories = queryClient.getQueryData(['categories-hierarchy']);
+
+      // Optimistically remove from the list
+      queryClient.setQueryData(['categories-hierarchy'], (old: any[] | undefined) => {
+        if (!old) return old;
+        return old.filter((c: any) => c.id !== deletedId);
+      });
+
+      // Close UI elements immediately for better UX
       setDeleteConfirm(null);
-      toast.success('Category deleted successfully!');
+
+      // Return context with the previous value
+      return { previousCategories };
     },
-    onError: (error: any) => {
+    onError: (error: any, _deletedId, context) => {
+      // Rollback to previous state on error
+      if (context?.previousCategories) {
+        queryClient.setQueryData(['categories-hierarchy'], context.previousCategories);
+      }
       console.error('Failed to delete category:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
       toast.error(`Failed to delete category: ${errorMessage}`);
+    },
+    onSuccess: () => {
+      toast.success('Category deleted successfully!');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure data consistency
+      queryClient.invalidateQueries({ queryKey: ['categories-hierarchy'] });
     },
   });
 
@@ -231,15 +257,43 @@ export default function CategoriesPage() {
   // Delete subtype mutation
   const deleteSubtypeMutation = useMutation({
     mutationFn: (id: number) => categoriesAPI.deleteSubtype(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['categories-hierarchy'] });
+    onMutate: async (deletedId: number) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['categories-hierarchy'] });
+
+      // Snapshot the previous value
+      const previousCategories = queryClient.getQueryData(['categories-hierarchy']);
+
+      // Optimistically remove the subtype from its parent category
+      queryClient.setQueryData(['categories-hierarchy'], (old: any[] | undefined) => {
+        if (!old) return old;
+        return old.map((category: any) => ({
+          ...category,
+          subtypes: category.subtypes?.filter((s: any) => s.id !== deletedId) || [],
+        }));
+      });
+
+      // Close UI elements immediately for better UX
       setDeleteConfirm(null);
-      toast.success('Subcategory deleted successfully!');
+
+      // Return context with the previous value
+      return { previousCategories };
     },
-    onError: (error: any) => {
+    onError: (error: any, _deletedId, context) => {
+      // Rollback to previous state on error
+      if (context?.previousCategories) {
+        queryClient.setQueryData(['categories-hierarchy'], context.previousCategories);
+      }
       console.error('Failed to delete subcategory:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
       toast.error(`Failed to delete subcategory: ${errorMessage}`);
+    },
+    onSuccess: () => {
+      toast.success('Subcategory deleted successfully!');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure data consistency
+      queryClient.invalidateQueries({ queryKey: ['categories-hierarchy'] });
     },
   });
 
@@ -369,11 +423,7 @@ export default function CategoriesPage() {
   };
 
   if (categoriesLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <CategoriesSkeleton />;
   }
 
   // Calculate statistics
@@ -606,12 +656,12 @@ export default function CategoriesPage() {
             </div>
 
             <div className="space-y-2">
-              <Label>Classification</Label>
+              <Label htmlFor="category-classification">Classification</Label>
               <Select
                 value={typeForm.category}
                 onValueChange={(value) => setTypeForm({ ...typeForm, category: value })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="category-classification">
                   <SelectValue placeholder="Select classification" />
                 </SelectTrigger>
                 <SelectContent>
@@ -803,6 +853,9 @@ export default function CategoriesPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this category or subcategory.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4 space-y-3">

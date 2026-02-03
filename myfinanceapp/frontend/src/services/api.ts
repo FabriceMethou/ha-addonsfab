@@ -216,7 +216,7 @@ export const investmentsAPI = {
   createSecurity: (data: any) => api.post('/api/investments/securities', data),
   updateSecurity: (id: number, data: any) => api.put(`/api/investments/securities/${id}`, data),
   deleteSecurity: (id: number) => api.delete(`/api/investments/securities/${id}`),
-  
+
   // Holdings
   getHoldings: () => api.get('/api/investments/holdings'),
   createHolding: (data: any) => api.post('/api/investments/holdings', data),
@@ -248,13 +248,16 @@ export const recurringAPI = {
 
 // Work Profiles API
 export const workProfilesAPI = {
-  getAll: () => api.get('/api/work-profiles/'),
+  getAll: (displayCurrency?: string) =>
+    api.get('/api/work-profiles/', { params: displayCurrency ? { display_currency: displayCurrency } : undefined }),
   getByOwner: (ownerId: number) => api.get(`/api/work-profiles/${ownerId}`),
   create: (data: any) => api.post('/api/work-profiles/', data),
   update: (ownerId: number, data: any) => api.put(`/api/work-profiles/${ownerId}`, data),
   delete: (ownerId: number) => api.delete(`/api/work-profiles/${ownerId}`),
-  calculate: (amount: number, ownerId: number) =>
-    api.post('/api/work-profiles/calculate', null, { params: { amount, owner_id: ownerId } }),
+  calculate: (amount: number, ownerId: number, amountCurrency?: string) =>
+    api.post('/api/work-profiles/calculate', null, {
+      params: { amount, owner_id: ownerId, ...(amountCurrency && { amount_currency: amountCurrency }) },
+    }),
 };
 
 // Backups API
@@ -304,6 +307,8 @@ export const reportsAPI = {
   getTagReport: (tag: string, params?: any) => api.get(`/api/reports/tags/${tag}`, { params }),
   getSpendingTrends: (months: number = 6, category?: string) =>
     api.get(`/api/reports/spending-trends?months=${months}${category ? `&category=${category}` : ''}`),
+  getYearByYear: (year: number, month?: number) =>
+    api.get(`/api/reports/year-by-year?year=${year}${month ? `&month=${month}` : ''}`),
 };
 
 // Alerts API

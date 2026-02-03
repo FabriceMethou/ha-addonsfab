@@ -13,6 +13,7 @@ interface AutocompleteProps {
   label?: string
   helperText?: string
   disabled?: boolean
+  id?: string
 }
 
 export default function Autocomplete({
@@ -26,6 +27,7 @@ export default function Autocomplete({
   label,
   helperText,
   disabled = false,
+  id,
 }: AutocompleteProps) {
   const [isOpen, setIsOpen] = React.useState(false)
   const [inputValue, setInputValue] = React.useState(value || "")
@@ -135,6 +137,7 @@ export default function Autocomplete({
       <div className="relative">
         <input
           ref={inputRef}
+          id={id}
           type="text"
           value={inputValue}
           onChange={handleInputChange}
@@ -142,14 +145,14 @@ export default function Autocomplete({
           onFocus={() => setIsOpen(true)}
           placeholder={placeholder}
           disabled={disabled}
-          className="flex h-10 w-full rounded-md border border-border bg-surface px-3 py-2 pr-16 text-sm text-foreground placeholder:text-foreground-muted focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-10 w-full rounded-md border border-border bg-surface px-3 py-2 pr-16 text-sm text-foreground placeholder:text-foreground-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
         />
         <div className="absolute inset-y-0 right-0 flex items-center pr-2 gap-1">
           {inputValue && (
             <button
               type="button"
               onClick={clearValue}
-              className="p-1 rounded hover:bg-surface-hover text-foreground-muted hover:text-foreground"
+              className="p-1 rounded hover:bg-surface-hover text-foreground-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <X className="h-4 w-4" />
             </button>
@@ -157,7 +160,7 @@ export default function Autocomplete({
           <button
             type="button"
             onClick={() => setIsOpen(!isOpen)}
-            className="p-1 rounded hover:bg-surface-hover text-foreground-muted"
+            className="p-1 rounded hover:bg-surface-hover text-foreground-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ChevronDown className={cn("h-4 w-4 transition-transform", isOpen && "rotate-180")} />
           </button>
