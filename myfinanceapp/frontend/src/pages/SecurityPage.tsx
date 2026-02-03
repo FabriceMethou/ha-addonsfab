@@ -22,6 +22,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from '../components/shadcn';
 import {
@@ -89,6 +90,11 @@ export default function SecurityPage() {
       setMfaQRCode(response.data.qr_code);
       setMfaSetupDialog(true);
     },
+    onError: (error: any) => {
+      console.error('Failed to setup MFA:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to setup MFA: ${errorMessage}`);
+    },
   });
 
   // MFA Enable Mutation
@@ -98,6 +104,12 @@ export default function SecurityPage() {
       queryClient.invalidateQueries({ queryKey: ['current-user'] });
       setMfaSetupDialog(false);
       setMfaVerifyToken('');
+      toast.success('MFA enabled successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to enable MFA:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Invalid verification code';
+      toast.error(`Failed to enable MFA: ${errorMessage}`);
     },
   });
 
@@ -106,6 +118,12 @@ export default function SecurityPage() {
     mutationFn: () => authAPI.disableMFA(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['current-user'] });
+      toast.success('MFA disabled successfully');
+    },
+    onError: (error: any) => {
+      console.error('Failed to disable MFA:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to disable MFA: ${errorMessage}`);
     },
   });
 
@@ -116,6 +134,12 @@ export default function SecurityPage() {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setUserDialog(false);
       setNewUserForm({ username: '', password: '', is_admin: false });
+      toast.success('User created successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to create user:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to create user: ${errorMessage}`);
     },
   });
 
@@ -493,6 +517,9 @@ export default function SecurityPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Setup Two-Factor Authentication</DialogTitle>
+            <DialogDescription>
+              Add an extra layer of security to your account using an authenticator app.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="p-4 rounded-lg bg-primary/10 border border-primary/20 mb-4">
@@ -552,6 +579,9 @@ export default function SecurityPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add New User</DialogTitle>
+            <DialogDescription>
+              Create a new user account with specified permissions.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -606,6 +636,9 @@ export default function SecurityPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Disable Two-Factor Authentication</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm that you want to disable two-factor authentication.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4">

@@ -786,6 +786,7 @@ class FinanceDatabase:
                 working_hours_per_month REAL NOT NULL,
                 hourly_rate REAL NOT NULL,
                 currency TEXT NOT NULL DEFAULT 'EUR',
+                tax_rate REAL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
@@ -838,6 +839,13 @@ class FinanceDatabase:
         if 'tax' not in columns:
             cursor.execute("ALTER TABLE investment_transactions ADD COLUMN tax REAL DEFAULT 0")
             logger.info("Added tax column to investment_transactions table")
+
+        # Migration: Add tax_rate column to work_profiles if it doesn't exist
+        cursor.execute("PRAGMA table_info(work_profiles)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'tax_rate' not in columns:
+            cursor.execute("ALTER TABLE work_profiles ADD COLUMN tax_rate REAL DEFAULT 0")
+            logger.info("Added tax_rate column to work_profiles table")
 
         conn.commit()
 
@@ -1772,13 +1780,14 @@ class FinanceDatabase:
             cursor.execute("""
                 UPDATE work_profiles
                 SET monthly_salary = ?, working_hours_per_month = ?, hourly_rate = ?,
-                    currency = ?, updated_at = CURRENT_TIMESTAMP
+                    currency = ?, tax_rate = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE owner_id = ?
             """, (
                 monthly_salary,
                 working_hours,
                 hourly_rate,
                 profile_data.get('currency', 'EUR'),
+                profile_data.get('tax_rate', 0),
                 profile_data['owner_id']
             ))
             profile_id = existing['id']
@@ -1787,14 +1796,15 @@ class FinanceDatabase:
             # Insert new profile
             cursor.execute("""
                 INSERT INTO work_profiles
-                (owner_id, monthly_salary, working_hours_per_month, hourly_rate, currency)
-                VALUES (?, ?, ?, ?, ?)
+                (owner_id, monthly_salary, working_hours_per_month, hourly_rate, currency, tax_rate)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 profile_data['owner_id'],
                 monthly_salary,
                 working_hours,
                 hourly_rate,
-                profile_data.get('currency', 'EUR')
+                profile_data.get('currency', 'EUR'),
+                profile_data.get('tax_rate', 0)
             ))
             profile_id = cursor.lastrowid
             logger.info(f"Created work profile for owner {profile_data['owner_id']}")
@@ -1937,6 +1947,20 @@ class FinanceDatabase:
                 seen.add(recipient)
 
         return sorted(recipients)  # Sort alphabetically for easier selection
+
+    def get_first_transaction_year(self) -> int:
+        """Get the year of the first transaction in the database."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT MIN(strftime('%Y', transaction_date)) as first_year
+            FROM transactions
+            WHERE confirmed = 1
+        """)
+        result = cursor.fetchone()
+        if result and result['first_year']:
+            return int(result['first_year'])
+        return datetime.now().year
 
     def get_distinct_tags(self, limit: int = 100) -> List[str]:
         """Get distinct tags from transactions and envelopes, ordered by most recent usage."""
@@ -4294,7 +4318,7 @@ class FinanceDatabase:
         from datetime import datetime, date, timedelta
         from dateutil.relativedelta import relativedelta
 
-        dashboard_currency = self.get_preference('dashboard_currency', 'DKK')
+        display_currency = self.get_preference('display_currency', 'EUR')
 
         # Determine date range
         if end_date is None:
@@ -4388,8 +4412,8 @@ class FinanceDatabase:
                 for txn in transactions:
                     balance += txn[0]
 
-                # Convert to dashboard currency
-                converted_balance = self.convert_currency(balance, account['currency'], dashboard_currency)
+                # Convert to display currency
+                converted_balance = self.convert_currency(balance, account['currency'], display_currency)
                 total_assets += converted_balance
 
             # Get debt balances at this date (simplified - using current balance)
@@ -4398,9 +4422,9 @@ class FinanceDatabase:
             debts = self.get_debts()
             for debt in debts:
                 if debt.get('is_active', True):
-                    # Convert debt to dashboard currency
+                    # Convert debt to display currency
                     debt_balance = debt.get('current_balance', 0)
-                    converted_debt = self.convert_currency(debt_balance, 'EUR', dashboard_currency)
+                    converted_debt = self.convert_currency(debt_balance, 'EUR', display_currency)
                     total_debts += converted_debt
 
             net_worth = total_assets - total_debts
@@ -4418,7 +4442,7 @@ class FinanceDatabase:
             'start_date': start_date,
             'end_date': end_date,
             'frequency': frequency,
-            'currency': dashboard_currency,
+            'currency': display_currency,
             'data': trend_data
         }
 

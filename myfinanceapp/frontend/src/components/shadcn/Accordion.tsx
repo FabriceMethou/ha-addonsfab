@@ -59,7 +59,7 @@ export function AccordionTrigger({ children, className }: AccordionTriggerProps)
       type="button"
       onClick={() => setOpen(!open)}
       className={cn(
-        "flex w-full items-center justify-between px-4 py-3 text-left font-medium transition-all hover:bg-surface-hover",
+        "flex w-full items-center justify-between px-4 py-3 text-left font-medium transition-all hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
         className
       )}
     >

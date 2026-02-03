@@ -116,7 +116,10 @@ export function PopoverClose({ children, className }: { children: React.ReactNod
     <button
       type="button"
       onClick={() => context.setOpen(false)}
-      className={className}
+      className={cn(
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        className
+      )}
     >
       {children}
     </button>

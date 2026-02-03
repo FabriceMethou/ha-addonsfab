@@ -43,10 +43,13 @@ import {
   TabsList,
   TabsTrigger,
   TabsContent,
+  InvestmentsSkeleton,
 } from '../components/shadcn';
 import { investmentsAPI, accountsAPI } from '../services/api';
 import { format, parseISO } from 'date-fns';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
+import { addMoney, subtractMoney, multiplyMoney, percentOf } from '../lib/money';
 
 // Colors for pie charts
 const PORTFOLIO_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
@@ -483,6 +486,14 @@ export default function InvestmentsPage() {
     },
   });
 
+  // Track last update result for showing summary
+  const [lastUpdateResult, setLastUpdateResult] = useState<{
+    updated: number;
+    skipped: number;
+    failed: number;
+    failedSymbols?: string[];
+  } | null>(null);
+
   // Update all prices mutation
   const updateAllPricesMutation = useMutation({
     mutationFn: () => investmentsAPI.updateAllPrices(),
@@ -491,20 +502,43 @@ export default function InvestmentsPage() {
       queryClient.invalidateQueries({ queryKey: ['investments-summary'] });
       const data = response.data;
 
+      // Store result for UI display
+      setLastUpdateResult({
+        updated: data.updated_count || 0,
+        skipped: data.skipped_count || 0,
+        failed: data.failed?.length || 0,
+        failedSymbols: data.failed?.map((f: any) => f.symbol || f) || [],
+      });
+
       // Show success message with details
-      let message = `Successfully updated ${data.updated_count} holding${data.updated_count !== 1 ? 's' : ''}`;
+      let message = `Updated ${data.updated_count} holding${data.updated_count !== 1 ? 's' : ''}`;
       if (data.skipped_count && data.skipped_count > 0) {
-        message += `. ${data.skipped_count} skipped (bonds/crypto require manual entry)`;
+        message += `, ${data.skipped_count} skipped`;
       }
       if (data.failed && data.failed.length > 0) {
-        message += `. ${data.failed.length} failed`;
+        message += `, ${data.failed.length} failed`;
       }
-      toast.success( message);
+      toast.success(message);
+
+      // Clear result after 10 seconds
+      setTimeout(() => setLastUpdateResult(null), 10000);
     },
     onError: (error: any) => {
       console.error('Failed to update prices:', error);
+      setLastUpdateResult(null);
+
+      // Handle rate limiting specifically
+      const status = error.response?.status;
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      toast.error( `Failed to update prices: ${errorMessage}`);
+
+      if (status === 429) {
+        // Rate limited - extract retry time if available
+        const retryAfter = error.response?.headers?.['retry-after'];
+        const retryTime = retryAfter ? parseInt(retryAfter) : 60;
+        toast.error(`Rate limited by Yahoo Finance. Please wait ${retryTime} seconds before trying again.`);
+      } else {
+        toast.error(`Failed to update prices: ${errorMessage}`);
+      }
     },
   });
 
@@ -693,24 +727,24 @@ export default function InvestmentsPage() {
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: 'EUR',
-    }).format(amount);
+    return formatCurrencyUtil(amount, 'EUR');
   };
 
   if (holdingsLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <InvestmentsSkeleton />;
   }
 
   const totalValue = summaryData?.total_value || 0;
   const totalCost = summaryData?.total_cost || 0;
   const totalGainLoss = totalValue - totalCost;
   const totalGainLossPercent = totalCost > 0 ? (totalGainLoss / totalCost) * 100 : 0;
+
+  // Count auto-updateable holdings (stocks, ETFs, mutual funds - not bonds/crypto)
+  const autoUpdateableTypes = ['stock', 'etf', 'mutual_fund'];
+  const autoUpdateableCount = holdingsData?.filter(
+    (h: any) => autoUpdateableTypes.includes(h.investment_type?.toLowerCase())
+  ).length || 0;
+  const manualOnlyCount = (holdingsData?.length || 0) - autoUpdateableCount;
 
   return (
     <div className="space-y-6">
@@ -723,15 +757,41 @@ export default function InvestmentsPage() {
       </div>
 
       {/* Action Bar */}
-      <div className="flex flex-wrap gap-2 justify-end">
+      <div className="flex flex-wrap gap-2 justify-end items-center">
+        {/* Update result summary */}
+        {lastUpdateResult && !updateAllPricesMutation.isPending && (
+          <div className="text-sm text-foreground-muted flex items-center gap-2">
+            <span className="text-success">{lastUpdateResult.updated} updated</span>
+            {lastUpdateResult.skipped > 0 && (
+              <span className="text-warning">{lastUpdateResult.skipped} skipped</span>
+            )}
+            {lastUpdateResult.failed > 0 && (
+              <span className="text-error" title={lastUpdateResult.failedSymbols?.join(', ')}>
+                {lastUpdateResult.failed} failed
+              </span>
+            )}
+          </div>
+        )}
+
         <Button
           variant="outline"
-          onClick={() => updateAllPricesMutation.mutate()}
-          disabled={updateAllPricesMutation.isPending}
-          title="Auto-updates prices for stocks, ETFs, and mutual funds via Yahoo Finance. Bonds and crypto require manual price entry."
+          onClick={() => {
+            setLastUpdateResult(null);
+            updateAllPricesMutation.mutate();
+          }}
+          disabled={updateAllPricesMutation.isPending || autoUpdateableCount === 0}
+          title={
+            autoUpdateableCount === 0
+              ? 'No holdings that support auto-update (stocks, ETFs, mutual funds)'
+              : `Auto-updates prices for ${autoUpdateableCount} holding${autoUpdateableCount !== 1 ? 's' : ''} via Yahoo Finance.${manualOnlyCount > 0 ? ` ${manualOnlyCount} holding${manualOnlyCount !== 1 ? 's' : ''} (bonds/crypto) require manual price entry.` : ''}`
+          }
         >
           <RefreshCw className={`h-4 w-4 mr-2 ${updateAllPricesMutation.isPending ? 'animate-spin' : ''}`} />
-          {updateAllPricesMutation.isPending ? 'Updating...' : 'Update All Prices'}
+          {updateAllPricesMutation.isPending ? (
+            <>Updating {autoUpdateableCount} price{autoUpdateableCount !== 1 ? 's' : ''}...</>
+          ) : (
+            <>Update Prices{autoUpdateableCount > 0 ? ` (${autoUpdateableCount})` : ''}</>
+          )}
         </Button>
         <Button
           onClick={() => {
@@ -756,134 +816,134 @@ export default function InvestmentsPage() {
       </div>
 
       {/* Summary KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6">
+        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-3xl rounded-full" />
           <div className="relative">
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-3 rounded-lg bg-blue-500 bg-opacity-10">
-                <Landmark size={24} className="text-blue-500" />
+            <div className="flex items-start justify-between mb-2 sm:mb-4">
+              <div className="p-2 sm:p-3 rounded-lg bg-blue-500 bg-opacity-10">
+                <Landmark className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500" />
               </div>
             </div>
             <div>
-              <p className="text-sm text-foreground-muted mb-1">Total Value</p>
-              <p className="text-2xl font-bold text-foreground">{formatCurrency(totalValue)}</p>
+              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">Total Value</p>
+              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{formatCurrency(totalValue)}</p>
             </div>
           </div>
         </Card>
-        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500 opacity-5 blur-3xl rounded-full" />
           <div className="relative">
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-3 rounded-lg bg-cyan-500 bg-opacity-10">
-                <LineChart size={24} className="text-cyan-500" />
+            <div className="flex items-start justify-between mb-2 sm:mb-4">
+              <div className="p-2 sm:p-3 rounded-lg bg-cyan-500 bg-opacity-10">
+                <LineChart className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-500" />
               </div>
             </div>
             <div>
-              <p className="text-sm text-foreground-muted mb-1">Total Cost</p>
-              <p className="text-2xl font-bold text-foreground">{formatCurrency(totalCost)}</p>
+              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">Total Cost</p>
+              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{formatCurrency(totalCost)}</p>
             </div>
           </div>
         </Card>
-        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className={`absolute top-0 right-0 w-32 h-32 ${totalGainLoss >= 0 ? 'bg-emerald-500' : 'bg-rose-500'} opacity-5 blur-3xl rounded-full`} />
           <div className="relative">
-            <div className="flex items-start justify-between mb-4">
-              <div className={`p-3 rounded-lg ${totalGainLoss >= 0 ? 'bg-emerald-500' : 'bg-rose-500'} bg-opacity-10`}>
+            <div className="flex items-start justify-between mb-2 sm:mb-4">
+              <div className={`p-2 sm:p-3 rounded-lg ${totalGainLoss >= 0 ? 'bg-emerald-500' : 'bg-rose-500'} bg-opacity-10`}>
                 {totalGainLoss >= 0 ? (
-                  <TrendingUp size={24} className="text-emerald-500" />
+                  <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-500" />
                 ) : (
-                  <TrendingDown size={24} className="text-rose-500" />
+                  <TrendingDown className="w-5 h-5 sm:w-6 sm:h-6 text-rose-500" />
                 )}
               </div>
             </div>
             <div>
-              <p className="text-sm text-foreground-muted mb-1">Gain/Loss</p>
-              <p className={`text-2xl font-bold ${totalGainLoss >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">Gain/Loss</p>
+              <p className={`text-lg sm:text-2xl font-bold truncate ${totalGainLoss >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                 {formatCurrency(totalGainLoss)}
               </p>
-              <p className="text-xs text-foreground-muted mt-1">
+              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1">
                 {totalGainLossPercent >= 0 ? '+' : ''}
                 {totalGainLossPercent.toFixed(2)}%
               </p>
             </div>
           </div>
         </Card>
-        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500 opacity-5 blur-3xl rounded-full" />
           <div className="relative">
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-3 rounded-lg bg-violet-500 bg-opacity-10">
-                <LineChart size={24} className="text-violet-500" />
+            <div className="flex items-start justify-between mb-2 sm:mb-4">
+              <div className="p-2 sm:p-3 rounded-lg bg-violet-500 bg-opacity-10">
+                <LineChart className="w-5 h-5 sm:w-6 sm:h-6 text-violet-500" />
               </div>
             </div>
             <div>
-              <p className="text-sm text-foreground-muted mb-1">Holdings</p>
-              <p className="text-2xl font-bold text-foreground">
+              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">Holdings</p>
+              <p className="text-lg sm:text-2xl font-bold text-foreground">
                 {summaryData?.holdings_count || holdingsData?.length || 0}
               </p>
             </div>
           </div>
         </Card>
-        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500 opacity-5 blur-3xl rounded-full" />
           <div className="relative">
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-3 rounded-lg bg-emerald-500 bg-opacity-10">
-                <DollarSign size={24} className="text-emerald-500" />
+            <div className="flex items-start justify-between mb-2 sm:mb-4">
+              <div className="p-2 sm:p-3 rounded-lg bg-emerald-500 bg-opacity-10">
+                <DollarSign className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-500" />
               </div>
             </div>
             <div>
-              <p className="text-sm text-foreground-muted mb-1">Total Dividends</p>
-              <p className="text-2xl font-bold text-foreground">{formatCurrency(summaryData?.total_dividends || 0)}</p>
-              <p className="text-xs text-foreground-muted mt-1">
+              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">Total Dividends</p>
+              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{formatCurrency(summaryData?.total_dividends || 0)}</p>
+              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">
                 12M: {formatCurrency(summaryData?.recent_dividends_12m || 0)}
               </p>
             </div>
           </div>
         </Card>
-        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500 opacity-5 blur-3xl rounded-full" />
           <div className="relative">
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-3 rounded-lg bg-cyan-500 bg-opacity-10">
-                <TrendingUp size={24} className="text-cyan-500" />
+            <div className="flex items-start justify-between mb-2 sm:mb-4">
+              <div className="p-2 sm:p-3 rounded-lg bg-cyan-500 bg-opacity-10">
+                <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-500" />
               </div>
             </div>
             <div>
-              <p className="text-sm text-foreground-muted mb-1">Dividend Yield</p>
-              <p className="text-2xl font-bold text-foreground">{(summaryData?.dividend_yield || 0).toFixed(2)}%</p>
-              <p className="text-xs text-foreground-muted mt-1">Annual yield</p>
+              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">Dividend Yield</p>
+              <p className="text-lg sm:text-2xl font-bold text-foreground">{(summaryData?.dividend_yield || 0).toFixed(2)}%</p>
+              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">Annual yield</p>
             </div>
           </div>
         </Card>
-        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500 opacity-5 blur-3xl rounded-full" />
           <div className="relative">
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-3 rounded-lg bg-amber-500 bg-opacity-10">
-                <AlertTriangle size={24} className="text-amber-500" />
+            <div className="flex items-start justify-between mb-2 sm:mb-4">
+              <div className="p-2 sm:p-3 rounded-lg bg-amber-500 bg-opacity-10">
+                <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6 text-amber-500" />
               </div>
             </div>
             <div>
-              <p className="text-sm text-foreground-muted mb-1">Total Fees</p>
-              <p className="text-2xl font-bold text-foreground">{formatCurrency(summaryData?.total_fees || 0)}</p>
-              <p className="text-xs text-foreground-muted mt-1">All transactions</p>
+              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">Total Fees</p>
+              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{formatCurrency(summaryData?.total_fees || 0)}</p>
+              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">All transactions</p>
             </div>
           </div>
         </Card>
-        <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500 opacity-5 blur-3xl rounded-full" />
           <div className="relative">
-            <div className="flex items-start justify-between mb-4">
-              <div className="p-3 rounded-lg bg-rose-500 bg-opacity-10">
-                <AlertTriangle size={24} className="text-rose-500" />
+            <div className="flex items-start justify-between mb-2 sm:mb-4">
+              <div className="p-2 sm:p-3 rounded-lg bg-rose-500 bg-opacity-10">
+                <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6 text-rose-500" />
               </div>
             </div>
             <div>
-              <p className="text-sm text-foreground-muted mb-1">Total Tax</p>
-              <p className="text-2xl font-bold text-foreground">{formatCurrency(summaryData?.total_tax || 0)}</p>
-              <p className="text-xs text-foreground-muted mt-1">All transactions</p>
+              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">Total Tax</p>
+              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{formatCurrency(summaryData?.total_tax || 0)}</p>
+              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">All transactions</p>
             </div>
           </div>
         </Card>
@@ -907,7 +967,7 @@ export default function InvestmentsPage() {
                   cx="50%"
                   cy="50%"
                   outerRadius={100}
-                  label={(entry) => `${entry.name}: ${((entry.value / totalValue) * 100).toFixed(1)}%`}
+                  label={(entry) => `${entry.name}: ${percentOf(entry.value, totalValue)}%`}
                 >
                   {holdingsData.map((_holding: any, index: number) => (
                     <Cell key={`cell-${index}`} fill={PORTFOLIO_COLORS[index % PORTFOLIO_COLORS.length]} />
@@ -1084,7 +1144,7 @@ export default function InvestmentsPage() {
             {holdingsData && holdingsData.length > 0 ? (
               <div className="space-y-6">
                 {(() => {
-                  // Group holdings by account
+                  // Group holdings by account using precise decimal arithmetic
                   const holdingsByAccount = holdingsData.reduce((acc: any, holding: any) => {
                     const accountKey = holding.account_id || 'unknown';
                     const accountName = holding.account_name || 'Unknown Account';
@@ -1098,20 +1158,20 @@ export default function InvestmentsPage() {
                       };
                     }
 
-                    const currentValue = holding.quantity * (holding.current_price || holding.average_cost);
-                    const costBasis = holding.quantity * holding.average_cost;
+                    const currentValue = multiplyMoney(holding.quantity, holding.current_price || holding.average_cost);
+                    const costBasis = multiplyMoney(holding.quantity, holding.average_cost);
 
                     acc[accountKey].holdings.push(holding);
-                    acc[accountKey].totalValue += currentValue;
-                    acc[accountKey].totalCost += costBasis;
+                    acc[accountKey].totalValue = addMoney(acc[accountKey].totalValue, currentValue);
+                    acc[accountKey].totalCost = addMoney(acc[accountKey].totalCost, costBasis);
 
                     return acc;
                   }, {});
 
                   return Object.entries(holdingsByAccount).map(([accountKey, accountData]: [string, any]) => {
-                    const accountGainLoss = accountData.totalValue - accountData.totalCost;
+                    const accountGainLoss = subtractMoney(accountData.totalValue, accountData.totalCost);
                     const accountGainLossPercent = accountData.totalCost > 0
-                      ? (accountGainLoss / accountData.totalCost) * 100
+                      ? percentOf(accountGainLoss, accountData.totalCost, 2)
                       : 0;
 
                     return (
@@ -1126,7 +1186,7 @@ export default function InvestmentsPage() {
                           <div className="text-right">
                             <p className="text-2xl font-bold text-foreground">{formatCurrency(accountData.totalValue)}</p>
                             <p className={`text-sm font-semibold ${accountGainLoss >= 0 ? 'text-success' : 'text-error'}`}>
-                              {accountGainLoss >= 0 ? '+' : ''}{formatCurrency(accountGainLoss)} ({accountGainLossPercent >= 0 ? '+' : ''}{accountGainLossPercent.toFixed(2)}%)
+                              {accountGainLoss >= 0 ? '+' : ''}{formatCurrency(accountGainLoss)} ({accountGainLossPercent >= 0 ? '+' : ''}{accountGainLossPercent}%)
                             </p>
                           </div>
                         </div>
@@ -1368,12 +1428,12 @@ export default function InvestmentsPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Type</Label>
+                <Label htmlFor="security-type">Type</Label>
                 <Select
                   value={securityForm.investment_type}
                   onValueChange={(value) => setSecurityForm({ ...securityForm, investment_type: value })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="security-type">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1426,12 +1486,12 @@ export default function InvestmentsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Currency</Label>
+                <Label htmlFor="security-currency">Currency</Label>
                 <Select
                   value={securityForm.currency}
                   onValueChange={(value) => setSecurityForm({ ...securityForm, currency: value })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="security-currency">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1503,12 +1563,12 @@ export default function InvestmentsPage() {
 
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label>Security</Label>
+              <Label htmlFor="holding-security">Security</Label>
               <Select
                 value={holdingForm.security_id}
                 onValueChange={(value) => setHoldingForm({ ...holdingForm, security_id: value })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="holding-security">
                   <SelectValue placeholder="Select a security" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1535,12 +1595,12 @@ export default function InvestmentsPage() {
             </div>
 
             <div className="space-y-2">
-              <Label>Investment Account</Label>
+              <Label htmlFor="holding-account">Investment Account</Label>
               <Select
                 value={holdingForm.account_id}
                 onValueChange={(value) => setHoldingForm({ ...holdingForm, account_id: value })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="holding-account">
                   <SelectValue placeholder="Select investment account" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1578,6 +1638,7 @@ export default function InvestmentsPage() {
                 <Input
                   id="quantity"
                   type="number"
+                  step="any"
                   value={holdingForm.quantity}
                   onChange={(e) => setHoldingForm({ ...holdingForm, quantity: e.target.value })}
                 />
@@ -1587,6 +1648,7 @@ export default function InvestmentsPage() {
                 <Input
                   id="purchasePrice"
                   type="number"
+                  step="0.01"
                   value={holdingForm.purchase_price}
                   onChange={(e) => setHoldingForm({ ...holdingForm, purchase_price: e.target.value })}
                 />
@@ -1658,12 +1720,12 @@ export default function InvestmentsPage() {
 
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label>Holding</Label>
+              <Label htmlFor="tx-holding">Holding</Label>
               <Select
                 value={transactionForm.holding_id}
                 onValueChange={(value) => setTransactionForm({ ...transactionForm, holding_id: value })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="tx-holding">
                   <SelectValue placeholder="Select a holding" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1678,12 +1740,12 @@ export default function InvestmentsPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Transaction Type</Label>
+                <Label htmlFor="tx-type">Transaction Type</Label>
                 <Select
                   value={transactionForm.transaction_type}
                   onValueChange={(value) => setTransactionForm({ ...transactionForm, transaction_type: value })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="tx-type">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1710,6 +1772,7 @@ export default function InvestmentsPage() {
                 <Input
                   id="txQuantity"
                   type="number"
+                  step="any"
                   value={transactionForm.quantity}
                   onChange={(e) => setTransactionForm({ ...transactionForm, quantity: e.target.value })}
                 />
@@ -1793,6 +1856,9 @@ export default function InvestmentsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this investment item.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4">

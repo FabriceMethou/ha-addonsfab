@@ -1,5 +1,5 @@
 // Work Hours Calculator Page
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../contexts/ToastContext';
 import {
@@ -19,7 +19,6 @@ import {
   Input,
   Label,
   Badge,
-  Spinner,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -41,8 +40,11 @@ import {
   TabsList,
   TabsTrigger,
   TabsContent,
+  ListSkeleton,
+  StatSkeleton,
 } from '../components/shadcn';
-import { workProfilesAPI, accountsAPI } from '../services/api';
+import { workProfilesAPI, accountsAPI, currenciesAPI, settingsAPI } from '../services/api';
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 
 export default function WorkHoursPage() {
   const toast = useToast();
@@ -53,6 +55,7 @@ export default function WorkHoursPage() {
   const [calculatorAmount, setCalculatorAmount] = useState('');
   const [selectedOwnerId, setSelectedOwnerId] = useState<number | null>(null);
   const [calculationResult, setCalculationResult] = useState<any>(null);
+  const [calculatorCurrency, setCalculatorCurrency] = useState<string>('EUR');
 
   const [formData, setFormData] = useState({
     owner_id: '',
@@ -64,11 +67,30 @@ export default function WorkHoursPage() {
 
   const queryClient = useQueryClient();
 
-  // Fetch work profiles
-  const { data: profilesData, isLoading } = useQuery({
-    queryKey: ['work-profiles'],
+  // Fetch settings to get display currency (needed before work profiles query)
+  const { data: settingsData } = useQuery({
+    queryKey: ['settings'],
     queryFn: async () => {
-      const response = await workProfilesAPI.getAll();
+      const response = await settingsAPI.getAll();
+      return response.data.settings;
+    },
+  });
+
+  // Get display currency from settings or fallback to EUR
+  const displayCurrency = settingsData?.display_currency || 'EUR';
+
+  // Initialize calculator currency from display currency on first load
+  useEffect(() => {
+    if (settingsData?.display_currency && calculatorCurrency === 'EUR') {
+      setCalculatorCurrency(settingsData.display_currency);
+    }
+  }, [settingsData?.display_currency]);
+
+  // Fetch work profiles with currency conversion
+  const { data: profilesData, isLoading } = useQuery({
+    queryKey: ['work-profiles', displayCurrency],
+    queryFn: async () => {
+      const response = await workProfilesAPI.getAll(displayCurrency);
       return response.data.work_profiles;
     },
   });
@@ -82,20 +104,46 @@ export default function WorkHoursPage() {
     },
   });
 
-  // Create/Update mutation
-  const saveMutation = useMutation({
+  // Fetch currencies from API
+  const { data: currenciesData } = useQuery({
+    queryKey: ['currencies'],
+    queryFn: async () => {
+      const response = await currenciesAPI.getAll();
+      return response.data.currencies;
+    },
+  });
+
+  // Create mutation (for new profiles)
+  const createMutation = useMutation({
     mutationFn: (data: any) => workProfilesAPI.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['work-profiles'] });
       setOpenDialog(false);
       resetForm();
       setEditingProfile(null);
-      toast.success(editingProfile ? 'Work profile updated successfully!' : 'Work profile created successfully!');
+      toast.success('Work profile created successfully!');
     },
     onError: (error: any) => {
-      console.error('Failed to save work profile:', error);
+      console.error('Failed to create work profile:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
-      toast.error(`Failed to save work profile: ${errorMessage}`);
+      toast.error(`Failed to create work profile: ${errorMessage}`);
+    },
+  });
+
+  // Update mutation (for existing profiles)
+  const updateMutation = useMutation({
+    mutationFn: ({ ownerId, data }: { ownerId: number; data: any }) => workProfilesAPI.update(ownerId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['work-profiles'] });
+      setOpenDialog(false);
+      resetForm();
+      setEditingProfile(null);
+      toast.success('Work profile updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update work profile:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update work profile: ${errorMessage}`);
     },
   });
 
@@ -119,7 +167,7 @@ export default function WorkHoursPage() {
       owner_id: '',
       monthly_salary: '',
       working_hours_per_month: '',
-      currency: 'EUR',
+      currency: displayCurrency,
       tax_rate: '0',
     });
   };
@@ -137,14 +185,42 @@ export default function WorkHoursPage() {
   };
 
   const handleSubmit = () => {
+    // Validation
+    const salary = parseFloat(formData.monthly_salary);
+    const hours = parseFloat(formData.working_hours_per_month);
+
+    if (!formData.owner_id) {
+      toast.error('Please select an owner');
+      return;
+    }
+    if (isNaN(salary) || salary <= 0) {
+      toast.error('Monthly salary must be greater than 0');
+      return;
+    }
+    if (isNaN(hours) || hours <= 0) {
+      toast.error('Working hours must be greater than 0');
+      return;
+    }
+    if (hours > 744) {
+      toast.error('Working hours cannot exceed 744 (31 days x 24 hours)');
+      return;
+    }
+
     const data = {
       owner_id: parseInt(formData.owner_id),
-      monthly_salary: parseFloat(formData.monthly_salary),
-      working_hours_per_month: parseFloat(formData.working_hours_per_month),
+      monthly_salary: salary,
+      working_hours_per_month: hours,
       currency: formData.currency,
-      tax_rate: parseFloat(formData.tax_rate),
+      tax_rate: parseFloat(formData.tax_rate) || 0,
     };
-    saveMutation.mutate(data);
+
+    if (editingProfile) {
+      // Use PUT for updates
+      updateMutation.mutate({ ownerId: data.owner_id, data });
+    } else {
+      // Use POST for creates
+      createMutation.mutate(data);
+    }
   };
 
   const handleCalculate = async () => {
@@ -152,7 +228,7 @@ export default function WorkHoursPage() {
 
     try {
       const amount = parseFloat(calculatorAmount);
-      const response = await workProfilesAPI.calculate(amount, selectedOwnerId);
+      const response = await workProfilesAPI.calculate(amount, selectedOwnerId, calculatorCurrency);
       setCalculationResult(response.data);
     } catch (error) {
       console.error('Calculation failed:', error);
@@ -160,30 +236,35 @@ export default function WorkHoursPage() {
   };
 
   const formatCurrency = (amount: number, currency: string = 'EUR') => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: currency,
-    }).format(amount);
+    return formatCurrencyUtil(amount, currency);
   };
 
   if (isLoading) {
     return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatSkeleton />
+          <StatSkeleton />
+          <StatSkeleton />
+          <StatSkeleton />
+        </div>
+        <div className="rounded-xl border border-border bg-card p-6">
+          <ListSkeleton items={5} showAction />
+        </div>
       </div>
     );
   }
 
-  // Calculate KPI metrics
+  // Calculate KPI metrics using converted rates (all in display currency)
   const totalProfiles = profilesData?.length || 0;
   const avgHourlyRate =
     totalProfiles > 0
-      ? profilesData.reduce((sum: number, p: any) => sum + p.hourly_rate, 0) / totalProfiles
+      ? profilesData.reduce((sum: number, p: any) => sum + (p.hourly_rate_converted || p.hourly_rate), 0) / totalProfiles
       : 0;
   const highestRate =
-    totalProfiles > 0 ? Math.max(...profilesData.map((p: any) => p.hourly_rate)) : 0;
+    totalProfiles > 0 ? Math.max(...profilesData.map((p: any) => p.hourly_rate_converted || p.hourly_rate)) : 0;
   const lowestRate =
-    totalProfiles > 0 ? Math.min(...profilesData.map((p: any) => p.hourly_rate)) : 0;
+    totalProfiles > 0 ? Math.min(...profilesData.map((p: any) => p.hourly_rate_converted || p.hourly_rate)) : 0;
 
   return (
     <div className="space-y-6">
@@ -225,7 +306,8 @@ export default function WorkHoursPage() {
               </div>
               <div>
                 <p className="text-sm text-foreground-muted mb-1">Average Rate</p>
-                <p className="text-2xl font-bold text-foreground">{formatCurrency(avgHourlyRate)}/h</p>
+                <p className="text-2xl font-bold text-foreground">{formatCurrency(avgHourlyRate, displayCurrency)}/h</p>
+                <p className="text-xs text-foreground-muted mt-1">in {displayCurrency}</p>
               </div>
             </div>
           </Card>
@@ -241,7 +323,8 @@ export default function WorkHoursPage() {
               </div>
               <div>
                 <p className="text-sm text-foreground-muted mb-1">Highest Rate</p>
-                <p className="text-2xl font-bold text-foreground">{formatCurrency(highestRate)}/h</p>
+                <p className="text-2xl font-bold text-foreground">{formatCurrency(highestRate, displayCurrency)}/h</p>
+                <p className="text-xs text-foreground-muted mt-1">in {displayCurrency}</p>
               </div>
             </div>
           </Card>
@@ -257,7 +340,8 @@ export default function WorkHoursPage() {
               </div>
               <div>
                 <p className="text-sm text-foreground-muted mb-1">Lowest Rate</p>
-                <p className="text-2xl font-bold text-foreground">{formatCurrency(lowestRate)}/h</p>
+                <p className="text-2xl font-bold text-foreground">{formatCurrency(lowestRate, displayCurrency)}/h</p>
+                <p className="text-xs text-foreground-muted mt-1">in {displayCurrency}</p>
               </div>
             </div>
           </Card>
@@ -291,7 +375,7 @@ export default function WorkHoursPage() {
             <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <Label>Select Owner</Label>
+                  <Label htmlFor="calc-owner">Select Owner</Label>
                   <Select
                     value={selectedOwnerId?.toString() || ''}
                     onValueChange={(value) => {
@@ -299,7 +383,7 @@ export default function WorkHoursPage() {
                       setCalculationResult(null);
                     }}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id="calc-owner">
                       <SelectValue placeholder="Select owner" />
                     </SelectTrigger>
                     <SelectContent>
@@ -335,22 +419,44 @@ export default function WorkHoursPage() {
                       </div>
                     </div>
 
-                    <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-5 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="calc-currency">Currency</Label>
+                        <Select
+                          value={calculatorCurrency}
+                          onValueChange={(value) => {
+                            setCalculatorCurrency(value);
+                            setCalculationResult(null);
+                          }}
+                        >
+                          <SelectTrigger id="calc-currency">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {currenciesData && currenciesData.length > 0
+                              ? currenciesData.map((curr: any) => (
+                                  <SelectItem key={curr.code} value={curr.code}>
+                                    {curr.code}
+                                  </SelectItem>
+                                ))
+                              : ['EUR', 'USD', 'GBP', 'DKK', 'SEK', 'CHF'].map((curr) => (
+                                  <SelectItem key={curr} value={curr}>
+                                    {curr}
+                                  </SelectItem>
+                                ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                       <div className="md:col-span-3 space-y-2">
                         <Label htmlFor="amount">Amount</Label>
-                        <div className="relative">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground-muted">
-                            EUR
-                          </span>
-                          <Input
-                            id="amount"
-                            type="number"
-                            value={calculatorAmount}
-                            onChange={(e) => setCalculatorAmount(e.target.value)}
-                            placeholder="1500.00"
-                            className="pl-12"
-                          />
-                        </div>
+                        <Input
+                          id="amount"
+                          type="number"
+                          step="0.01"
+                          value={calculatorAmount}
+                          onChange={(e) => setCalculatorAmount(e.target.value)}
+                          placeholder="1500.00"
+                        />
                       </div>
                       <div className="flex items-end">
                         <Button
@@ -367,6 +473,24 @@ export default function WorkHoursPage() {
                       <div className="md:col-span-2">
                         <Card className="p-6 bg-success/20 border-success">
                           <h3 className="text-lg font-semibold text-foreground mb-4">Results</h3>
+
+                          {/* Show conversion info if currencies differ */}
+                          {calculationResult.original_currency !== calculationResult.profile_currency && (
+                            <div className="mb-4 p-3 rounded-lg bg-background/50 text-sm">
+                              <p className="text-foreground-muted">
+                                {formatCurrency(calculationResult.original_amount, calculationResult.original_currency)}
+                                {' = '}
+                                <span className="font-semibold text-foreground">
+                                  {formatCurrency(calculationResult.converted_amount, calculationResult.profile_currency)}
+                                </span>
+                                {' '}
+                                <span className="text-foreground-muted">
+                                  (rate: {calculationResult.exchange_rate.toFixed(4)})
+                                </span>
+                              </p>
+                            </div>
+                          )}
+
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                             <div>
                               <p className="text-sm text-foreground-muted">Work Hours</p>
@@ -374,14 +498,20 @@ export default function WorkHoursPage() {
                                 {calculationResult.work_hours.toFixed(1)}h
                               </p>
                             </div>
-                            <div>
-                              <p className="text-sm text-foreground-muted">Work Days</p>
+                            <div className="cursor-help" title="Based on an 8-hour workday">
+                              <p className="text-sm text-foreground-muted flex items-center gap-1">
+                                Work Days
+                                <Info className="h-3 w-3" />
+                              </p>
                               <p className="text-2xl font-bold text-foreground">
                                 {calculationResult.work_days.toFixed(1)} days
                               </p>
                             </div>
-                            <div>
-                              <p className="text-sm text-foreground-muted">Work Weeks</p>
+                            <div className="cursor-help" title="Based on a 5-day workweek">
+                              <p className="text-sm text-foreground-muted flex items-center gap-1">
+                                Work Weeks
+                                <Info className="h-3 w-3" />
+                              </p>
                               <p className="text-2xl font-bold text-foreground">
                                 {calculationResult.work_weeks.toFixed(2)} weeks
                               </p>
@@ -539,13 +669,13 @@ export default function WorkHoursPage() {
 
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label>Owner</Label>
+              <Label htmlFor="profile-owner">Owner</Label>
               <Select
                 value={formData.owner_id}
                 onValueChange={(value) => setFormData({ ...formData, owner_id: value })}
                 disabled={!!editingProfile}
               >
-                <SelectTrigger>
+                <SelectTrigger id="profile-owner">
                   <SelectValue placeholder="Select owner" />
                 </SelectTrigger>
                 <SelectContent>
@@ -583,20 +713,26 @@ export default function WorkHoursPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Currency</Label>
+                <Label htmlFor="profile-currency">Currency</Label>
                 <Select
                   value={formData.currency}
                   onValueChange={(value) => setFormData({ ...formData, currency: value })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="profile-currency">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {['EUR', 'USD', 'GBP', 'DKK', 'SEK', 'CHF'].map((curr) => (
-                      <SelectItem key={curr} value={curr}>
-                        {curr}
-                      </SelectItem>
-                    ))}
+                    {currenciesData && currenciesData.length > 0
+                      ? currenciesData.map((curr: any) => (
+                          <SelectItem key={curr.code} value={curr.code}>
+                            {curr.code} - {curr.name}
+                          </SelectItem>
+                        ))
+                      : ['EUR', 'USD', 'GBP', 'DKK', 'SEK', 'CHF'].map((curr) => (
+                          <SelectItem key={curr} value={curr}>
+                            {curr}
+                          </SelectItem>
+                        ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -626,8 +762,8 @@ export default function WorkHoursPage() {
             >
               Cancel
             </Button>
-            <Button onClick={handleSubmit} disabled={saveMutation.isPending}>
-              {editingProfile ? 'Update' : 'Create'}
+            <Button onClick={handleSubmit} disabled={createMutation.isPending || updateMutation.isPending}>
+              {createMutation.isPending || updateMutation.isPending ? 'Saving...' : editingProfile ? 'Update' : 'Create'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -638,6 +774,9 @@ export default function WorkHoursPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this work profile.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4">

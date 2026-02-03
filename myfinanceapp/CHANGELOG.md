@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.16
+
+- Fix visual
+- Add money flow
+- Fix recurring transactions
+
 ## 2.0.15
 
 - Add MFA support

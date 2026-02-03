@@ -7,7 +7,6 @@ import {
   Button,
   Input,
   Badge,
-  Spinner,
   Tabs,
   TabsList,
   TabsTrigger,
@@ -22,12 +21,15 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
   Select,
   SelectTrigger,
   SelectValue,
   SelectContent,
   SelectItem,
+  StatSkeleton,
+  TableSkeleton,
 } from '../components/shadcn';
 import {
   Archive,
@@ -107,6 +109,11 @@ export default function BackupPage() {
       setRestoreConfirm(null);
       toast.success('Backup restored successfully! Please refresh the page.');
     },
+    onError: (error: any) => {
+      console.error('Failed to restore backup:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to restore backup: ${errorMessage}`);
+    },
   });
 
   // Delete backup mutation
@@ -141,6 +148,11 @@ export default function BackupPage() {
       queryClient.invalidateQueries({ queryKey: ['backup-settings'] });
       toast.success('Backup settings updated successfully!');
     },
+    onError: (error: any) => {
+      console.error('Failed to update backup settings:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update backup settings: ${errorMessage}`);
+    },
   });
 
   // Cleanup mutation
@@ -150,6 +162,11 @@ export default function BackupPage() {
       queryClient.invalidateQueries({ queryKey: ['backups'] });
       queryClient.invalidateQueries({ queryKey: ['backup-settings'] });
       toast.success('Backup cleanup completed!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to cleanup backups:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to cleanup backups: ${errorMessage}`);
     },
   });
 
@@ -222,8 +239,16 @@ export default function BackupPage() {
 
   if (isLoading) {
     return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatSkeleton />
+          <StatSkeleton />
+          <StatSkeleton />
+          <StatSkeleton />
+        </div>
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <TableSkeleton rows={5} columns={6} />
+        </div>
       </div>
     );
   }
@@ -792,6 +817,9 @@ export default function BackupPage() {
               <AlertTriangle className="w-5 h-5 text-warning" />
               Confirm Restore
             </DialogTitle>
+            <DialogDescription>
+              Review the backup details before restoring your database.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -843,6 +871,9 @@ export default function BackupPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Backup</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this backup file.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">

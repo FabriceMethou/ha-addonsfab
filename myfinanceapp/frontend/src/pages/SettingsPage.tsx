@@ -17,6 +17,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
   Switch,
   Label,
@@ -41,6 +42,7 @@ import {
 } from 'lucide-react';
 import { authAPI, backupsAPI, currenciesAPI, transactionsAPI, settingsAPI } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import { reciprocalRate } from '../lib/money';
 
 export default function SettingsPage() {
   const { user, logout } = useAuth();
@@ -509,8 +511,9 @@ export default function SettingsPage() {
           </p>
           <div className="flex items-center gap-4">
             <div className="flex-1">
-              <label className="text-sm font-medium text-foreground mb-2 block">Display Currency</label>
+              <label htmlFor="display-currency" className="text-sm font-medium text-foreground mb-2 block">Display Currency</label>
               <select
+                id="display-currency"
                 value={displayCurrency}
                 onChange={(e) => setDisplayCurrency(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-surface border border-border text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
@@ -645,8 +648,9 @@ export default function SettingsPage() {
         </div>
         <div className="border-t border-border pt-4 space-y-4">
           <div>
-            <label className="text-sm font-medium text-foreground mb-2 block">Current Password</label>
+            <label htmlFor="current-password" className="text-sm font-medium text-foreground mb-2 block">Current Password</label>
             <Input
+              id="current-password"
               type="password"
               value={passwordForm.oldPassword}
               onChange={(e) => setPasswordForm({ ...passwordForm, oldPassword: e.target.value })}
@@ -654,16 +658,18 @@ export default function SettingsPage() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">New Password</label>
+              <label htmlFor="new-password" className="text-sm font-medium text-foreground mb-2 block">New Password</label>
               <Input
+                id="new-password"
                 type="password"
                 value={passwordForm.newPassword}
                 onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Confirm New Password</label>
+              <label htmlFor="confirm-password" className="text-sm font-medium text-foreground mb-2 block">Confirm New Password</label>
               <Input
+                id="confirm-password"
                 type="password"
                 value={passwordForm.confirmPassword}
                 onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
@@ -756,7 +762,7 @@ export default function SettingsPage() {
                       <TableCell className="text-right">
                         1 € = {currency.exchange_rate_to_eur === 1
                           ? '1.00'
-                          : (1 / currency.exchange_rate_to_eur).toFixed(4)} {currency.code}
+                          : reciprocalRate(currency.exchange_rate_to_eur)} {currency.code}
                       </TableCell>
                       <TableCell className="text-center">
                         <Badge variant={currency.is_active ? 'success' : 'outline'} size="sm">
@@ -1008,6 +1014,9 @@ export default function SettingsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create Backup</DialogTitle>
+            <DialogDescription>
+              Create a snapshot of your financial database for safekeeping.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="p-4 rounded-lg bg-primary/10 border border-primary/20 mb-4">
@@ -1044,13 +1053,17 @@ export default function SettingsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editingCurrency ? 'Edit Currency' : 'Add Currency'}</DialogTitle>
+            <DialogDescription>
+              {editingCurrency ? 'Update the currency details.' : 'Add a new currency to your available options.'}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">Currency Code</label>
+                <label htmlFor="currency-code" className="text-sm font-medium text-foreground mb-2 block">Currency Code</label>
                 <Input
+                  id="currency-code"
                   value={currencyForm.code}
                   onChange={(e) => setCurrencyForm({ ...currencyForm, code: e.target.value.toUpperCase() })}
                   placeholder="e.g., USD, GBP"
@@ -1060,8 +1073,9 @@ export default function SettingsPage() {
                 <p className="text-xs text-foreground-muted mt-1">3-letter ISO code</p>
               </div>
               <div>
-                <label className="text-sm font-medium text-foreground mb-2 block">Symbol</label>
+                <label htmlFor="currency-symbol" className="text-sm font-medium text-foreground mb-2 block">Symbol</label>
                 <Input
+                  id="currency-symbol"
                   value={currencyForm.symbol}
                   onChange={(e) => setCurrencyForm({ ...currencyForm, symbol: e.target.value })}
                   placeholder="e.g., $, £, kr"
@@ -1070,16 +1084,18 @@ export default function SettingsPage() {
               </div>
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Currency Name</label>
+              <label htmlFor="currency-name" className="text-sm font-medium text-foreground mb-2 block">Currency Name</label>
               <Input
+                id="currency-name"
                 value={currencyForm.name}
                 onChange={(e) => setCurrencyForm({ ...currencyForm, name: e.target.value })}
                 placeholder="e.g., US Dollar, British Pound"
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Exchange Rate to EUR</label>
+              <label htmlFor="currency-exchange-rate" className="text-sm font-medium text-foreground mb-2 block">Exchange Rate to EUR</label>
               <Input
+                id="currency-exchange-rate"
                 type="number"
                 value={currencyForm.exchange_rate_to_eur}
                 onChange={(e) => setCurrencyForm({ ...currencyForm, exchange_rate_to_eur: e.target.value })}
@@ -1094,7 +1110,7 @@ export default function SettingsPage() {
               <p className="text-xs text-foreground">
                 <strong>Example:</strong> If 1 € = 7.5 DKK, then 1 DKK = 0.134 EUR<br />
                 So the exchange rate should be: {currencyForm.exchange_rate_to_eur !== ''
-                  ? `1 € = ${(1 / parseFloat(currencyForm.exchange_rate_to_eur || '1')).toFixed(4)} ${currencyForm.code || 'XXX'}`
+                  ? `1 € = ${reciprocalRate(parseFloat(currencyForm.exchange_rate_to_eur || '1'))} ${currencyForm.code || 'XXX'}`
                   : 'Enter rate to see conversion'}
               </p>
             </div>
@@ -1126,6 +1142,9 @@ export default function SettingsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Currency</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this currency from your available options.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="p-4 rounded-lg bg-warning/10 border border-warning/20 mb-4">
@@ -1156,20 +1175,25 @@ export default function SettingsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add New User</DialogTitle>
+            <DialogDescription>
+              Create a new user account with specified permissions.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Username</label>
+              <label htmlFor="new-username" className="text-sm font-medium text-foreground mb-2 block">Username</label>
               <Input
+                id="new-username"
                 value={newUserForm.username}
                 onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value })}
                 placeholder="Enter username"
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Email</label>
+              <label htmlFor="new-user-email" className="text-sm font-medium text-foreground mb-2 block">Email</label>
               <Input
+                id="new-user-email"
                 type="email"
                 value={newUserForm.email}
                 onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
@@ -1178,8 +1202,9 @@ export default function SettingsPage() {
               <p className="text-xs text-foreground-muted mt-1">Optional - defaults to username@local.app</p>
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Password</label>
+              <label htmlFor="new-user-password" className="text-sm font-medium text-foreground mb-2 block">Password</label>
               <Input
+                id="new-user-password"
                 type="password"
                 value={newUserForm.password}
                 onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
@@ -1224,12 +1249,16 @@ export default function SettingsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit User</DialogTitle>
+            <DialogDescription>
+              Update the user's email and permissions.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Email</label>
+              <label htmlFor="edit-user-email" className="text-sm font-medium text-foreground mb-2 block">Email</label>
               <Input
+                id="edit-user-email"
                 type="email"
                 value={editUserForm.email}
                 onChange={(e) => setEditUserForm({ ...editUserForm, email: e.target.value })}
@@ -1272,6 +1301,9 @@ export default function SettingsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete User</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this user account.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="p-4 rounded-lg bg-warning/10 border border-warning/20 mb-4">

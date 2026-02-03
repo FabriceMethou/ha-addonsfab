@@ -1,6 +1,8 @@
 // Debts Page - Debt Tracking and Payment History
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import {
   Plus,
   Pencil,
@@ -16,7 +18,6 @@ import {
   Button,
   Card,
   Input,
-  Label,
   Badge,
   Spinner,
   Progress,
@@ -42,32 +43,15 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  FormField,
+  DebtsSkeleton,
 } from '../components/shadcn';
 import { debtsAPI, accountsAPI } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { format, parseISO } from 'date-fns';
 import { useToast } from '../contexts/ToastContext';
-
-interface DebtFormData {
-  creditor: string;
-  original_amount: string;
-  current_balance: string;
-  interest_rate: string;
-  interest_type: string;
-  minimum_payment: string;
-  payment_day: string;
-  due_date: string;
-  status: string;
-  notes: string;
-  account_id: string;
-}
-
-interface PaymentFormData {
-  amount: string;
-  payment_date: string;
-  payment_type: string;
-  notes: string;
-}
+import { debtSchema, paymentSchema, DebtFormData, PaymentFormData } from '../lib/validations';
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 
 // KPI Card Component
 interface KPICardProps {
@@ -134,7 +118,7 @@ export default function DebtsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
   const [showInactive, setShowInactive] = useState(false);
 
-  const [debtForm, setDebtForm] = useState<DebtFormData>({
+  const defaultDebtValues: DebtFormData = {
     creditor: '',
     original_amount: '',
     current_balance: '',
@@ -146,14 +130,44 @@ export default function DebtsPage() {
     status: 'active',
     notes: '',
     account_id: '',
+  };
+
+  const {
+    control: debtControl,
+    register: debtRegister,
+    handleSubmit: handleDebtSubmit,
+    formState: { errors: debtErrors, isValid: isDebtValid },
+    reset: resetDebtForm,
+    watch: watchDebt,
+  } = useForm<DebtFormData>({
+    resolver: zodResolver(debtSchema),
+    mode: 'onChange',
+    defaultValues: defaultDebtValues,
   });
 
-  const [paymentForm, setPaymentForm] = useState<PaymentFormData>({
+  const watchDebtInterestType = watchDebt('interest_type');
+
+  const defaultPaymentValues: PaymentFormData = {
     amount: '',
     payment_date: format(new Date(), 'yyyy-MM-dd'),
     payment_type: 'monthly',
     notes: '',
+  };
+
+  const {
+    control: paymentControl,
+    register: paymentRegister,
+    handleSubmit: handlePaymentSubmit,
+    formState: { errors: paymentErrors, isValid: isPaymentValid },
+    reset: resetPaymentForm,
+    watch: watchPayment,
+  } = useForm<PaymentFormData>({
+    resolver: zodResolver(paymentSchema),
+    mode: 'onChange',
+    defaultValues: defaultPaymentValues,
   });
+
+  const watchPaymentType = watchPayment('payment_type');
 
   const queryClient = useQueryClient();
 
@@ -191,7 +205,7 @@ export default function DebtsPage() {
       queryClient.invalidateQueries({ queryKey: ['debts'] });
       queryClient.invalidateQueries({ queryKey: ['debts-summary'] });
       setDebtDialog(false);
-      resetDebtForm();
+      resetDebtForm(defaultDebtValues);
       toast.success('Debt created successfully!');
     },
     onError: (error: any) => {
@@ -208,7 +222,7 @@ export default function DebtsPage() {
       queryClient.invalidateQueries({ queryKey: ['debts'] });
       queryClient.invalidateQueries({ queryKey: ['debts-summary'] });
       setDebtDialog(false);
-      resetDebtForm();
+      resetDebtForm(defaultDebtValues);
       setEditingDebt(null);
       toast.success('Debt updated successfully!');
     },
@@ -243,7 +257,7 @@ export default function DebtsPage() {
       queryClient.invalidateQueries({ queryKey: ['debts-summary'] });
       queryClient.invalidateQueries({ queryKey: ['debt-payments', selectedDebt?.id] });
       setPaymentDialog(false);
-      resetPaymentForm();
+      resetPaymentForm(defaultPaymentValues);
       toast.success('Payment added successfully!');
     },
     onError: (error: any) => {
@@ -253,34 +267,10 @@ export default function DebtsPage() {
     },
   });
 
-  const resetDebtForm = () => {
-    setDebtForm({
-      creditor: '',
-      original_amount: '',
-      current_balance: '',
-      interest_rate: '',
-      interest_type: 'simple',
-      minimum_payment: '',
-      payment_day: '1',
-      due_date: format(new Date(), 'yyyy-MM-dd'),
-      status: 'active',
-      notes: '',
-      account_id: '',
-    });
-  };
-
-  const resetPaymentForm = () => {
-    setPaymentForm({
-      amount: '',
-      payment_date: format(new Date(), 'yyyy-MM-dd'),
-      payment_type: 'monthly',
-      notes: '',
-    });
-  };
 
   const handleEdit = (debt: any) => {
     setEditingDebt(debt);
-    setDebtForm({
+    resetDebtForm({
       creditor: debt.creditor,
       original_amount: debt.original_amount.toString(),
       current_balance: debt.current_balance.toString(),
@@ -296,72 +286,72 @@ export default function DebtsPage() {
     setDebtDialog(true);
   };
 
-  const handleSubmitDebt = () => {
+  const onSubmitDebt = (formData: DebtFormData) => {
     const data: any = {};
 
     // Always include creditor
-    if (debtForm.creditor) {
-      data.creditor = debtForm.creditor;
+    if (formData.creditor) {
+      data.creditor = formData.creditor;
     }
 
     // Only include original_amount when creating a new debt
-    if (!editingDebt && debtForm.original_amount) {
-      data.original_amount = parseFloat(debtForm.original_amount);
+    if (!editingDebt && formData.original_amount) {
+      data.original_amount = parseFloat(formData.original_amount);
     }
 
     // Include current_balance if provided
-    if (debtForm.current_balance) {
-      const balance = parseFloat(debtForm.current_balance);
+    if (formData.current_balance) {
+      const balance = parseFloat(formData.current_balance);
       if (!isNaN(balance)) {
         data.current_balance = balance;
       }
     }
 
     // Include interest_rate if provided
-    if (debtForm.interest_rate) {
-      const rate = parseFloat(debtForm.interest_rate);
+    if (formData.interest_rate) {
+      const rate = parseFloat(formData.interest_rate);
       if (!isNaN(rate)) {
         data.interest_rate = rate;
       }
     }
 
     // Include interest_type
-    if (debtForm.interest_type) {
-      data.interest_type = debtForm.interest_type;
+    if (formData.interest_type) {
+      data.interest_type = formData.interest_type;
     }
 
     // Include minimum_payment if provided
-    if (debtForm.minimum_payment) {
-      const payment = parseFloat(debtForm.minimum_payment);
+    if (formData.minimum_payment) {
+      const payment = parseFloat(formData.minimum_payment);
       if (!isNaN(payment)) {
         data.minimum_payment = payment;
       }
     }
 
     // Include payment_day if provided
-    if (debtForm.payment_day) {
-      const day = parseInt(debtForm.payment_day);
+    if (formData.payment_day) {
+      const day = parseInt(formData.payment_day);
       if (!isNaN(day)) {
         data.payment_day = day;
       }
     }
 
     // Include due_date if provided
-    if (debtForm.due_date) {
-      data.due_date = debtForm.due_date;
+    if (formData.due_date) {
+      data.due_date = formData.due_date;
     }
 
     // Include status
-    if (debtForm.status) {
-      data.status = debtForm.status;
+    if (formData.status) {
+      data.status = formData.status;
     }
 
     // Include notes (can be empty string)
-    data.notes = debtForm.notes || '';
+    data.notes = formData.notes || '';
 
     // Include linked_account_id if provided
-    if (debtForm.account_id) {
-      const accountId = parseInt(debtForm.account_id);
+    if (formData.account_id) {
+      const accountId = parseInt(formData.account_id);
       if (!isNaN(accountId)) {
         data.linked_account_id = accountId;
       }
@@ -374,24 +364,21 @@ export default function DebtsPage() {
     }
   };
 
-  const handleAddPayment = () => {
+  const onSubmitPayment = (formData: PaymentFormData) => {
     if (selectedDebt) {
       const data = {
         debt_id: selectedDebt.id,
-        amount: parseFloat(paymentForm.amount),
-        payment_date: paymentForm.payment_date,
-        payment_type: paymentForm.payment_type,
-        notes: paymentForm.notes,
+        amount: parseFloat(formData.amount),
+        payment_date: formData.payment_date,
+        payment_type: formData.payment_type,
+        notes: formData.notes,
       };
       addPaymentMutation.mutate(data);
     }
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: 'EUR',
-    }).format(amount);
+    return formatCurrencyUtil(amount, 'EUR');
   };
 
   const getStatusBadgeVariant = (status: string): 'success' | 'warning' | 'error' | 'default' => {
@@ -408,11 +395,7 @@ export default function DebtsPage() {
   };
 
   if (debtsLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <DebtsSkeleton />;
   }
 
   // Calculate statistics
@@ -521,7 +504,7 @@ export default function DebtsPage() {
         <Button
           onClick={() => {
             setEditingDebt(null);
-            resetDebtForm();
+            resetDebtForm(defaultDebtValues);
             setDebtDialog(true);
           }}
         >
@@ -697,7 +680,7 @@ export default function DebtsPage() {
                       size="sm"
                       onClick={() => {
                         setSelectedDebt(debt);
-                        resetPaymentForm();
+                        resetPaymentForm(defaultPaymentValues);
                         setPaymentDialog(true);
                       }}
                       disabled={debt.status === 'paid_off'}
@@ -818,162 +801,148 @@ export default function DebtsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="creditor">Debt Name</Label>
-              <Input
-                id="creditor"
-                value={debtForm.creditor}
-                onChange={(e) => setDebtForm({ ...debtForm, creditor: e.target.value })}
-                placeholder="e.g., Credit Card, Car Loan, Mortgage"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="original">Original Amount</Label>
+          <form onSubmit={handleDebtSubmit(onSubmitDebt)}>
+            <div className="space-y-4 py-4">
+              <FormField label="Debt Name" error={debtErrors.creditor?.message} required>
                 <Input
-                  id="original"
-                  type="number"
-                  value={debtForm.original_amount}
-                  onChange={(e) => setDebtForm({ ...debtForm, original_amount: e.target.value })}
-                  disabled={!!editingDebt}
+                  {...debtRegister('creditor')}
+                  placeholder="e.g., Credit Card, Car Loan, Mortgage"
                 />
-                {editingDebt && (
-                  <p className="text-xs text-foreground-muted">
-                    Original amount cannot be modified
+              </FormField>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Original Amount" error={debtErrors.original_amount?.message} required={!editingDebt}>
+                  <Input
+                    {...debtRegister('original_amount')}
+                    type="number"
+                    step="0.01"
+                    disabled={!!editingDebt}
+                  />
+                  {editingDebt && (
+                    <p className="text-xs text-foreground-muted mt-1">
+                      Original amount cannot be modified
+                    </p>
+                  )}
+                </FormField>
+                <FormField label="Current Balance (Optional)" error={debtErrors.current_balance?.message}>
+                  <Input
+                    {...debtRegister('current_balance')}
+                    type="number"
+                    step="0.01"
+                  />
+                  <p className="text-xs text-foreground-muted mt-1">
+                    Leave empty to default to original amount.
                   </p>
-                )}
+                </FormField>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="balance">Current Balance (Optional)</Label>
-                <Input
-                  id="balance"
-                  type="number"
-                  value={debtForm.current_balance}
-                  onChange={(e) => setDebtForm({ ...debtForm, current_balance: e.target.value })}
+
+              <FormField label="Link to Account (Optional)" error={debtErrors.account_id?.message}>
+                <Controller
+                  name="account_id"
+                  control={debtControl}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select an account" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">None</SelectItem>
+                        {accountsData?.map((account: any) => (
+                          <SelectItem key={account.id} value={account.id.toString()}>
+                            {account.name} - {account.bank_name} ({account.currency})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 />
-                <p className="text-xs text-foreground-muted">
-                  Leave empty to default to original amount.
+                <p className="text-xs text-foreground-muted mt-1">
+                  Link this debt to an account for tracking purposes.
                 </p>
+              </FormField>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Interest Rate (%)" error={debtErrors.interest_rate?.message}>
+                  <Input
+                    {...debtRegister('interest_rate')}
+                    type="number"
+                    step="0.01"
+                  />
+                </FormField>
+                <FormField label="Interest Type" error={debtErrors.interest_type?.message}>
+                  <Controller
+                    name="interest_type"
+                    control={debtControl}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="simple">Simple Interest</SelectItem>
+                          <SelectItem value="compound">Compound Interest</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                  <p className="text-xs text-foreground-muted mt-1">
+                    {watchDebtInterestType === 'simple'
+                      ? 'Interest on principal only'
+                      : 'Interest on principal + accumulated interest'}
+                  </p>
+                </FormField>
               </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Monthly Payment" error={debtErrors.minimum_payment?.message}>
+                  <Input
+                    {...debtRegister('minimum_payment')}
+                    type="number"
+                    step="0.01"
+                  />
+                </FormField>
+                <FormField label="Payment Due Day of Month" error={debtErrors.payment_day?.message}>
+                  <Input
+                    {...debtRegister('payment_day')}
+                    type="number"
+                    min={1}
+                    max={28}
+                  />
+                  <p className="text-xs text-foreground-muted mt-1">Day of month (1-28)</p>
+                </FormField>
+              </div>
+
+              <FormField label="Start Date" error={debtErrors.due_date?.message} required>
+                <Input
+                  {...debtRegister('due_date')}
+                  type="date"
+                />
+                <p className="text-xs text-foreground-muted mt-1">
+                  Date when debt starts or first payment is due
+                </p>
+              </FormField>
+
+              <FormField label="Notes (Optional)" error={debtErrors.notes?.message}>
+                <Textarea
+                  {...debtRegister('notes')}
+                  rows={2}
+                />
+              </FormField>
             </div>
 
-            <div className="space-y-2">
-              <Label>Link to Account (Optional)</Label>
-              <Select
-                value={debtForm.account_id}
-                onValueChange={(value) => setDebtForm({ ...debtForm, account_id: value })}
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setDebtDialog(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                loading={createMutation.isPending || updateMutation.isPending}
+                disabled={!isDebtValid}
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select an account" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">None</SelectItem>
-                  {accountsData?.map((account: any) => (
-                    <SelectItem key={account.id} value={account.id.toString()}>
-                      {account.name} - {account.bank_name} ({account.currency})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-foreground-muted">
-                Link this debt to an account for tracking purposes.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="rate">Interest Rate (%)</Label>
-                <Input
-                  id="rate"
-                  type="number"
-                  value={debtForm.interest_rate}
-                  onChange={(e) => setDebtForm({ ...debtForm, interest_rate: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Interest Type</Label>
-                <Select
-                  value={debtForm.interest_type}
-                  onValueChange={(value) => setDebtForm({ ...debtForm, interest_type: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="simple">Simple Interest</SelectItem>
-                    <SelectItem value="compound">Compound Interest</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-foreground-muted">
-                  {debtForm.interest_type === 'simple'
-                    ? 'Interest on principal only'
-                    : 'Interest on principal + accumulated interest'}
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="payment">Monthly Payment</Label>
-                <Input
-                  id="payment"
-                  type="number"
-                  value={debtForm.minimum_payment}
-                  onChange={(e) => setDebtForm({ ...debtForm, minimum_payment: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="paymentDay">Payment Due Day of Month</Label>
-                <Input
-                  id="paymentDay"
-                  type="number"
-                  min={1}
-                  max={28}
-                  value={debtForm.payment_day}
-                  onChange={(e) => setDebtForm({ ...debtForm, payment_day: e.target.value })}
-                />
-                <p className="text-xs text-foreground-muted">Day of month (1-28)</p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="dueDate">Start Date</Label>
-              <Input
-                id="dueDate"
-                type="date"
-                value={debtForm.due_date}
-                onChange={(e) => setDebtForm({ ...debtForm, due_date: e.target.value })}
-              />
-              <p className="text-xs text-foreground-muted">
-                Date when debt starts or first payment is due
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="notes">Notes (Optional)</Label>
-              <Textarea
-                id="notes"
-                value={debtForm.notes}
-                onChange={(e) => setDebtForm({ ...debtForm, notes: e.target.value })}
-                rows={2}
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDebtDialog(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmitDebt}
-              loading={createMutation.isPending || updateMutation.isPending}
-              disabled={!debtForm.creditor}
-            >
-              {editingDebt ? 'Update' : 'Add'}
-            </Button>
-          </DialogFooter>
+                {editingDebt ? 'Update' : 'Add'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -982,73 +951,72 @@ export default function DebtsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Add Payment to {selectedDebt?.creditor}</DialogTitle>
+            <DialogDescription>
+              Record a payment toward this debt to update the balance.
+            </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="paymentAmount">Payment Amount</Label>
-                <Input
-                  id="paymentAmount"
-                  type="number"
-                  value={paymentForm.amount}
-                  onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
-                />
+          <form onSubmit={handlePaymentSubmit(onSubmitPayment)}>
+            <div className="space-y-4 py-4">
+              <div className="grid grid-cols-2 gap-4">
+                <FormField label="Payment Amount" error={paymentErrors.amount?.message} required>
+                  <Input
+                    {...paymentRegister('amount')}
+                    type="number"
+                    step="0.01"
+                  />
+                </FormField>
+                <FormField label="Payment Date" error={paymentErrors.payment_date?.message} required>
+                  <Input
+                    {...paymentRegister('payment_date')}
+                    type="date"
+                  />
+                </FormField>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="paymentDate">Payment Date</Label>
-                <Input
-                  id="paymentDate"
-                  type="date"
-                  value={paymentForm.payment_date}
-                  onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })}
+
+              <FormField label="Payment Type" error={paymentErrors.payment_type?.message}>
+                <Controller
+                  name="payment_type"
+                  control={paymentControl}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="monthly">Monthly Payment</SelectItem>
+                        <SelectItem value="extra">Extra Payment</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
                 />
-              </div>
+                <p className="text-xs text-foreground-muted mt-1">
+                  {watchPaymentType === 'monthly'
+                    ? 'Regular monthly payment (includes interest + principal)'
+                    : 'Extra payment (goes entirely to principal, reduces interest)'}
+                </p>
+              </FormField>
+
+              <FormField label="Notes (Optional)" error={paymentErrors.notes?.message}>
+                <Input
+                  {...paymentRegister('notes')}
+                />
+              </FormField>
             </div>
 
-            <div className="space-y-2">
-              <Label>Payment Type</Label>
-              <Select
-                value={paymentForm.payment_type}
-                onValueChange={(value) => setPaymentForm({ ...paymentForm, payment_type: value })}
+            <DialogFooter>
+              <Button variant="outline" type="button" onClick={() => setPaymentDialog(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                loading={addPaymentMutation.isPending}
+                disabled={!isPaymentValid}
               >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="monthly">Monthly Payment</SelectItem>
-                  <SelectItem value="extra">Extra Payment</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-foreground-muted">
-                {paymentForm.payment_type === 'monthly'
-                  ? 'Regular monthly payment (includes interest + principal)'
-                  : 'Extra payment (goes entirely to principal, reduces interest)'}
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="paymentNotes">Notes (Optional)</Label>
-              <Input
-                id="paymentNotes"
-                value={paymentForm.notes}
-                onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPaymentDialog(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleAddPayment}
-              loading={addPaymentMutation.isPending}
-              disabled={!paymentForm.amount}
-            >
-              Add Payment
-            </Button>
-          </DialogFooter>
+                Add Payment
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -1057,6 +1025,9 @@ export default function DebtsPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this debt and all associated payment history.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4">
@@ -1098,10 +1069,7 @@ function DebtPayments({ debtId }: { debtId: number }) {
   });
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: 'EUR',
-    }).format(amount);
+    return formatCurrencyUtil(amount, 'EUR');
   };
 
   if (isLoading) {

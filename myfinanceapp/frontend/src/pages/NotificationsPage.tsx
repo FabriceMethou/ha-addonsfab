@@ -6,7 +6,6 @@ import {
   Button,
   Input,
   Badge,
-  Spinner,
   Switch,
   Table,
   TableHeader,
@@ -18,7 +17,11 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
+  CardSkeleton,
+  StatSkeleton,
+  TableSkeleton,
 } from '../components/shadcn';
 import {
   Mail,
@@ -30,9 +33,11 @@ import {
   EyeOff,
 } from 'lucide-react';
 import { alertsAPI } from '../services/api';
+import { useToast } from '../contexts/ToastContext';
 import { format } from 'date-fns';
 
 export default function NotificationsPage() {
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [testEmail, setTestEmail] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -98,6 +103,12 @@ export default function NotificationsPage() {
     mutationFn: (data: any) => alertsAPI.updateEmailSettings(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alert-config'] });
+      toast.success('Email settings saved successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to save email settings:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to save email settings: ${errorMessage}`);
     },
   });
 
@@ -106,12 +117,26 @@ export default function NotificationsPage() {
     mutationFn: (data: any) => alertsAPI.updateThresholds(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alert-config'] });
+      toast.success('Alert thresholds saved successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to save thresholds:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to save thresholds: ${errorMessage}`);
     },
   });
 
   // Test email mutation
   const testEmailMutation = useMutation({
     mutationFn: (email: string) => alertsAPI.sendTestEmail(email),
+    onSuccess: () => {
+      toast.success('Test email sent successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to send test email:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to send test email: ${errorMessage}`);
+    },
   });
 
   // Disable email mutation
@@ -119,6 +144,12 @@ export default function NotificationsPage() {
     mutationFn: () => alertsAPI.disableEmail(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alert-config'] });
+      toast.success('Email notifications disabled');
+    },
+    onError: (error: any) => {
+      console.error('Failed to disable email:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to disable email: ${errorMessage}`);
     },
   });
 
@@ -147,8 +178,21 @@ export default function NotificationsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatSkeleton />
+          <StatSkeleton />
+          <StatSkeleton />
+          <StatSkeleton />
+        </div>
+        <CardSkeleton showHeader lines={6} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <CardSkeleton showHeader lines={4} />
+          <CardSkeleton showHeader lines={4} />
+        </div>
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <TableSkeleton rows={5} columns={4} />
+        </div>
       </div>
     );
   }
@@ -380,6 +424,7 @@ export default function NotificationsPage() {
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground-muted">€</span>
                 <Input
                   type="number"
+                  step="0.01"
                   value={thresholdForm.daily_spending}
                   onChange={(e) =>
                     setThresholdForm({ ...thresholdForm, daily_spending: parseFloat(e.target.value) })
@@ -559,6 +604,9 @@ export default function NotificationsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Disable Email Notifications</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm that you want to disable email notifications.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4">

@@ -1,18 +1,23 @@
 import * as React from "react"
 import { cn } from "../../lib/utils"
 
-const Table = React.forwardRef<
-  HTMLTableElement,
-  React.HTMLAttributes<HTMLTableElement>
->(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
-    <table
-      ref={ref}
-      className={cn("w-full caption-bottom text-sm", className)}
-      {...props}
-    />
-  </div>
-))
+interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
+  /** Minimum width for the table to enable proper horizontal scrolling on mobile */
+  minWidth?: string;
+}
+
+const Table = React.forwardRef<HTMLTableElement, TableProps>(
+  ({ className, minWidth, ...props }, ref) => (
+    <div className="relative w-full overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+      <table
+        ref={ref}
+        className={cn("w-full caption-bottom text-sm", className)}
+        style={minWidth ? { minWidth } : undefined}
+        {...props}
+      />
+    </div>
+  )
+)
 Table.displayName = "Table"
 
 const TableHeader = React.forwardRef<
@@ -65,31 +70,44 @@ const TableRow = React.forwardRef<
 ))
 TableRow.displayName = "TableRow"
 
-const TableHead = React.forwardRef<
-  HTMLTableCellElement,
-  React.ThHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => (
-  <th
-    ref={ref}
-    className={cn(
-      "h-12 px-4 text-left align-middle font-medium text-foreground-muted [&:has([role=checkbox])]:pr-0",
-      className
-    )}
-    {...props}
-  />
-))
+interface TableHeadProps extends React.ThHTMLAttributes<HTMLTableCellElement> {
+  /** Hide this column on mobile screens (< 640px) */
+  hiddenOnMobile?: boolean;
+}
+
+const TableHead = React.forwardRef<HTMLTableCellElement, TableHeadProps>(
+  ({ className, hiddenOnMobile, ...props }, ref) => (
+    <th
+      ref={ref}
+      className={cn(
+        "h-12 px-4 text-left align-middle font-medium text-foreground-muted whitespace-nowrap [&:has([role=checkbox])]:pr-0",
+        hiddenOnMobile && "hidden sm:table-cell",
+        className
+      )}
+      {...props}
+    />
+  )
+)
 TableHead.displayName = "TableHead"
 
-const TableCell = React.forwardRef<
-  HTMLTableCellElement,
-  React.TdHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => (
-  <td
-    ref={ref}
-    className={cn("p-4 align-middle [&:has([role=checkbox])]:pr-0", className)}
-    {...props}
-  />
-))
+interface TableCellProps extends React.TdHTMLAttributes<HTMLTableCellElement> {
+  /** Hide this cell on mobile screens (< 640px) */
+  hiddenOnMobile?: boolean;
+}
+
+const TableCell = React.forwardRef<HTMLTableCellElement, TableCellProps>(
+  ({ className, hiddenOnMobile, ...props }, ref) => (
+    <td
+      ref={ref}
+      className={cn(
+        "p-4 align-middle [&:has([role=checkbox])]:pr-0",
+        hiddenOnMobile && "hidden sm:table-cell",
+        className
+      )}
+      {...props}
+    />
+  )
+)
 TableCell.displayName = "TableCell"
 
 const TableCaption = React.forwardRef<

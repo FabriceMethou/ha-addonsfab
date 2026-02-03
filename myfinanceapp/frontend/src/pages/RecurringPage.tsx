@@ -1,7 +1,10 @@
 // Recurring Transactions Page - Manage recurring transaction templates
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useToast } from '../contexts/ToastContext';
+import { recurringTemplateSchema, type RecurringTemplateFormData } from '../lib/validations';
 import {
   Plus,
   Pencil,
@@ -17,9 +20,7 @@ import {
   Button,
   Card,
   Input,
-  Label,
   Badge,
-  Spinner,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -42,9 +43,12 @@ import {
   TabsTrigger,
   TabsContent,
   Autocomplete,
+  FormField,
+  RecurringSkeleton,
 } from '../components/shadcn';
 import { recurringAPI, accountsAPI, categoriesAPI, transactionsAPI } from '../services/api';
 import { format } from 'date-fns';
+import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 
 export default function RecurringPage() {
   const toast = useToast();
@@ -53,22 +57,41 @@ export default function RecurringPage() {
   const [editingTemplate, setEditingTemplate] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
   const [selectedPending, setSelectedPending] = useState<number[]>([]);
-  const [formData, setFormData] = useState({
-    name: '',
-    account_id: '',
-    amount: '',
-    currency: 'EUR',
-    description: '',
-    destinataire: '',
-    type_id: '',
-    subtype_id: '',
-    recurrence_pattern: 'monthly',
-    recurrence_interval: '1',
-    day_of_month: '',
-    start_date: format(new Date(), 'yyyy-MM-dd'),
-    end_date: '',
-    is_active: true,
+
+  // Recurring template form with validation
+  const {
+    control,
+    register,
+    handleSubmit: handleFormSubmit,
+    formState: { errors, isValid },
+    reset: resetForm,
+    watch,
+    setValue,
+    trigger,
+  } = useForm<RecurringTemplateFormData>({
+    resolver: zodResolver(recurringTemplateSchema),
+    mode: 'onChange',
+    defaultValues: {
+      name: '',
+      account_id: '',
+      amount: '',
+      currency: 'EUR',
+      description: '',
+      destinataire: '',
+      type_id: '',
+      subtype_id: '',
+      recurrence_pattern: 'monthly',
+      recurrence_interval: '1',
+      day_of_month: '',
+      start_date: format(new Date(), 'yyyy-MM-dd'),
+      end_date: '',
+      is_active: true,
+    },
   });
+
+  // Watch form values for conditional rendering
+  const recurrencePattern = watch('recurrence_pattern');
+  const typeId = watch('type_id');
 
   const queryClient = useQueryClient();
 
@@ -165,6 +188,11 @@ export default function RecurringPage() {
       queryClient.invalidateQueries({ queryKey: ['pending-transactions'] });
       toast.success(`Generated ${response.data.count} pending transactions`);
     },
+    onError: (error: any) => {
+      console.error('Failed to generate transactions:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to generate transactions: ${errorMessage}`);
+    },
   });
 
   // Fetch pending transactions
@@ -250,28 +278,9 @@ export default function RecurringPage() {
     }
   };
 
-  const resetForm = () => {
-    setFormData({
-      name: '',
-      account_id: '',
-      amount: '',
-      currency: 'EUR',
-      description: '',
-      destinataire: '',
-      type_id: '',
-      subtype_id: '',
-      recurrence_pattern: 'monthly',
-      recurrence_interval: '1',
-      day_of_month: '',
-      start_date: format(new Date(), 'yyyy-MM-dd'),
-      end_date: '',
-      is_active: true,
-    });
-  };
-
   const handleEdit = (template: any) => {
     setEditingTemplate(template);
-    setFormData({
+    resetForm({
       name: template.name || '',
       account_id: template.account_id.toString(),
       amount: Math.abs(template.amount).toString(),
@@ -285,19 +294,20 @@ export default function RecurringPage() {
       day_of_month: template.day_of_month?.toString() || '',
       start_date: template.start_date || format(new Date(), 'yyyy-MM-dd'),
       end_date: template.end_date || '',
-      is_active: template.is_active !== undefined ? template.is_active : true,
+      is_active: template.is_active === true || template.is_active === 1,
     });
     setOpenDialog(true);
+    setTimeout(() => trigger(), 0);
   };
 
-  const handleSubmit = () => {
+  const onSubmit = (formData: RecurringTemplateFormData) => {
     const data = {
       name: formData.name,
       account_id: parseInt(formData.account_id),
       amount: parseFloat(formData.amount),
       currency: formData.currency,
-      description: formData.description.trim() || null,
-      destinataire: formData.destinataire.trim() || null,
+      description: formData.description?.trim() || null,
+      destinataire: formData.destinataire?.trim() || null,
       type_id: parseInt(formData.type_id),
       subtype_id: formData.subtype_id ? parseInt(formData.subtype_id) : null,
       recurrence_pattern: formData.recurrence_pattern,
@@ -316,10 +326,7 @@ export default function RecurringPage() {
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('de-DE', {
-      style: 'currency',
-      currency: 'EUR',
-    }).format(Math.abs(amount));
+    return formatCurrencyUtil(Math.abs(amount), 'EUR');
   };
 
   const formatDate = (dateString: string | null) => {
@@ -339,11 +346,7 @@ export default function RecurringPage() {
   };
 
   if (isLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <RecurringSkeleton />;
   }
 
   return (
@@ -645,10 +648,7 @@ export default function RecurringPage() {
                               transaction.amount >= 0 ? 'text-success' : 'text-error'
                             }`}
                           >
-                            {new Intl.NumberFormat('de-DE', {
-                              style: 'currency',
-                              currency: transaction.currency || 'EUR',
-                            }).format(transaction.amount)}
+                            {formatCurrencyUtil(transaction.amount, transaction.currency || 'EUR')}
                           </TableCell>
                           <TableCell>
                             <Badge variant="outline">{transaction.recurring_template_name || 'N/A'}</Badge>
@@ -709,196 +709,179 @@ export default function RecurringPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="name">Template Name</Label>
-              <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="e.g., Monthly Rent, Weekly Groceries"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Account</Label>
-                <Select
-                  value={formData.account_id}
-                  onValueChange={(value) => setFormData({ ...formData, account_id: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select account" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {accountsData?.map((account: any) => (
-                      <SelectItem key={account.id} value={account.id.toString()}>
-                        {account.name} - {account.bank_name} ({account.currency})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="amount">Amount</Label>
+          <form onSubmit={handleFormSubmit(onSubmit)}>
+            <div className="space-y-4">
+              <FormField label="Template Name" error={errors.name?.message} required>
                 <Input
-                  id="amount"
-                  type="number"
-                  value={formData.amount}
-                  onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                  {...register('name')}
+                  placeholder="e.g., Monthly Rent, Weekly Groceries"
                 />
-              </div>
-            </div>
+              </FormField>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Category</Label>
-                <Select
-                  value={formData.type_id}
-                  onValueChange={(value) => setFormData({ ...formData, type_id: value, subtype_id: '' })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categoriesData?.map((category: any) => (
-                      <SelectItem key={category.id} value={category.id.toString()}>
-                        {category.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField label="Account" error={errors.account_id?.message} required>
+                  <Controller
+                    name="account_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select account" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {accountsData?.map((account: any) => (
+                            <SelectItem key={account.id} value={account.id.toString()}>
+                              {account.name} - {account.bank_name} ({account.currency})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+                <FormField label="Amount" error={errors.amount?.message} required>
+                  <Input type="number" step="0.01" {...register('amount')} />
+                </FormField>
               </div>
-              {formData.type_id && (
-                <div className="space-y-2">
-                  <Label>Subcategory</Label>
-                  <Select
-                    value={formData.subtype_id}
-                    onValueChange={(value) => setFormData({ ...formData, subtype_id: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select subcategory" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categoriesData
-                        ?.find((c: any) => c.id === parseInt(formData.type_id))
-                        ?.subtypes?.map((subtype: any) => (
-                          <SelectItem key={subtype.id} value={subtype.id.toString()}>
-                            {subtype.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField label="Category" error={errors.type_id?.message} required>
+                  <Controller
+                    name="type_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select
+                        value={field.value}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          setValue('subtype_id', '');
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categoriesData?.map((category: any) => (
+                            <SelectItem key={category.id} value={category.id.toString()}>
+                              {category.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+                {typeId && (
+                  <FormField label="Subcategory">
+                    <Controller
+                      name="subtype_id"
+                      control={control}
+                      render={({ field }) => (
+                        <Select value={field.value || ''} onValueChange={field.onChange}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select subcategory" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {categoriesData
+                              ?.find((c: any) => c.id === parseInt(typeId))
+                              ?.subtypes?.map((subtype: any) => (
+                                <SelectItem key={subtype.id} value={subtype.id.toString()}>
+                                  {subtype.name}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  </FormField>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField label="Frequency" error={errors.recurrence_pattern?.message} required>
+                  <Controller
+                    name="recurrence_pattern"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="daily">Daily</SelectItem>
+                          <SelectItem value="weekly">Weekly</SelectItem>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                          <SelectItem value="yearly">Yearly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+                <FormField label="Interval" error={errors.recurrence_interval?.message} required helperText="Every X days/weeks/months/years">
+                  <Input type="number" {...register('recurrence_interval')} />
+                </FormField>
+              </div>
+
+              {recurrencePattern === 'monthly' && (
+                <FormField label="Day of Month (Optional)" helperText="Specific day (1-31)">
+                  <Input type="number" min={1} max={31} {...register('day_of_month')} />
+                </FormField>
               )}
-            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Frequency</Label>
-                <Select
-                  value={formData.recurrence_pattern}
-                  onValueChange={(value) => setFormData({ ...formData, recurrence_pattern: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="daily">Daily</SelectItem>
-                    <SelectItem value="weekly">Weekly</SelectItem>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                    <SelectItem value="yearly">Yearly</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField label="Start Date" error={errors.start_date?.message} required>
+                  <Input type="date" {...register('start_date')} />
+                </FormField>
+                <FormField label="End Date (Optional)" helperText="Leave empty for no end date">
+                  <Input type="date" {...register('end_date')} />
+                </FormField>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="interval">Interval</Label>
-                <Input
-                  id="interval"
-                  type="number"
-                  value={formData.recurrence_interval}
-                  onChange={(e) => setFormData({ ...formData, recurrence_interval: e.target.value })}
-                />
-                <p className="text-xs text-foreground-muted">Every X days/weeks/months/years</p>
-              </div>
-            </div>
 
-            {formData.recurrence_pattern === 'monthly' && (
-              <div className="space-y-2">
-                <Label htmlFor="dayOfMonth">Day of Month (Optional)</Label>
-                <Input
-                  id="dayOfMonth"
-                  type="number"
-                  min={1}
-                  max={31}
-                  value={formData.day_of_month}
-                  onChange={(e) => setFormData({ ...formData, day_of_month: e.target.value })}
+              <FormField label="Recipient">
+                <Controller
+                  name="destinataire"
+                  control={control}
+                  render={({ field }) => (
+                    <Autocomplete
+                      options={recipientsData || []}
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      placeholder="Enter recipient name..."
+                    />
+                  )}
                 />
-                <p className="text-xs text-foreground-muted">Specific day (1-31)</p>
-              </div>
-            )}
+              </FormField>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="startDate">Start Date</Label>
-                <Input
-                  id="startDate"
-                  type="date"
-                  value={formData.start_date}
-                  onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="endDate">End Date (Optional)</Label>
-                <Input
-                  id="endDate"
-                  type="date"
-                  value={formData.end_date}
-                  onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-                />
-                <p className="text-xs text-foreground-muted">Leave empty for no end date</p>
-              </div>
-            </div>
+              <FormField label="Description (Optional)">
+                <Input {...register('description')} placeholder="Additional notes or description" />
+              </FormField>
 
-            <div className="space-y-2">
-              <Label htmlFor="destinataire">Recipient</Label>
-              <Autocomplete
-                options={recipientsData || []}
-                value={formData.destinataire}
-                onChange={(value) => setFormData({ ...formData, destinataire: value })}
-                placeholder="Enter recipient name..."
+              <Controller
+                name="is_active"
+                control={control}
+                render={({ field }) => (
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={field.value}
+                      onChange={(e) => field.onChange(e.target.checked)}
+                      className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
+                    />
+                    <span className="text-sm">Active</span>
+                  </label>
+                )}
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="description">Description (Optional)</Label>
-              <Input
-                id="description"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Additional notes or description"
-              />
-            </div>
-
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={formData.is_active}
-                onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                className="w-4 h-4 rounded border-border bg-surface text-primary focus:ring-primary"
-              />
-              <span className="text-sm">Active</span>
-            </label>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpenDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleSubmit} disabled={createMutation.isPending || updateMutation.isPending}>
-              {editingTemplate ? 'Update' : 'Create'}
-            </Button>
-          </DialogFooter>
+            <DialogFooter className="mt-4">
+              <Button variant="outline" type="button" onClick={() => setOpenDialog(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!isValid || createMutation.isPending || updateMutation.isPending}>
+                {editingTemplate ? 'Update' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -907,6 +890,9 @@ export default function RecurringPage() {
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
+            <DialogDescription className="sr-only">
+              Confirm deletion of this recurring template.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="py-4">
