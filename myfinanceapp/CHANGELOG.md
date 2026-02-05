@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.17
+
+- Adding Reconcilation
+- Fixing currency
+- Other small fixes
+
 ## 2.0.16
 
 - Fix visual

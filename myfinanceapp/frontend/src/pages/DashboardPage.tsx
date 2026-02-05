@@ -222,6 +222,18 @@ export default function DashboardPage() {
     },
   });
 
+  // Fetch summary by owner for current month
+  const { data: summaryByOwner } = useQuery({
+    queryKey: ['summary-by-owner', currentMonthStart, currentMonthEnd],
+    queryFn: async () => {
+      const response = await transactionsAPI.getSummaryByOwner({
+        start_date: currentMonthStart,
+        end_date: currentMonthEnd,
+      });
+      return response.data.by_owner || [];
+    },
+  });
+
   // Fetch active envelopes
   const { data: activeEnvelopes } = useQuery({
     queryKey: ['active-envelopes'],
@@ -385,6 +397,24 @@ export default function DashboardPage() {
             </p>
           </div>
         </div>
+
+        {/* Per-Owner Breakdown */}
+        {summaryByOwner && summaryByOwner.length > 0 && (
+          <div className="mt-6 pt-6 border-t border-border">
+            <h3 className="text-sm font-medium text-foreground-muted mb-4">By Owner</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {summaryByOwner.map((owner: any) => (
+                <div key={owner.owner_id} className="p-3 rounded-lg bg-surface-hover border border-border">
+                  <p className="text-sm font-medium text-foreground mb-2">{owner.owner_name}</p>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-success">+{formatCurrency(owner.income)}</span>
+                    <span className="text-error">-{formatCurrency(owner.expense)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* Income vs Expenses Chart + Account Balances */}

@@ -46,7 +46,7 @@ import {
   FormField,
   DebtsSkeleton,
 } from '../components/shadcn';
-import { debtsAPI, accountsAPI } from '../services/api';
+import { debtsAPI, accountsAPI, currenciesAPI } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { format, parseISO } from 'date-fns';
 import { useToast } from '../contexts/ToastContext';
@@ -130,6 +130,7 @@ export default function DebtsPage() {
     status: 'active',
     notes: '',
     account_id: '',
+    currency: 'EUR',
   };
 
   const {
@@ -195,6 +196,15 @@ export default function DebtsPage() {
     queryFn: async () => {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
+    },
+  });
+
+  // Fetch currencies for dropdown
+  const { data: currenciesData } = useQuery({
+    queryKey: ['currencies'],
+    queryFn: async () => {
+      const response = await currenciesAPI.getAll();
+      return response.data.currencies;
     },
   });
 
@@ -282,6 +292,7 @@ export default function DebtsPage() {
       status: debt.status,
       notes: debt.notes || '',
       account_id: debt.account_id?.toString() || '',
+      currency: debt.currency || 'EUR',
     });
     setDebtDialog(true);
   };
@@ -357,6 +368,11 @@ export default function DebtsPage() {
       }
     }
 
+    // Include currency
+    if (formData.currency) {
+      data.currency = formData.currency;
+    }
+
     if (editingDebt) {
       updateMutation.mutate({ id: editingDebt.id, data });
     } else {
@@ -377,8 +393,8 @@ export default function DebtsPage() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return formatCurrencyUtil(amount, 'EUR');
+  const formatCurrency = (amount: number, currency: string = 'EUR') => {
+    return formatCurrencyUtil(amount, currency);
   };
 
   const getStatusBadgeVariant = (status: string): 'success' | 'warning' | 'error' | 'default' => {
@@ -568,11 +584,11 @@ export default function DebtsPage() {
                   <div className="grid grid-cols-2 gap-4 mb-4">
                     <div>
                       <span className="text-xs text-foreground-muted">Current Balance</span>
-                      <p className="text-lg font-bold text-error">{formatCurrency(debt.current_balance)}</p>
+                      <p className="text-lg font-bold text-error">{formatCurrency(debt.current_balance, debt.currency)}</p>
                     </div>
                     <div>
                       <span className="text-xs text-foreground-muted">Original Amount</span>
-                      <p className="text-lg font-bold text-foreground">{formatCurrency(debt.original_amount)}</p>
+                      <p className="text-lg font-bold text-foreground">{formatCurrency(debt.original_amount, debt.currency)}</p>
                     </div>
                   </div>
 
@@ -618,7 +634,7 @@ export default function DebtsPage() {
                     {debt.minimum_payment > 0 && (
                       <div>
                         <span className="text-xs text-foreground-muted">Min. Payment</span>
-                        <p className="text-sm font-semibold">{formatCurrency(debt.minimum_payment)}</p>
+                        <p className="text-sm font-semibold">{formatCurrency(debt.minimum_payment, debt.currency)}</p>
                       </div>
                     )}
                     {debt.due_date && (
@@ -664,7 +680,7 @@ export default function DebtsPage() {
                                   Total Interest to Pay:
                                 </span>
                                 <span className="text-xs font-semibold text-warning ml-2">
-                                  {formatCurrency(timeline.totalInterest)}
+                                  {formatCurrency(timeline.totalInterest, debt.currency)}
                                 </span>
                               </div>
                             )}
@@ -697,7 +713,7 @@ export default function DebtsPage() {
                         <span className="text-sm text-foreground-muted">Payment History</span>
                       </AccordionTrigger>
                       <AccordionContent className="px-0">
-                        <DebtPayments debtId={debt.id} />
+                        <DebtPayments debtId={debt.id} currency={debt.currency} />
                       </AccordionContent>
                     </AccordionItem>
                   </Accordion>
@@ -757,11 +773,11 @@ export default function DebtsPage() {
                   <div className="grid grid-cols-2 gap-4 mb-4">
                     <div>
                       <span className="text-xs text-foreground-muted">Final Balance</span>
-                      <p className="text-lg font-bold text-foreground">{formatCurrency(debt.current_balance)}</p>
+                      <p className="text-lg font-bold text-foreground">{formatCurrency(debt.current_balance, debt.currency)}</p>
                     </div>
                     <div>
                       <span className="text-xs text-foreground-muted">Original Amount</span>
-                      <p className="text-lg font-bold text-foreground">{formatCurrency(debt.original_amount)}</p>
+                      <p className="text-lg font-bold text-foreground">{formatCurrency(debt.original_amount, debt.currency)}</p>
                     </div>
                   </div>
 
@@ -780,7 +796,7 @@ export default function DebtsPage() {
                         <span className="text-sm text-foreground-muted">Payment History</span>
                       </AccordionTrigger>
                       <AccordionContent className="px-0">
-                        <DebtPayments debtId={debt.id} />
+                        <DebtPayments debtId={debt.id} currency={debt.currency} />
                       </AccordionContent>
                     </AccordionItem>
                   </Accordion>
@@ -835,6 +851,27 @@ export default function DebtsPage() {
                   </p>
                 </FormField>
               </div>
+
+              <FormField label="Currency" error={debtErrors.currency?.message} required>
+                <Controller
+                  name="currency"
+                  control={debtControl}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select currency" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {currenciesData?.map((currency: any) => (
+                          <SelectItem key={currency.code} value={currency.code}>
+                            {currency.code} - {currency.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
 
               <FormField label="Link to Account (Optional)" error={debtErrors.account_id?.message}>
                 <Controller
@@ -1059,7 +1096,7 @@ export default function DebtsPage() {
 }
 
 // Debt Payments Component
-function DebtPayments({ debtId }: { debtId: number }) {
+function DebtPayments({ debtId, currency = 'EUR' }: { debtId: number; currency?: string }) {
   const { data: paymentsData, isLoading } = useQuery({
     queryKey: ['debt-payments', debtId],
     queryFn: async () => {
@@ -1069,7 +1106,7 @@ function DebtPayments({ debtId }: { debtId: number }) {
   });
 
   const formatCurrency = (amount: number) => {
-    return formatCurrencyUtil(amount, 'EUR');
+    return formatCurrencyUtil(amount, currency);
   };
 
   if (isLoading) {

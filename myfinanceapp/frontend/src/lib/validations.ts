@@ -176,6 +176,7 @@ export const debtSchema = z.object({
   status: z.enum(['active', 'paid_off', 'defaulted']),
   notes: z.string().optional(),
   account_id: z.string().optional(),
+  currency: z.string().min(1, 'Currency is required'),
 });
 
 export type DebtFormData = z.infer<typeof debtSchema>;

@@ -76,6 +76,7 @@ interface HoldingFormData {
 }
 
 interface TransactionFormData {
+  account_id: string;
   holding_id: string;
   transaction_type: string;
   quantity: string;
@@ -137,6 +138,7 @@ export default function InvestmentsPage() {
   const [manualPrice, setManualPrice] = useState('');
 
   const [transactionForm, setTransactionForm] = useState<TransactionFormData>({
+    account_id: '',
     holding_id: '',
     transaction_type: 'buy',
     quantity: '',
@@ -588,6 +590,7 @@ export default function InvestmentsPage() {
 
   const resetTransactionForm = () => {
     setTransactionForm({
+      account_id: '',
       holding_id: '',
       transaction_type: 'buy',
       quantity: '',
@@ -630,7 +633,10 @@ export default function InvestmentsPage() {
 
   const handleEditTransaction = (transaction: any) => {
     setEditingTransaction(transaction);
+    // Find the holding to get the account_id
+    const holding = holdingsData?.find((h: any) => h.id === transaction.holding_id);
     setTransactionForm({
+      account_id: holding?.account_id?.toString() || '',
       holding_id: transaction.holding_id.toString(),
       transaction_type: transaction.transaction_type,
       quantity: transaction.quantity?.toString() || '',
@@ -1719,23 +1725,47 @@ export default function InvestmentsPage() {
           </DialogHeader>
 
           <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="tx-holding">Holding</Label>
-              <Select
-                value={transactionForm.holding_id}
-                onValueChange={(value) => setTransactionForm({ ...transactionForm, holding_id: value })}
-              >
-                <SelectTrigger id="tx-holding">
-                  <SelectValue placeholder="Select a holding" />
-                </SelectTrigger>
-                <SelectContent>
-                  {holdingsData?.map((holding: any) => (
-                    <SelectItem key={holding.id} value={holding.id?.toString() || ''}>
-                      {holding.symbol} - {holding.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            {/* Two-step selection: Account first, then Security */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="tx-account">Account</Label>
+                <Select
+                  value={transactionForm.account_id}
+                  onValueChange={(value) => setTransactionForm({ ...transactionForm, account_id: value, holding_id: '' })}
+                >
+                  <SelectTrigger id="tx-account">
+                    <SelectValue placeholder="Select account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {investmentAccounts?.map((account: any) => (
+                      <SelectItem key={account.id} value={account.id?.toString() || ''}>
+                        {account.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tx-holding">Security</Label>
+                <Select
+                  value={transactionForm.holding_id}
+                  onValueChange={(value) => setTransactionForm({ ...transactionForm, holding_id: value })}
+                  disabled={!transactionForm.account_id}
+                >
+                  <SelectTrigger id="tx-holding">
+                    <SelectValue placeholder={transactionForm.account_id ? "Select security" : "Select account first"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {holdingsData
+                      ?.filter((holding: any) => holding.account_id?.toString() === transactionForm.account_id)
+                      .map((holding: any) => (
+                        <SelectItem key={holding.id} value={holding.id?.toString() || ''}>
+                          {holding.symbol} - {holding.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">

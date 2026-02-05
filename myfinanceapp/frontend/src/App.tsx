@@ -21,6 +21,7 @@ import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
 import NotificationsPage from './pages/NotificationsPage';
 import SecurityPage from './pages/SecurityPage';
+import ReconcilePage from './pages/ReconcilePage';
 
 // Layout
 import Layout from './components/Layout';
@@ -74,6 +75,7 @@ function AppRoutes() {
         <Route path="work-hours" element={<WorkHoursPage />} />
         <Route path="backup" element={<BackupPage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="reconcile" element={<ReconcilePage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="security" element={<SecurityPage />} />
         <Route path="settings" element={<SettingsPage />} />
