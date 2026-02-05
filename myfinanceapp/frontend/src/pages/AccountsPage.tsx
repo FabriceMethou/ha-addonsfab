@@ -1269,16 +1269,16 @@ export default function AccountsPage() {
 
       {/* Balance Validation Dialog */}
       <Dialog open={validationDialog} onOpenChange={setValidationDialog}>
-        <DialogContent size="lg">
+        <DialogContent size="xl">
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle className="truncate pr-8" title={`Validate Account Balance: ${validatingAccount?.name ? `${validatingAccount.name} (${validatingAccount.bank_name})` : `${validatingAccount?.bank_name} - ${validatingAccount?.account_type}`}`}>
               Validate Account Balance: {validatingAccount?.name ? `${validatingAccount.name} (${validatingAccount.bank_name})` : `${validatingAccount?.bank_name} - ${validatingAccount?.account_type}`}
             </DialogTitle>
             <DialogDescription>
               Compare the system balance with your actual account balance to identify discrepancies.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4 space-y-4">
+          <div className="py-4 space-y-4 max-h-[60vh] overflow-y-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="p-4 rounded-lg bg-info/10 border border-info/20 min-w-0">
                 <p className="text-sm text-foreground-muted mb-1">System Balance:</p>
@@ -1324,7 +1324,7 @@ export default function AccountsPage() {
                   <History className="w-4 h-4" />
                   <span className="font-semibold">Recent Validations</span>
                 </div>
-                <div className="rounded-lg border border-border overflow-hidden">
+                <div className="rounded-lg border border-border overflow-hidden [&>div]:mx-0 [&>div]:px-0">
                   <Table>
                     <TableHeader>
                       <TableRow>

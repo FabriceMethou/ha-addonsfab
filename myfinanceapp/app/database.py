@@ -533,10 +533,12 @@ class FinanceDatabase:
                 payment_day INTEGER NOT NULL,
                 start_date DATE NOT NULL,
                 linked_account_id INTEGER,
+                currency TEXT NOT NULL DEFAULT 'EUR',
                 is_active BOOLEAN DEFAULT 1,
                 notes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (linked_account_id) REFERENCES accounts(id)
+                FOREIGN KEY (linked_account_id) REFERENCES accounts(id),
+                FOREIGN KEY (currency) REFERENCES currencies(code)
             )
         """)
 
@@ -2474,6 +2476,12 @@ class FinanceDatabase:
             if 'tags' in filters:
                 query += " AND t.tags LIKE ?"
                 params.append(f"%{filters['tags']}%")
+            if 'owner_id' in filters:
+                query += " AND a.owner_id = ?"
+                params.append(filters['owner_id'])
+            if 'transfer_account_id' in filters:
+                query += " AND t.transfer_account_id = ?"
+                params.append(filters['transfer_account_id'])
 
         query += " ORDER BY t.transaction_date DESC, t.created_at DESC"
 
@@ -3464,8 +3472,8 @@ class FinanceDatabase:
         cursor.execute("""
             INSERT INTO debts
             (name, principal_amount, current_balance, interest_rate, interest_type,
-             monthly_payment, payment_day, start_date, linked_account_id, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             monthly_payment, payment_day, start_date, linked_account_id, currency, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             debt_data['name'],
             debt_data['principal_amount'],
@@ -3476,6 +3484,7 @@ class FinanceDatabase:
             debt_data['payment_day'],
             debt_data['start_date'],
             debt_data['linked_account_id'],
+            debt_data.get('currency', 'EUR'),
             debt_data.get('is_active', 1)
         ))
 
@@ -3495,7 +3504,7 @@ class FinanceDatabase:
                 f"Debt Payment: {debt_data['name']}",
                 account_id,
                 debt_data['monthly_payment'],
-                'EUR',  # Default currency for debts
+                debt_data.get('currency', 'EUR'),
                 f"Monthly payment for {debt_data['name']}",
                 debt_data['name'],
                 debt_type_id,
@@ -3549,7 +3558,7 @@ class FinanceDatabase:
                 return success
 
         # Update the recurring template if relevant fields changed (and debt not paid off)
-        if success and any(key in updates for key in ['monthly_payment', 'payment_day', 'linked_account_id', 'name']):
+        if success and any(key in updates for key in ['monthly_payment', 'payment_day', 'linked_account_id', 'name', 'currency']):
             # Build update for recurring template
             template_updates = {}
             if 'monthly_payment' in updates:
@@ -3562,6 +3571,8 @@ class FinanceDatabase:
                 template_updates['name'] = f"Debt Payment: {updates['name']}"
                 template_updates['destinataire'] = updates['name']
                 template_updates['description'] = f"Monthly payment for {updates['name']}"
+            if 'currency' in updates:
+                template_updates['currency'] = updates['currency']
 
             if template_updates:
                 set_template_clause = ", ".join([f"{key} = ?" for key in template_updates.keys()])
@@ -4274,21 +4285,21 @@ class FinanceDatabase:
                 'original_currency': a['currency']
             })
 
-        # Get all active debts (assuming they're in EUR, convert to dashboard currency)
+        # Get all active debts and convert to dashboard currency
         debts = self.get_debts()
         debts_converted = []
         total_debts = 0
         for d in debts:
             original_balance = d['current_balance']
-            # Debts are stored in EUR by default
-            converted_balance = self.convert_currency(original_balance, 'EUR', dashboard_currency)
+            debt_currency = d.get('currency', 'EUR')
+            converted_balance = self.convert_currency(original_balance, debt_currency, dashboard_currency)
             total_debts += converted_balance
             debts_converted.append({
                 'name': d['name'],
                 'balance': converted_balance,
                 'original_balance': original_balance,
                 'currency': dashboard_currency,
-                'original_currency': 'EUR'
+                'original_currency': debt_currency
             })
 
         # Net worth
@@ -4304,13 +4315,14 @@ class FinanceDatabase:
             'debts': debts_converted
         }
 
-    def get_net_worth_trend(self, start_date: str = None, end_date: str = None, frequency: str = 'monthly') -> Dict[str, Any]:
+    def get_net_worth_trend(self, start_date: str = None, end_date: str = None, frequency: str = 'monthly', owner_id: int = None) -> Dict[str, Any]:
         """Calculate net worth trend over time.
 
         Args:
             start_date: Start date (ISO format). If None, uses earliest transaction date
             end_date: End date (ISO format). If None, uses today
             frequency: 'monthly' or 'yearly'
+            owner_id: Optional owner ID to filter by
 
         Returns:
             Dictionary with dates and net worth values
@@ -4366,7 +4378,7 @@ class FinanceDatabase:
 
         # Calculate net worth at each date
         trend_data = []
-        accounts = self.get_accounts()
+        accounts = self.get_accounts(owner_id=owner_id)
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -4420,11 +4432,15 @@ class FinanceDatabase:
             # Note: For full historical accuracy, we'd need to track debt payment history
             total_debts = 0
             debts = self.get_debts()
+            # Filter debts by owner if specified
+            if owner_id:
+                debts = [d for d in debts if d.get('owner_id') == owner_id]
             for debt in debts:
                 if debt.get('is_active', True):
-                    # Convert debt to display currency
+                    # Convert debt to display currency using debt's actual currency
                     debt_balance = debt.get('current_balance', 0)
-                    converted_debt = self.convert_currency(debt_balance, 'EUR', display_currency)
+                    debt_currency = debt.get('currency', 'EUR')
+                    converted_debt = self.convert_currency(debt_balance, debt_currency, display_currency)
                     total_debts += converted_debt
 
             net_worth = total_assets - total_debts

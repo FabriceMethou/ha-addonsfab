@@ -21,13 +21,20 @@ DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 db = FinanceDatabase(db_path=DB_PATH)
 
 @router.get("/net-worth")
-async def net_worth(current_user: User = Depends(get_current_user)):
+async def net_worth(
+    owner_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
     """Calculate total net worth in user's preferred currency"""
     # Get user's preferred display currency
     display_currency = db.get_preference('display_currency', 'EUR')
 
-    accounts = db.get_accounts()
+    accounts = db.get_accounts(owner_id=owner_id)
     debts = db.get_debts()
+
+    # Filter debts by owner if specified
+    if owner_id:
+        debts = [d for d in debts if d.get('owner_id') == owner_id]
 
     # Convert all account balances to display currency
     total_assets = sum(
@@ -47,13 +54,15 @@ async def net_worth(current_user: User = Depends(get_current_user)):
         "net_worth": total_assets - total_debts,
         "account_count": len(accounts),
         "debt_count": len(debts),
-        "currency": display_currency
+        "currency": display_currency,
+        "owner_id": owner_id
     }
 
 @router.get("/spending-by-category")
 async def spending_by_category(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    owner_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
     """Get spending breakdown by category in user's preferred currency"""
@@ -65,6 +74,8 @@ async def spending_by_category(
         filters['start_date'] = start_date
     if end_date:
         filters['end_date'] = end_date
+    if owner_id:
+        filters['owner_id'] = owner_id
     transactions = db.get_transactions(filters=filters if filters else None)
 
     # Group by category (exclude transfers)
@@ -85,13 +96,15 @@ async def spending_by_category(
             for cat, amt in category_spending.items()
         ],
         "total": sum(category_spending.values()),
-        "currency": display_currency
+        "currency": display_currency,
+        "owner_id": owner_id
     }
 
 @router.get("/income-vs-expenses")
 async def income_vs_expenses(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    owner_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
     """Get income vs expenses comparison in user's preferred currency"""
@@ -103,6 +116,8 @@ async def income_vs_expenses(
         filters['start_date'] = start_date
     if end_date:
         filters['end_date'] = end_date
+    if owner_id:
+        filters['owner_id'] = owner_id
     transactions = db.get_transactions(filters=filters if filters else None)
 
     # Convert all transactions to display currency
@@ -137,7 +152,8 @@ async def income_vs_expenses(
         ],
         "start_date": start_date,
         "end_date": end_date,
-        "currency": display_currency
+        "currency": display_currency,
+        "owner_id": owner_id
     }
 
 @router.get("/spending-prediction")
@@ -179,6 +195,7 @@ async def spending_prediction(
 @router.get("/net-worth/trend")
 async def net_worth_trend(
     months: int = 12,
+    owner_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
     """Get net worth trend over time in user's preferred currency.
@@ -197,7 +214,8 @@ async def net_worth_trend(
         result = db.get_net_worth_trend(
             start_date=start_date.strftime('%Y-%m-%d'),
             end_date=end_date.strftime('%Y-%m-%d'),
-            frequency='monthly'
+            frequency='monthly',
+            owner_id=owner_id
         )
 
         # Transform data to match expected API format (add 'month' display name)
@@ -228,6 +246,7 @@ async def net_worth_trend(
 async def monthly_summary(
     year: int,
     month: int,
+    owner_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
     """Get comprehensive monthly summary with budgets in user's preferred currency"""
@@ -245,6 +264,8 @@ async def monthly_summary(
 
         # Get transactions for the month
         filters = {'start_date': start_date, 'end_date': end_date}
+        if owner_id:
+            filters['owner_id'] = owner_id
         transactions = db.get_transactions(filters=filters)
 
         # Calculate totals with currency conversion (exclude transfers)
@@ -406,6 +427,7 @@ async def tag_report(
 async def spending_trends(
     months: int = 6,
     category: Optional[str] = None,
+    owner_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
     """Get spending trends by category over time in user's preferred currency"""
@@ -428,6 +450,8 @@ async def spending_trends(
                 'start_date': month_start.strftime('%Y-%m-%d'),
                 'end_date': month_end.strftime('%Y-%m-%d')
             }
+            if owner_id:
+                filters['owner_id'] = owner_id
             transactions = db.get_transactions(filters=filters)
 
             # Calculate spending by category for this month with currency conversion
@@ -471,6 +495,8 @@ async def spending_trends(
             'start_date': current_month_start.strftime('%Y-%m-%d'),
             'end_date': end_date.strftime('%Y-%m-%d')
         }
+        if owner_id:
+            filters['owner_id'] = owner_id
         transactions = db.get_transactions(filters=filters)
 
         month_data = {

@@ -161,6 +161,7 @@ export const transactionsAPI = {
   delete: (id: number) => api.delete(`/api/transactions/${id}`),
   search: (filters: any) => api.post('/api/transactions/search', filters),
   getSummary: (params?: any) => api.get('/api/transactions/stats/summary', { params }),
+  getSummaryByOwner: (params?: any) => api.get('/api/transactions/stats/summary-by-owner', { params }),
   autoCategorize: (description: string) =>
     api.post('/api/transactions/auto-categorize', { description }),
   getPending: () => api.get('/api/transactions/pending/all'),
@@ -216,7 +217,7 @@ export const investmentsAPI = {
   createSecurity: (data: any) => api.post('/api/investments/securities', data),
   updateSecurity: (id: number, data: any) => api.put(`/api/investments/securities/${id}`, data),
   deleteSecurity: (id: number) => api.delete(`/api/investments/securities/${id}`),
-
+  
   // Holdings
   getHoldings: () => api.get('/api/investments/holdings'),
   createHolding: (data: any) => api.post('/api/investments/holdings', data),
@@ -298,15 +299,27 @@ export const budgetsAPI = {
 
 // Reports API
 export const reportsAPI = {
-  getNetWorth: () => api.get('/api/reports/net-worth'),
-  getNetWorthTrend: (months: number = 12) => api.get(`/api/reports/net-worth/trend?months=${months}`),
+  getNetWorth: (params?: { owner_id?: number }) => api.get('/api/reports/net-worth', { params }),
+  getNetWorthTrend: (months: number = 12, ownerId?: number) => {
+    const params: any = { months };
+    if (ownerId) params.owner_id = ownerId;
+    return api.get('/api/reports/net-worth/trend', { params });
+  },
   getSpendingByCategory: (params?: any) => api.get('/api/reports/spending-by-category', { params }),
   getIncomeVsExpenses: (params?: any) => api.get('/api/reports/income-vs-expenses', { params }),
   getSpendingPrediction: (monthsAhead: number = 1) => api.get(`/api/reports/spending-prediction?months_ahead=${monthsAhead}`),
-  getMonthlySummary: (year: number, month: number) => api.get(`/api/reports/monthly-summary?year=${year}&month=${month}`),
+  getMonthlySummary: (year: number, month: number, ownerId?: number) => {
+    const params: any = { year, month };
+    if (ownerId) params.owner_id = ownerId;
+    return api.get('/api/reports/monthly-summary', { params });
+  },
   getTagReport: (tag: string, params?: any) => api.get(`/api/reports/tags/${tag}`, { params }),
-  getSpendingTrends: (months: number = 6, category?: string) =>
-    api.get(`/api/reports/spending-trends?months=${months}${category ? `&category=${category}` : ''}`),
+  getSpendingTrends: (months: number = 6, category?: string, ownerId?: number) => {
+    const params: any = { months };
+    if (category) params.category = category;
+    if (ownerId) params.owner_id = ownerId;
+    return api.get('/api/reports/spending-trends', { params });
+  },
   getYearByYear: (year: number, month?: number) =>
     api.get(`/api/reports/year-by-year?year=${year}${month ? `&month=${month}` : ''}`),
 };
@@ -319,4 +332,27 @@ export const alertsAPI = {
   sendTestEmail: (email: string) => api.post('/api/alerts/test-email', { to_email: email }),
   getHistory: (limit: number = 20) => api.get(`/api/alerts/history?limit=${limit}`),
   disableEmail: () => api.post('/api/alerts/disable-email'),
+};
+
+// Reconciliation API
+export const reconciliationAPI = {
+  upload: (accountId: number, startDate: string, endDate: string, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post(
+      `/api/reconciliation/upload?account_id=${accountId}&start_date=${startDate}&end_date=${endDate}`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
+  },
+  flagTransaction: (transactionId: number) =>
+    api.post(`/api/reconciliation/flag/${transactionId}`),
+  complete: (data: {
+    account_id: number;
+    validation_date: string;
+    actual_balance: number;
+    matched_count: number;
+    added_count: number;
+    flagged_count: number;
+  }) => api.post('/api/reconciliation/complete', data),
 };

@@ -69,6 +69,7 @@ class AutoCategorizeRequest(BaseModel):
 @router.get("/")
 async def get_transactions(
     account_id: Optional[int] = None,
+    owner_id: Optional[int] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     type_id: Optional[int] = None,
@@ -82,6 +83,8 @@ async def get_transactions(
     filters = {}
     if account_id:
         filters['account_id'] = account_id
+    if owner_id:
+        filters['owner_id'] = owner_id
     if start_date:
         filters['start_date'] = start_date
     if end_date:
@@ -499,6 +502,77 @@ async def get_transaction_summary(
         "end_date": end_date,
         "currency": display_currency
     }
+
+@router.get("/stats/summary-by-owner")
+async def get_transaction_summary_by_owner(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get transaction summary grouped by owner in user's preferred currency"""
+    # Get user's preferred display currency
+    display_currency = db.get_preference('display_currency', 'EUR')
+
+    # Build SQL query to get income/expense by owner
+    conn = db._get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            o.id as owner_id,
+            o.name as owner_name,
+            a.currency as account_currency,
+            SUM(CASE WHEN t.amount > 0 AND tt.category != 'transfer' THEN t.amount ELSE 0 END) as income,
+            SUM(CASE WHEN t.amount < 0 AND tt.category != 'transfer' THEN ABS(t.amount) ELSE 0 END) as expense
+        FROM transactions t
+        JOIN accounts a ON t.account_id = a.id
+        JOIN owners o ON a.owner_id = o.id
+        JOIN transaction_types tt ON t.type_id = tt.id
+        WHERE t.confirmed = 1
+    """
+    params = []
+
+    if start_date:
+        query += " AND t.transaction_date >= ?"
+        params.append(start_date)
+    if end_date:
+        query += " AND t.transaction_date <= ?"
+        params.append(end_date)
+
+    query += " GROUP BY o.id, o.name, a.currency"
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    # Aggregate by owner, converting currencies
+    owner_totals = {}
+    for row in rows:
+        owner_id = row['owner_id']
+        owner_name = row['owner_name']
+        account_currency = row['account_currency'] or 'EUR'
+        income = row['income'] or 0
+        expense = row['expense'] or 0
+
+        if owner_id not in owner_totals:
+            owner_totals[owner_id] = {
+                'owner_id': owner_id,
+                'owner_name': owner_name,
+                'income': 0,
+                'expense': 0
+            }
+
+        # Convert to display currency
+        owner_totals[owner_id]['income'] += db.convert_currency(income, account_currency, display_currency)
+        owner_totals[owner_id]['expense'] += db.convert_currency(expense, account_currency, display_currency)
+
+    return {
+        "by_owner": list(owner_totals.values()),
+        "start_date": start_date,
+        "end_date": end_date,
+        "currency": display_currency
+    }
+
 
 @router.post("/auto-categorize")
 async def auto_categorize_transaction(

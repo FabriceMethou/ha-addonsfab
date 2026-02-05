@@ -26,7 +26,7 @@ from predictions import SpendingPredictor
 logger = logging.getLogger(__name__)
 
 # Import API routers
-from api import auth, accounts, transactions, categories, envelopes, recurring, debts, investments, reports, backups, settings, currencies, work_profiles, budgets, alerts
+from api import auth, accounts, transactions, categories, envelopes, recurring, debts, investments, reports, backups, settings, currencies, work_profiles, budgets, alerts, reconciliation
 
 # Configuration
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
@@ -82,6 +82,7 @@ app.include_router(backups.router, prefix="/api/backups", tags=["Backups"])
 app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(work_profiles.router, prefix="/api/work-profiles", tags=["Work Profiles"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["Alerts"])
+app.include_router(reconciliation.router, prefix="/api/reconciliation", tags=["Reconciliation"])
 
 @app.get("/")
 def read_root():

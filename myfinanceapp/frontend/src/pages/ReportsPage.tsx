@@ -53,7 +53,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { reportsAPI, transactionsAPI, settingsAPI } from '../services/api';
+import { reportsAPI, transactionsAPI, settingsAPI, accountsAPI } from '../services/api';
 import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns';
 import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 import { absMoney, sumMoney, percentOf, percentChange, addMoney } from '../lib/money';
@@ -127,6 +127,7 @@ export default function ReportsPage() {
   const [yearByYearSearch, setYearByYearSearch] = useState('');
   const [expandedIncomeCategories, setExpandedIncomeCategories] = useState<Set<string>>(new Set());
   const [expandedExpenseCategories, setExpandedExpenseCategories] = useState<Set<string>>(new Set());
+  const [selectedOwner, setSelectedOwner] = useState<string>(''); // Empty = all owners
 
   // Handle date range selection
   const handleDateRangeChange = (range: string) => {
@@ -158,27 +159,43 @@ export default function ReportsPage() {
     }
   };
 
+  // Fetch owners for filter
+  const { data: owners } = useQuery({
+    queryKey: ['owners'],
+    queryFn: async () => {
+      const response = await accountsAPI.getOwners();
+      return response.data.owners || [];
+    },
+  });
+
+  // Helper to get owner_id for API calls
+  const ownerIdParam = selectedOwner ? Number(selectedOwner) : undefined;
+
   // Fetch data
   const { data: netWorthData, isLoading: netWorthLoading, error: netWorthError } = useQuery({
-    queryKey: ['net-worth'],
+    queryKey: ['net-worth', selectedOwner],
     queryFn: async () => {
-      const response = await reportsAPI.getNetWorth();
+      const response = await reportsAPI.getNetWorth(ownerIdParam ? { owner_id: ownerIdParam } : undefined);
       return response.data;
     },
   });
 
   const { data: incomeExpensesData, isLoading: incomeExpensesLoading, error: incomeExpensesError } = useQuery({
-    queryKey: ['income-expenses', startDate, endDate],
+    queryKey: ['income-expenses', startDate, endDate, selectedOwner],
     queryFn: async () => {
-      const response = await reportsAPI.getIncomeVsExpenses({ start_date: startDate, end_date: endDate });
+      const params: any = { start_date: startDate, end_date: endDate };
+      if (ownerIdParam) params.owner_id = ownerIdParam;
+      const response = await reportsAPI.getIncomeVsExpenses(params);
       return response.data;
     },
   });
 
   const { data: spendingData, isLoading: spendingLoading, error: spendingError } = useQuery({
-    queryKey: ['spending-by-category', startDate, endDate],
+    queryKey: ['spending-by-category', startDate, endDate, selectedOwner],
     queryFn: async () => {
-      const response = await reportsAPI.getSpendingByCategory({ start_date: startDate, end_date: endDate });
+      const params: any = { start_date: startDate, end_date: endDate };
+      if (ownerIdParam) params.owner_id = ownerIdParam;
+      const response = await reportsAPI.getSpendingByCategory(params);
       return response.data;
     },
   });
@@ -213,9 +230,9 @@ export default function ReportsPage() {
 
   // Fetch spending trends data
   const { data: spendingTrendsData, isLoading: trendsLoading } = useQuery({
-    queryKey: ['spending-trends', trendMonths, trendCategory],
+    queryKey: ['spending-trends', trendMonths, trendCategory, selectedOwner],
     queryFn: async () => {
-      const response = await reportsAPI.getSpendingTrends(Number(trendMonths), trendCategory);
+      const response = await reportsAPI.getSpendingTrends(Number(trendMonths), trendCategory || undefined, ownerIdParam);
       return response.data;
     },
     enabled: currentTab === 'trends',
@@ -223,9 +240,9 @@ export default function ReportsPage() {
 
   // Fetch monthly summary data
   const { data: monthlySummaryData, isLoading: summaryLoading } = useQuery({
-    queryKey: ['monthly-summary', summaryYear, summaryMonth],
+    queryKey: ['monthly-summary', summaryYear, summaryMonth, selectedOwner],
     queryFn: async () => {
-      const response = await reportsAPI.getMonthlySummary(Number(summaryYear), Number(summaryMonth));
+      const response = await reportsAPI.getMonthlySummary(Number(summaryYear), Number(summaryMonth), ownerIdParam);
       return response.data;
     },
     enabled: currentTab === 'monthly',
@@ -233,9 +250,9 @@ export default function ReportsPage() {
 
   // Fetch extended net worth trend data
   const { data: extendedNetWorthData, isLoading: extendedNetWorthLoading } = useQuery({
-    queryKey: ['net-worth-trend-extended', netWorthMonths],
+    queryKey: ['net-worth-trend-extended', netWorthMonths, selectedOwner],
     queryFn: async () => {
-      const response = await reportsAPI.getNetWorthTrend(Number(netWorthMonths));
+      const response = await reportsAPI.getNetWorthTrend(Number(netWorthMonths), ownerIdParam);
       return response.data;
     },
     enabled: currentTab === 'networth',
@@ -406,8 +423,24 @@ export default function ReportsPage() {
         {/* Overview Tab */}
         <TabsContent value="overview">
           <div className="space-y-6 mt-4">
-            {/* Date Range Selector */}
+            {/* Filters: Owner and Date Range */}
             <div className="flex flex-wrap gap-2 justify-end">
+              {/* Owner Filter */}
+              <Select value={selectedOwner} onValueChange={setSelectedOwner}>
+                <SelectTrigger className="w-[150px]">
+                  <Users className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="All Owners" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All Owners</SelectItem>
+                  {owners?.map((owner: any) => (
+                    <SelectItem key={owner.id} value={String(owner.id)}>
+                      {owner.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
               <Select value={dateRange} onValueChange={handleDateRangeChange}>
                 <SelectTrigger className="w-[180px]">
                   <SelectValue />
@@ -738,6 +771,21 @@ export default function ReportsPage() {
           <div className="space-y-6 mt-4">
             {/* Controls */}
             <div className="flex flex-wrap gap-2">
+              <Select value={selectedOwner} onValueChange={setSelectedOwner}>
+                <SelectTrigger className="w-[150px]">
+                  <Users className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="All Owners" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All Owners</SelectItem>
+                  {owners?.map((owner: any) => (
+                    <SelectItem key={owner.id} value={String(owner.id)}>
+                      {owner.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
               <Select value={trendMonths} onValueChange={setTrendMonths}>
                 <SelectTrigger className="w-[150px]">
                   <SelectValue />
@@ -974,6 +1022,21 @@ export default function ReportsPage() {
           <div className="space-y-6 mt-4">
             {/* Controls */}
             <div className="flex flex-wrap gap-2">
+              <Select value={selectedOwner} onValueChange={setSelectedOwner}>
+                <SelectTrigger className="w-[150px]">
+                  <Users className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="All Owners" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All Owners</SelectItem>
+                  {owners?.map((owner: any) => (
+                    <SelectItem key={owner.id} value={String(owner.id)}>
+                      {owner.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
               <Select value={summaryYear} onValueChange={setSummaryYear}>
                 <SelectTrigger className="w-[120px]">
                   <SelectValue />
@@ -1116,6 +1179,21 @@ export default function ReportsPage() {
           <div className="space-y-6 mt-4">
             {/* Controls */}
             <div className="flex gap-2">
+              <Select value={selectedOwner} onValueChange={setSelectedOwner}>
+                <SelectTrigger className="w-[150px]">
+                  <Users className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="All Owners" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All Owners</SelectItem>
+                  {owners?.map((owner: any) => (
+                    <SelectItem key={owner.id} value={String(owner.id)}>
+                      {owner.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
               <Select value={netWorthMonths} onValueChange={setNetWorthMonths}>
                 <SelectTrigger className="w-[150px]">
                   <SelectValue />

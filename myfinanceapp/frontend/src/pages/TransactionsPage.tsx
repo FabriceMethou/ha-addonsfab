@@ -48,23 +48,6 @@ import {
   ArrowDownCircle,
 } from 'lucide-react';
 
-// Debounce hook
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [value, delay]);
-
-  return debouncedValue;
-}
-
 // KPI Card Component
 interface KPICardProps {
   title: string;
@@ -114,18 +97,39 @@ export default function TransactionsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
-  // Filters with debounce
-  const [filters, setFilters] = useState({
+  // Pending filters (what user is currently editing)
+  const [pendingFilters, setPendingFilters] = useState({
+    account_id: '',
+    owner_id: '',
+    category_id: '',
     start_date: '',
     end_date: '',
-    account_id: '',
-    category_id: '',
     recipient: '',
     tags: '',
   });
 
-  // Debounce text-based filters
-  const debouncedFilters = useDebounce(filters, 500);
+  // Applied filters (what's actually used for the query)
+  const [appliedFilters, setAppliedFilters] = useState({
+    account_id: '',
+    owner_id: '',
+    category_id: '',
+    start_date: '',
+    end_date: '',
+    recipient: '',
+    tags: '',
+  });
+
+  // Check if pending filters differ from applied filters
+  const hasUnappliedChanges = JSON.stringify(pendingFilters) !== JSON.stringify(appliedFilters);
+
+  // Apply filters when button is clicked
+  const applyFilters = () => {
+    setAppliedFilters({ ...pendingFilters });
+  };
+
+  // For backward compatibility with existing code
+  const filters = pendingFilters;
+  const debouncedFilters = appliedFilters;
 
   // Form with validation
   const {
@@ -173,6 +177,7 @@ export default function TransactionsPage() {
       if (debouncedFilters.start_date) params.start_date = debouncedFilters.start_date;
       if (debouncedFilters.end_date) params.end_date = debouncedFilters.end_date;
       if (debouncedFilters.account_id) params.account_id = debouncedFilters.account_id;
+      if (debouncedFilters.owner_id) params.owner_id = debouncedFilters.owner_id;
       if (debouncedFilters.category_id) params.type_id = debouncedFilters.category_id;
 
       const response = await transactionsAPI.getAll(params);
@@ -204,6 +209,14 @@ export default function TransactionsPage() {
     queryFn: async () => {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
+    },
+  });
+
+  const { data: ownersData } = useQuery({
+    queryKey: ['owners'],
+    queryFn: async () => {
+      const response = await accountsAPI.getOwners();
+      return response.data.owners;
     },
   });
 
@@ -434,17 +447,20 @@ export default function TransactionsPage() {
   };
 
   const clearFilters = () => {
-    setFilters({
+    const emptyFilters = {
+      account_id: '',
+      owner_id: '',
+      category_id: '',
       start_date: '',
       end_date: '',
-      account_id: '',
-      category_id: '',
       recipient: '',
       tags: '',
-    });
+    };
+    setPendingFilters(emptyFilters);
+    setAppliedFilters(emptyFilters);
   };
 
-  const hasActiveFilters = Object.values(filters).some(v => v);
+  const hasActiveFilters = Object.values(appliedFilters).some(v => v) || Object.values(pendingFilters).some(v => v);
 
   const handleEdit = (transaction: any) => {
     setEditingTransaction(transaction);
@@ -679,8 +695,8 @@ export default function TransactionsPage() {
             <div className="space-y-1.5">
               <Label htmlFor="filter-account">Account</Label>
               <Select
-                value={filters.account_id}
-                onValueChange={(value) => setFilters({ ...filters, account_id: value })}
+                value={pendingFilters.account_id}
+                onValueChange={(value) => setPendingFilters({ ...pendingFilters, account_id: value })}
               >
                 <SelectTrigger id="filter-account">
                   <SelectValue placeholder="All Accounts" />
@@ -696,10 +712,29 @@ export default function TransactionsPage() {
               </Select>
             </div>
             <div className="space-y-1.5">
+              <Label htmlFor="filter-owner">Owner</Label>
+              <Select
+                value={pendingFilters.owner_id}
+                onValueChange={(value) => setPendingFilters({ ...pendingFilters, owner_id: value })}
+              >
+                <SelectTrigger id="filter-owner">
+                  <SelectValue placeholder="All Owners" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All Owners</SelectItem>
+                  {ownersData?.map((owner: any) => (
+                    <SelectItem key={owner.id} value={owner.id.toString()}>
+                      {owner.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
               <Label htmlFor="filter-category">Category</Label>
               <Select
-                value={filters.category_id}
-                onValueChange={(value) => setFilters({ ...filters, category_id: value })}
+                value={pendingFilters.category_id}
+                onValueChange={(value) => setPendingFilters({ ...pendingFilters, category_id: value })}
               >
                 <SelectTrigger id="filter-category">
                   <SelectValue placeholder="All Categories" />
@@ -719,8 +754,8 @@ export default function TransactionsPage() {
               <Autocomplete
                 id="filter-recipient"
                 options={recipientsData || []}
-                value={filters.recipient}
-                onChange={(value) => setFilters({ ...filters, recipient: value })}
+                value={pendingFilters.recipient}
+                onChange={(value) => setPendingFilters({ ...pendingFilters, recipient: value })}
                 placeholder="Search recipient..."
                 freeSolo
               />
@@ -730,8 +765,8 @@ export default function TransactionsPage() {
               <Input
                 id="filter-start-date"
                 type="date"
-                value={filters.start_date}
-                onChange={(e) => setFilters({ ...filters, start_date: e.target.value })}
+                value={pendingFilters.start_date}
+                onChange={(e) => setPendingFilters({ ...pendingFilters, start_date: e.target.value })}
               />
             </div>
             <div className="space-y-1.5">
@@ -739,8 +774,8 @@ export default function TransactionsPage() {
               <Input
                 id="filter-end-date"
                 type="date"
-                value={filters.end_date}
-                onChange={(e) => setFilters({ ...filters, end_date: e.target.value })}
+                value={pendingFilters.end_date}
+                onChange={(e) => setPendingFilters({ ...pendingFilters, end_date: e.target.value })}
               />
             </div>
             <div className="space-y-1.5">
@@ -748,8 +783,8 @@ export default function TransactionsPage() {
               <Autocomplete
                 id="filter-tag"
                 options={tagsData || []}
-                value={filters.tags}
-                onChange={(value) => setFilters({ ...filters, tags: value })}
+                value={pendingFilters.tags}
+                onChange={(value) => setPendingFilters({ ...pendingFilters, tags: value })}
                 placeholder="Filter by tag..."
                 freeSolo
               />
@@ -758,16 +793,28 @@ export default function TransactionsPage() {
           <div className="flex justify-between items-center mt-4">
             <p className="text-sm text-foreground-muted">
               Found {totalTransactions} transaction{totalTransactions !== 1 ? 's' : ''}
+              {hasUnappliedChanges && <span className="text-warning ml-2">(filters changed - click Apply)</span>}
             </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={clearFilters}
-              disabled={!hasActiveFilters}
-            >
-              <X className="w-4 h-4 mr-2" />
-              Clear Filters
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={applyFilters}
+                disabled={!hasUnappliedChanges}
+              >
+                <Filter className="w-4 h-4 mr-2" />
+                Apply Filters
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={clearFilters}
+                disabled={!hasActiveFilters}
+              >
+                <X className="w-4 h-4 mr-2" />
+                Clear Filters
+              </Button>
+            </div>
           </div>
         </Card>
       )}

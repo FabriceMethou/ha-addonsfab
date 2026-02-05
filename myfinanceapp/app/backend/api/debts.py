@@ -33,6 +33,7 @@ class DebtCreate(BaseModel):
     status: str = 'active'  # Maps to 'is_active' in database
     notes: Optional[str] = None
     linked_account_id: Optional[int] = None  # Account for payments
+    currency: str = 'EUR'  # Currency code (EUR, USD, GBP, etc.)
 
 class DebtUpdate(BaseModel):
     creditor: Optional[str] = None
@@ -45,6 +46,7 @@ class DebtUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     linked_account_id: Optional[int] = None
+    currency: Optional[str] = None  # Currency code (EUR, USD, GBP, etc.)
 
 class DebtPayment(BaseModel):
     debt_id: int
@@ -76,7 +78,8 @@ async def get_debts(include_inactive: bool = False, current_user: User = Depends
             'notes': debt.get('notes', ''),
             'account_name': debt.get('account_name'),
             'linked_account_id': debt.get('linked_account_id'),
-            'account_id': debt.get('linked_account_id')  # Add alias for frontend compatibility
+            'account_id': debt.get('linked_account_id'),  # Add alias for frontend compatibility
+            'currency': debt.get('currency', 'EUR')  # Debt currency
         }
         mapped_debts.append(mapped_debt)
 
@@ -119,7 +122,8 @@ async def create_debt(debt: DebtCreate, current_user: User = Depends(get_current
         'payment_day': debt.payment_day,
         'start_date': debt.due_date,
         'linked_account_id': linked_account_id,
-        'is_active': 1 if debt.status == 'active' else 0
+        'is_active': 1 if debt.status == 'active' else 0,
+        'currency': debt.currency
     }
 
     try:
@@ -160,6 +164,8 @@ async def update_debt(debt_id: int, debt_update: DebtUpdate, current_user: User 
         updates['notes'] = update_data['notes']
     if 'linked_account_id' in update_data:
         updates['linked_account_id'] = update_data['linked_account_id']
+    if 'currency' in update_data:
+        updates['currency'] = update_data['currency']
 
     try:
         success = db.update_debt(debt_id, updates)
@@ -242,7 +248,7 @@ async def add_debt_payment(payment: DebtPayment, current_user: User = Depends(ge
         payment_description = f"Monthly payment: {debt.get('name', 'Unknown debt')}"
         payment_tags = "Debt Payment"
 
-    # Create transaction for this debt payment
+    # Create transaction for this debt payment (use debt's currency)
     transaction_data = {
         'account_id': account_id,
         'transaction_date': payment.payment_date,
@@ -251,7 +257,7 @@ async def add_debt_payment(payment: DebtPayment, current_user: User = Depends(ge
         'subtype_id': debt_subtype_id,
         'description': payment_description,
         'destinataire': debt.get('name', 'Debt payment'),
-        'currency': 'EUR',
+        'currency': debt.get('currency', 'EUR'),
         'transfer_account_id': None,
         'confirmed': True,
         'tags': payment_tags
