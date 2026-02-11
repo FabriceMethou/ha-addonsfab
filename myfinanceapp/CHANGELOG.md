@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.19
+- Fix bugs from previous version 
+
 ## 2.0.18
 
 ### Performance
