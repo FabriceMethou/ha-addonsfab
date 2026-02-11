@@ -45,7 +45,7 @@ export function TabsList({ children, className }: TabsListProps) {
   return (
     <div
       className={cn(
-        "inline-flex h-10 items-center justify-start gap-1 rounded-md bg-surface p-1 text-foreground-muted border-b border-border",
+        "flex h-auto min-h-10 items-center justify-start gap-1 rounded-md bg-surface p-1 text-foreground-muted border-b border-border flex-wrap",
         className
       )}
     >

@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { transactionSchema, type TransactionFormData } from '../lib/validations';
 import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 import { useToast } from '../contexts/ToastContext';
+import { useIsMobile } from '../hooks/useBreakpoint';
 import {
   accountsAPI,
   transactionsAPI,
@@ -53,6 +54,8 @@ import {
   Check,
   X,
   Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 // Types for reconciliation data
@@ -123,6 +126,8 @@ interface ReconciliationData {
 export default function ReconcilePage() {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
+  const [expandedMatch, setExpandedMatch] = useState<number | null>(null);
 
   // Settings for currency display
   const { data: settingsData } = useQuery({
@@ -166,6 +171,7 @@ export default function ReconcilePage() {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: categoriesData } = useQuery({
@@ -174,6 +180,7 @@ export default function ReconcilePage() {
       const response = await categoriesAPI.getHierarchy();
       return response.data;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: tagsData } = useQuery({
@@ -182,6 +189,7 @@ export default function ReconcilePage() {
       const response = await transactionsAPI.getAllTags();
       return response.data.tags;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: recipientsData } = useQuery({
@@ -190,6 +198,7 @@ export default function ReconcilePage() {
       const response = await transactionsAPI.getAllRecipients();
       return response.data.recipients;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Get selected account info
@@ -628,43 +637,97 @@ export default function ReconcilePage() {
                   <CheckCircle className="w-5 h-5 text-success" />
                   All Matches ({reconciliationData.match_details.length}) - Click to expand
                 </summary>
-                <div className="mt-4 overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>CSV Date</TableHead>
-                        <TableHead className="text-right">CSV Amount</TableHead>
-                        <TableHead>CSV Desc</TableHead>
-                        <TableHead>→</TableHead>
-                        <TableHead>Sys ID</TableHead>
-                        <TableHead>Sys Date</TableHead>
-                        <TableHead className="text-right">Sys Amount</TableHead>
-                        <TableHead>Sys Dest</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {reconciliationData.match_details.map((detail, idx) => (
-                        <TableRow key={idx}>
-                          <TableCell className="whitespace-nowrap">{detail.csv_date}</TableCell>
-                          <TableCell className={`text-right font-medium ${detail.csv_amount < 0 ? 'text-error' : 'text-success'}`}>
-                            {formatCurrency(detail.csv_amount)}
-                          </TableCell>
-                          <TableCell className="max-w-[100px] truncate" title={detail.csv_description}>
-                            {detail.csv_description || '-'}
-                          </TableCell>
-                          <TableCell><ArrowRight className="w-4 h-4 text-foreground-muted" /></TableCell>
-                          <TableCell className="font-mono text-sm">#{detail.system_id}</TableCell>
-                          <TableCell className="whitespace-nowrap">{detail.system_date || '-'}</TableCell>
-                          <TableCell className={`text-right font-medium ${(detail.system_amount || 0) < 0 ? 'text-error' : 'text-success'}`}>
-                            {detail.system_amount !== null ? formatCurrency(detail.system_amount) : '-'}
-                          </TableCell>
-                          <TableCell className="max-w-[100px] truncate" title={detail.system_destinataire || ''}>
-                            {detail.system_destinataire || '-'}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                <div className="mt-4">
+                  {isMobile ? (
+                    <div className="space-y-3">
+                      {reconciliationData.match_details.map((detail, idx) => {
+                        const isExpanded = expandedMatch === idx;
+                        return (
+                          <Card key={idx} className="p-4">
+                            <div
+                              className="flex items-center justify-between cursor-pointer"
+                              onClick={() => setExpandedMatch(isExpanded ? null : idx)}
+                            >
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-sm text-foreground-muted">{detail.csv_date}</span>
+                                  <ArrowRight className="w-4 h-4 text-foreground-muted" />
+                                  <span className="text-sm font-mono text-foreground-muted">#{detail.system_id}</span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className={`text-base font-medium ${detail.csv_amount < 0 ? 'text-error' : 'text-success'}`}>
+                                    {formatCurrency(detail.csv_amount)}
+                                  </span>
+                                  <ArrowRight className="w-4 h-4 text-foreground-muted" />
+                                  <span className={`text-base font-medium ${(detail.system_amount || 0) < 0 ? 'text-error' : 'text-success'}`}>
+                                    {detail.system_amount !== null ? formatCurrency(detail.system_amount) : '-'}
+                                  </span>
+                                </div>
+                              </div>
+                              {isExpanded ? <ChevronUp className="w-5 h-5 text-foreground-muted" /> : <ChevronDown className="w-5 h-5 text-foreground-muted" />}
+                            </div>
+                            {isExpanded && (
+                              <div className="mt-3 pt-3 border-t border-border space-y-2">
+                                <div>
+                                  <div className="text-xs text-foreground-muted">CSV Description</div>
+                                  <div className="text-sm">{detail.csv_description || '-'}</div>
+                                </div>
+                                <div>
+                                  <div className="text-xs text-foreground-muted">System Recipient</div>
+                                  <div className="text-sm">{detail.system_destinataire || '-'}</div>
+                                </div>
+                                {detail.date_mismatch && (
+                                  <div className="flex items-center gap-2 text-warning">
+                                    <AlertTriangle className="w-4 h-4" />
+                                    <span className="text-xs">Date mismatch ({detail.days_difference} days)</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>CSV Date</TableHead>
+                            <TableHead className="text-right">CSV Amount</TableHead>
+                            <TableHead>CSV Desc</TableHead>
+                            <TableHead>→</TableHead>
+                            <TableHead>Sys ID</TableHead>
+                            <TableHead>Sys Date</TableHead>
+                            <TableHead className="text-right">Sys Amount</TableHead>
+                            <TableHead>Sys Dest</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {reconciliationData.match_details.map((detail, idx) => (
+                            <TableRow key={idx}>
+                              <TableCell className="whitespace-nowrap">{detail.csv_date}</TableCell>
+                              <TableCell className={`text-right font-medium ${detail.csv_amount < 0 ? 'text-error' : 'text-success'}`}>
+                                {formatCurrency(detail.csv_amount)}
+                              </TableCell>
+                              <TableCell className="truncate" title={detail.csv_description}>
+                                {detail.csv_description || '-'}
+                              </TableCell>
+                              <TableCell><ArrowRight className="w-4 h-4 text-foreground-muted" /></TableCell>
+                              <TableCell className="font-mono text-sm">#{detail.system_id}</TableCell>
+                              <TableCell className="whitespace-nowrap">{detail.system_date || '-'}</TableCell>
+                              <TableCell className={`text-right font-medium ${(detail.system_amount || 0) < 0 ? 'text-error' : 'text-success'}`}>
+                                {detail.system_amount !== null ? formatCurrency(detail.system_amount) : '-'}
+                              </TableCell>
+                              <TableCell className="truncate" title={detail.system_destinataire || ''}>
+                                {detail.system_destinataire || '-'}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
                 </div>
               </details>
             </Card>
@@ -688,7 +751,7 @@ export default function ReconcilePage() {
                       <TableHead>Date</TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Description</TableHead>
+                      <TableHead hiddenOnMobile>Description</TableHead>
                       <TableHead className="text-center">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -704,7 +767,7 @@ export default function ReconcilePage() {
                           <TableCell className={`text-right font-medium ${tx.amount < 0 ? 'text-error' : 'text-success'}`}>
                             {formatCurrency(tx.amount)}
                           </TableCell>
-                          <TableCell className="max-w-[200px] truncate" title={tx.description}>
+                          <TableCell hiddenOnMobile title={tx.description}>
                             {tx.description}
                           </TableCell>
                           <TableCell>
@@ -744,7 +807,7 @@ export default function ReconcilePage() {
                       <TableHead>Date</TableHead>
                       <TableHead>Category</TableHead>
                       <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Recipient</TableHead>
+                      <TableHead hiddenOnMobile>Recipient</TableHead>
                       <TableHead className="text-center">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -766,7 +829,7 @@ export default function ReconcilePage() {
                           <TableCell className={`text-right font-medium ${tx.amount < 0 ? 'text-error' : 'text-success'}`}>
                             {formatCurrency(tx.amount)}
                           </TableCell>
-                          <TableCell className="max-w-[200px] truncate" title={tx.destinataire || tx.description || ''}>
+                          <TableCell hiddenOnMobile title={tx.destinataire || tx.description || ''}>
                             {tx.destinataire || tx.description || '-'}
                           </TableCell>
                           <TableCell>
@@ -822,7 +885,7 @@ export default function ReconcilePage() {
           </DialogHeader>
 
           <form onSubmit={handleFormSubmit(onSubmitTransaction)} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Account (read-only) */}
               <FormField label="Account" error={errors.account_id?.message}>
                 <Controller
@@ -851,7 +914,7 @@ export default function ReconcilePage() {
               </FormField>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Amount */}
               <FormField label="Amount" error={errors.amount?.message}>
                 <Input
@@ -991,7 +1054,7 @@ export default function ReconcilePage() {
           </DialogHeader>
 
           <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div>
                 <span className="text-foreground-muted">Matched:</span>
                 <span className="ml-2 font-medium">{reconciliationData?.summary.matched || 0}</span>

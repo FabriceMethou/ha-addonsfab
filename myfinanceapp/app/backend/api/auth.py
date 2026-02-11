@@ -5,7 +5,7 @@ JWT-based authentication with multi-owner support
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import jwt
 from passlib.context import CryptContext
@@ -25,6 +25,7 @@ if not SECRET_KEY:
     )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+REFRESH_TOKEN_EXPIRE_HOURS = 24
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -39,8 +40,12 @@ auth_mgr = AuthManager(db_path=DB_PATH)
 # Pydantic models
 class Token(BaseModel):
     access_token: str
+    refresh_token: Optional[str] = None
     token_type: str
     user: dict
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 class TokenData(BaseModel):
     username: Optional[str] = None
@@ -74,12 +79,19 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create JWT access token"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire, "type": "access"})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+def create_refresh_token(data: dict) -> str:
+    """Create JWT refresh token (24-hour expiry)"""
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(hours=REFRESH_TOKEN_EXPIRE_HOURS)
+    to_encode.update({"exp": expire, "type": "refresh"})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     """Verify JWT token and return current user"""
@@ -92,6 +104,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
+            raise credentials_exception
+        # Reject refresh tokens used as access tokens
+        if payload.get("type") == "refresh":
+            raise credentials_exception
+        # Reject MFA-pending tokens used as access tokens
+        if payload.get("mfa_pending"):
             raise credentials_exception
         token_data = TokenData(username=username)
     except jwt.PyJWTError:
@@ -138,14 +156,16 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             }
         }
 
-    # Create access token
+    # Create access token and refresh token
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": form_data.username}, expires_delta=access_token_expires
     )
+    refresh_token = create_refresh_token(data={"sub": form_data.username})
 
     return {
         "access_token": access_token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": {
             "username": user_data["username"],
@@ -180,15 +200,17 @@ async def verify_mfa(mfa_data: MFAVerify, token: str = Depends(oauth2_scheme)):
                 detail="Invalid MFA token"
             )
 
-        # Create full access token
+        # Create full access token and refresh token
         user_data = auth_mgr.get_user_by_username(username)
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
             data={"sub": username}, expires_delta=access_token_expires
         )
+        refresh_tok = create_refresh_token(data={"sub": username})
 
         return {
             "access_token": access_token,
+            "refresh_token": refresh_tok,
             "token_type": "bearer",
             "user": {
                 "username": user_data["username"],
@@ -200,6 +222,56 @@ async def verify_mfa(mfa_data: MFAVerify, token: str = Depends(oauth2_scheme)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token"
+        )
+
+@router.post("/refresh", response_model=Token)
+async def refresh_token(refresh_data: RefreshRequest):
+    """Exchange a valid refresh token for new access + refresh tokens"""
+    try:
+        payload = jwt.decode(refresh_data.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        token_type: str = payload.get("type")
+
+        if username is None or token_type != "refresh":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token",
+            )
+
+        # Verify user still exists
+        user_data = auth_mgr.get_user_by_username(username)
+        if user_data is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+            )
+
+        # Issue new token pair
+        access_token = create_access_token(
+            data={"sub": username},
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+        )
+        new_refresh_token = create_refresh_token(data={"sub": username})
+
+        return {
+            "access_token": access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "bearer",
+            "user": {
+                "username": user_data["username"],
+                "is_admin": user_data.get("role") == "admin",
+                "mfa_enabled": user_data.get("mfa_enabled", False),
+            },
+        }
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token expired",
+        )
+    except jwt.PyJWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
         )
 
 @router.get("/me", response_model=User)

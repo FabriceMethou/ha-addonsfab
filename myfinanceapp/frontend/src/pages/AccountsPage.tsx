@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm, Controller } from 'react-hook-form';
+import { useIsMobile } from '../hooks/useBreakpoint';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { accountsAPI, currenciesAPI, settingsAPI } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
@@ -55,6 +56,8 @@ import {
   RefreshCw,
   Users,
   Landmark,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 interface TabPanelProps {
@@ -112,6 +115,8 @@ function KPICard({ title, value, subtitle, icon, iconColor, loading }: KPICardPr
 }
 
 export default function AccountsPage() {
+  const isMobile = useIsMobile();
+  const [expandedAccount, setExpandedAccount] = useState<number | null>(null);
   const [tabValue, setTabValue] = useState(0);
   const [accountDialog, setAccountDialog] = useState(false);
   const [bankDialog, setBankDialog] = useState(false);
@@ -135,6 +140,7 @@ export default function AccountsPage() {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: settings } = useQuery({
@@ -151,6 +157,7 @@ export default function AccountsPage() {
       const response = await accountsAPI.getBanks();
       return response.data.banks;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: ownersData } = useQuery({
@@ -159,6 +166,7 @@ export default function AccountsPage() {
       const response = await accountsAPI.getOwners();
       return response.data.owners;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: summaryData } = useQuery({
@@ -175,6 +183,7 @@ export default function AccountsPage() {
       const response = await currenciesAPI.getAll();
       return response.data.currencies;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: accountTypesData } = useQuery({
@@ -183,6 +192,7 @@ export default function AccountsPage() {
       const response = await currenciesAPI.getAccountTypes();
       return response.data.account_types;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Account form with validation
@@ -680,7 +690,7 @@ export default function AccountsPage() {
       </div>
 
       {/* KPI Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6">
         <KPICard
           title="Total Balance"
           value={formatCurrency(totalBalance, displayCurrency)}
@@ -735,7 +745,7 @@ export default function AccountsPage() {
       {/* Tabs */}
       <Card className="rounded-xl border border-border bg-card/50 backdrop-blur-sm overflow-hidden">
         <div className="border-b border-border bg-surface/30">
-          <div className="flex">
+          <div className="flex flex-wrap">
             {tabs.map((tab, index) => {
               const Icon = tab.icon;
               return (
@@ -778,73 +788,134 @@ export default function AccountsPage() {
               </Button>
             </div>
 
-            <div className="rounded-lg border border-border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Account</TableHead>
-                    <TableHead>Bank</TableHead>
-                    <TableHead>Owner</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead className="text-right">Balance</TableHead>
-                    <TableHead>Currency</TableHead>
-                    <TableHead>Opened</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {accountsData && accountsData.length > 0 ? (
-                    accountsData.map((account: any) => (
-                      <TableRow key={account.id}>
-                        <TableCell className="font-medium">{account.name || '-'}</TableCell>
-                        <TableCell>{account.bank_name}</TableCell>
-                        <TableCell>{account.owner_name}</TableCell>
-                        <TableCell>
-                          <Badge variant="default" size="sm">{account.account_type}</Badge>
-                        </TableCell>
-                        <TableCell className="text-right font-bold">
-                          {formatCurrency(account.balance, account.currency)}
-                        </TableCell>
-                        <TableCell>{account.currency}</TableCell>
-                        <TableCell>
-                          {account.opening_date ? new Date(account.opening_date).toLocaleDateString('de-DE') : '-'}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex gap-1 justify-end">
-                            <Button variant="ghost" size="icon" onClick={() => handleOpenValidation(account)} title="Validate Balance">
-                              <CheckCircle className="w-4 h-4 text-success" />
-                            </Button>
-                            <Button variant="ghost" size="icon" onClick={() => handleEditAccount(account)}>
-                              <Edit2 className="w-4 h-4" />
-                            </Button>
-                            <Button variant="ghost" size="icon" onClick={() => setDeleteConfirm({ type: 'account', item: account })}>
-                              <Trash2 className="w-4 h-4 text-error" />
-                            </Button>
+            {accountsData && accountsData.length > 0 ? (
+              isMobile ? (
+                /* Mobile: Card-based view */
+                <div className="space-y-2">
+                  {accountsData.map((account: any) => {
+                    const isExpanded = expandedAccount === account.id;
+                    return (
+                      <Card
+                        key={account.id}
+                        className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${isExpanded ? 'ring-2 ring-primary/50' : ''}`}
+                      >
+                        <div
+                          className="p-4 cursor-pointer hover:bg-surface-hover transition-colors"
+                          onClick={() => setExpandedAccount(isExpanded ? null : account.id)}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-foreground truncate">{account.name || '-'}</p>
+                              <p className="text-xs text-foreground-muted">{account.bank_name} • {account.owner_name}</p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <span className="font-bold text-primary">
+                                {formatCurrency(account.balance, account.currency)}
+                              </span>
+                              {isExpanded ? <ChevronUp className="w-4 h-4 text-foreground-muted" /> : <ChevronDown className="w-4 h-4 text-foreground-muted" />}
+                            </div>
                           </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center py-12">
-                        <div className="flex flex-col items-center justify-center text-foreground-muted">
-                          <Wallet className="h-12 w-12 mb-2 opacity-50" />
-                          <p>No accounts found</p>
-                          <Button onClick={() => {
-                            setEditingItem(null);
-                            resetAccountForm();
-                            setAccountDialog(true);
-                          }} className="mt-4" size="sm">
-                            <Plus className="w-4 h-4 mr-2" />
-                            Add Your First Account
-                          </Button>
                         </div>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                        {isExpanded && (
+                          <div className="border-t border-border px-4 py-3">
+                            <div className="grid grid-cols-2 gap-3 mb-3">
+                              <div>
+                                <p className="text-xs text-foreground-muted">Type</p>
+                                <Badge variant="default" size="sm">{account.account_type}</Badge>
+                              </div>
+                              <div>
+                                <p className="text-xs text-foreground-muted">Currency</p>
+                                <p className="text-sm font-medium">{account.currency}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-foreground-muted">Opened</p>
+                                <p className="text-sm">{account.opening_date ? new Date(account.opening_date).toLocaleDateString('de-DE') : '-'}</p>
+                              </div>
+                            </div>
+                            <div className="flex gap-1 pt-2 border-t border-border">
+                              <Button variant="ghost" size="sm" onClick={() => handleOpenValidation(account)}>
+                                <CheckCircle className="w-4 h-4 mr-1 text-success" /> Validate
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={() => handleEditAccount(account)}>
+                                <Edit2 className="w-4 h-4 mr-1" /> Edit
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={() => setDeleteConfirm({ type: 'account', item: account })}>
+                                <Trash2 className="w-4 h-4 mr-1 text-error" /> Delete
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </Card>
+                    );
+                  })}
+                </div>
+              ) : (
+                /* Desktop: Table view */
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Account</TableHead>
+                        <TableHead>Bank</TableHead>
+                        <TableHead>Owner</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead className="text-right">Balance</TableHead>
+                        <TableHead>Currency</TableHead>
+                        <TableHead>Opened</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {accountsData.map((account: any) => (
+                        <TableRow key={account.id}>
+                          <TableCell className="font-medium">{account.name || '-'}</TableCell>
+                          <TableCell>{account.bank_name}</TableCell>
+                          <TableCell>{account.owner_name}</TableCell>
+                          <TableCell>
+                            <Badge variant="default" size="sm">{account.account_type}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-bold">
+                            {formatCurrency(account.balance, account.currency)}
+                          </TableCell>
+                          <TableCell>{account.currency}</TableCell>
+                          <TableCell>
+                            {account.opening_date ? new Date(account.opening_date).toLocaleDateString('de-DE') : '-'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex gap-1 justify-end">
+                              <Button variant="ghost" size="icon" onClick={() => handleOpenValidation(account)} title="Validate Balance">
+                                <CheckCircle className="w-4 h-4 text-success" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => handleEditAccount(account)}>
+                                <Edit2 className="w-4 h-4" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => setDeleteConfirm({ type: 'account', item: account })}>
+                                <Trash2 className="w-4 h-4 text-error" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )
+            ) : (
+              <div className="rounded-lg border border-border p-12">
+                <div className="flex flex-col items-center justify-center text-foreground-muted">
+                  <Wallet className="h-12 w-12 mb-2 opacity-50" />
+                  <p>No accounts found</p>
+                  <Button onClick={() => {
+                    setEditingItem(null);
+                    resetAccountForm();
+                    setAccountDialog(true);
+                  }} className="mt-4" size="sm">
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Your First Account
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         </TabPanel>
 

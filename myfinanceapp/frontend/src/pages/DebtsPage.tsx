@@ -13,6 +13,7 @@ import {
   ExternalLink,
   DollarSign,
   TrendingUp,
+  Calendar,
 } from 'lucide-react';
 import {
   Button,
@@ -113,6 +114,7 @@ export default function DebtsPage() {
   const navigate = useNavigate();
   const [debtDialog, setDebtDialog] = useState(false);
   const [paymentDialog, setPaymentDialog] = useState(false);
+  const [scheduleDialog, setScheduleDialog] = useState(false);
   const [editingDebt, setEditingDebt] = useState<any>(null);
   const [selectedDebt, setSelectedDebt] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
@@ -197,6 +199,7 @@ export default function DebtsPage() {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Fetch currencies for dropdown
@@ -206,6 +209,7 @@ export default function DebtsPage() {
       const response = await currenciesAPI.getAll();
       return response.data.currencies;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Create debt mutation
@@ -691,7 +695,18 @@ export default function DebtsPage() {
                     return null;
                   })()}
 
-                  <div className="flex justify-end">
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setSelectedDebt(debt);
+                        setScheduleDialog(true);
+                      }}
+                    >
+                      <Calendar className="h-4 w-4 mr-2" />
+                      View Schedule
+                    </Button>
                     <Button
                       size="sm"
                       onClick={() => {
@@ -826,7 +841,7 @@ export default function DebtsPage() {
                 />
               </FormField>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField label="Original Amount" error={debtErrors.original_amount?.message} required={!editingDebt}>
                   <Input
                     {...debtRegister('original_amount')}
@@ -898,7 +913,7 @@ export default function DebtsPage() {
                 </p>
               </FormField>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField label="Interest Rate (%)" error={debtErrors.interest_rate?.message}>
                   <Input
                     {...debtRegister('interest_rate')}
@@ -930,7 +945,7 @@ export default function DebtsPage() {
                 </FormField>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField label="Monthly Payment" error={debtErrors.minimum_payment?.message}>
                   <Input
                     {...debtRegister('minimum_payment')}
@@ -995,7 +1010,7 @@ export default function DebtsPage() {
 
           <form onSubmit={handlePaymentSubmit(onSubmitPayment)}>
             <div className="space-y-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField label="Payment Amount" error={paymentErrors.amount?.message} required>
                   <Input
                     {...paymentRegister('amount')}
@@ -1091,6 +1106,28 @@ export default function DebtsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Amortization Schedule Dialog */}
+      <Dialog open={scheduleDialog} onOpenChange={setScheduleDialog}>
+        <DialogContent size="xl">
+          <DialogHeader>
+            <DialogTitle>Amortization Schedule - {selectedDebt?.creditor}</DialogTitle>
+            <DialogDescription>
+              Month-by-month breakdown of payments, interest, and principal.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-4">
+            <AmortizationSchedule debtId={selectedDebt?.id} currency={selectedDebt?.currency} />
+          </div>
+
+          <DialogFooter>
+            <Button onClick={() => setScheduleDialog(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1145,6 +1182,108 @@ function DebtPayments({ debtId, currency = 'EUR' }: { debtId: number; currency?:
           ))}
         </TableBody>
       </Table>
+    </div>
+  );
+}
+
+// Amortization Schedule Component
+function AmortizationSchedule({ debtId, currency = 'EUR' }: { debtId: number | undefined; currency?: string }) {
+  const { data: scheduleData, isLoading, error } = useQuery({
+    queryKey: ['debt-schedule', debtId],
+    queryFn: async () => {
+      if (!debtId) return null;
+      const response = await debtsAPI.getSchedule(debtId);
+      return response.data.schedule;
+    },
+    enabled: !!debtId,
+  });
+
+  const formatCurrency = (amount: number) => {
+    return formatCurrencyUtil(amount, currency);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center p-8">
+        <Spinner />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-4 rounded-lg bg-error/10 text-error border border-error/20">
+        <p className="text-sm">Failed to load amortization schedule. Please try again.</p>
+      </div>
+    );
+  }
+
+  if (!scheduleData || scheduleData.length === 0) {
+    return (
+      <p className="text-sm text-foreground-muted text-center py-8">No payment schedule available</p>
+    );
+  }
+
+  // Calculate totals
+  const totalPayment = scheduleData.reduce((sum: number, item: any) => sum + item.payment, 0);
+  const totalPrincipal = scheduleData.reduce((sum: number, item: any) => sum + item.principal, 0);
+  const totalInterest = scheduleData.reduce((sum: number, item: any) => sum + item.interest, 0);
+
+  return (
+    <div className="space-y-4">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Card className="p-4 rounded-lg border border-border bg-card/50">
+          <span className="text-xs text-foreground-muted">Total Payments</span>
+          <p className="text-lg font-bold text-foreground mt-1">{formatCurrency(totalPayment)}</p>
+        </Card>
+        <Card className="p-4 rounded-lg border border-border bg-card/50">
+          <span className="text-xs text-foreground-muted">Total Principal</span>
+          <p className="text-lg font-bold text-success mt-1">{formatCurrency(totalPrincipal)}</p>
+        </Card>
+        <Card className="p-4 rounded-lg border border-border bg-card/50">
+          <span className="text-xs text-foreground-muted">Total Interest</span>
+          <p className="text-lg font-bold text-warning mt-1">{formatCurrency(totalInterest)}</p>
+        </Card>
+      </div>
+
+      {/* Schedule Table */}
+      <div className="rounded-lg border border-border overflow-hidden max-h-[500px] overflow-y-auto">
+        <Table>
+          <TableHeader className="sticky top-0 bg-surface z-10">
+            <TableRow>
+              <TableHead className="text-center">#</TableHead>
+              <TableHead>Date</TableHead>
+              <TableHead className="text-right">Payment</TableHead>
+              <TableHead className="text-right">Principal</TableHead>
+              <TableHead className="text-right">Interest</TableHead>
+              <TableHead className="text-right">Balance</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {scheduleData.map((item: any) => (
+              <TableRow key={item.payment_number}>
+                <TableCell className="text-center text-sm text-foreground-muted">
+                  {item.payment_number}
+                </TableCell>
+                <TableCell className="text-sm">{formatDate(item.date)}</TableCell>
+                <TableCell className="text-right font-semibold">
+                  {formatCurrency(item.payment)}
+                </TableCell>
+                <TableCell className="text-right text-success">
+                  {formatCurrency(item.principal)}
+                </TableCell>
+                <TableCell className="text-right text-warning">
+                  {formatCurrency(item.interest)}
+                </TableCell>
+                <TableCell className="text-right font-semibold">
+                  {formatCurrency(item.balance)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }

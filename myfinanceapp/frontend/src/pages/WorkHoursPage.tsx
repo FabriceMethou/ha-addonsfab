@@ -102,6 +102,7 @@ export default function WorkHoursPage() {
       const response = await accountsAPI.getOwners();
       return response.data.owners;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Fetch currencies from API
@@ -111,6 +112,7 @@ export default function WorkHoursPage() {
       const response = await currenciesAPI.getAll();
       return response.data.currencies;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Create mutation (for new profiles)
@@ -600,7 +602,7 @@ export default function WorkHoursPage() {
                   <TableRow>
                     <TableHead>Owner</TableHead>
                     <TableHead className="text-right">Monthly Salary</TableHead>
-                    <TableHead className="text-right">Hours/Month</TableHead>
+                    <TableHead className="text-right" hiddenOnMobile>Hours/Month</TableHead>
                     <TableHead className="text-right">Hourly Rate</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -612,7 +614,7 @@ export default function WorkHoursPage() {
                       <TableCell className="text-right">
                         {formatCurrency(profile.monthly_salary, profile.currency)}
                       </TableCell>
-                      <TableCell className="text-right">{profile.working_hours_per_month}h</TableCell>
+                      <TableCell className="text-right" hiddenOnMobile>{profile.working_hours_per_month}h</TableCell>
                       <TableCell className="text-right text-success font-bold">
                         {formatCurrency(profile.hourly_rate, profile.currency)}
                       </TableCell>
@@ -688,7 +690,7 @@ export default function WorkHoursPage() {
               </Select>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="salary">Monthly Salary (Net)</Label>
                 <Input
@@ -711,7 +713,7 @@ export default function WorkHoursPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="profile-currency">Currency</Label>
                 <Select

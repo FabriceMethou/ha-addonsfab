@@ -42,6 +42,9 @@ import {
   CheckCircle,
   Download,
   Upload,
+  Cloud,
+  CloudUpload,
+  RefreshCw,
 } from 'lucide-react';
 import { backupsAPI } from '../services/api';
 import { format } from 'date-fns';
@@ -59,6 +62,13 @@ export default function BackupPage() {
     max_backups: 50,
     compress_backups: true,
   });
+  const [cloudConfig, setCloudConfig] = useState({
+    webdav_url: '',
+    username: '',
+    remote_path: '/backups/',
+    enabled: false,
+  });
+  const [cloudBackups, setCloudBackups] = useState<string[]>([]);
 
   const queryClient = useQueryClient();
 
@@ -167,6 +177,57 @@ export default function BackupPage() {
       console.error('Failed to cleanup backups:', error);
       const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
       toast.error(`Failed to cleanup backups: ${errorMessage}`);
+    },
+  });
+
+  // Fetch cloud config
+  useQuery({
+    queryKey: ['cloud-config'],
+    queryFn: async () => {
+      const response = await backupsAPI.getCloudConfig();
+      setCloudConfig(response.data);
+      return response.data;
+    },
+  });
+
+  // Update cloud config mutation
+  const updateCloudConfigMutation = useMutation({
+    mutationFn: (data: any) => backupsAPI.updateCloudConfig(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['cloud-config'] });
+      toast.success('Cloud backup configuration updated successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to update cloud config:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to update cloud config: ${errorMessage}`);
+    },
+  });
+
+  // List cloud backups mutation
+  const listCloudBackupsMutation = useMutation({
+    mutationFn: () => backupsAPI.listCloudBackups(),
+    onSuccess: (response) => {
+      setCloudBackups(response.data.backups || []);
+      toast.success('Cloud backups loaded successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to list cloud backups:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to list cloud backups: ${errorMessage}`);
+    },
+  });
+
+  // Sync to cloud mutation
+  const syncToCloudMutation = useMutation({
+    mutationFn: (backupId: string) => backupsAPI.syncToCloud(backupId),
+    onSuccess: () => {
+      toast.success('Backup synced to cloud successfully!');
+    },
+    onError: (error: any) => {
+      console.error('Failed to sync to cloud:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      toast.error(`Failed to sync to cloud: ${errorMessage}`);
     },
   });
 
@@ -353,6 +414,10 @@ export default function BackupPage() {
           <TabsTrigger value="history" className="flex items-center gap-2">
             <HardDrive className="w-4 h-4" />
             Backup History
+          </TabsTrigger>
+          <TabsTrigger value="cloud" className="flex items-center gap-2">
+            <Cloud className="w-4 h-4" />
+            Cloud Backup
           </TabsTrigger>
           <TabsTrigger value="settings" className="flex items-center gap-2">
             <Settings className="w-4 h-4" />
@@ -624,6 +689,197 @@ export default function BackupPage() {
                 </p>
                 <Button onClick={() => setTabValue('create')}>Create First Backup</Button>
               </div>
+            )}
+          </div>
+        </TabsContent>
+
+        {/* Cloud Backup Tab */}
+        <TabsContent value="cloud">
+          <div className="mt-4 space-y-6">
+            {/* Cloud Configuration */}
+            <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+              <h2 className="text-lg font-semibold text-foreground mb-2">WebDAV Cloud Configuration</h2>
+              <p className="text-sm text-foreground-muted mb-6">
+                Configure WebDAV settings to sync your backups to cloud storage (Nextcloud, ownCloud, etc.)
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="sm:col-span-2">
+                  <label className="text-sm font-medium text-foreground mb-2 block">
+                    WebDAV URL
+                  </label>
+                  <Input
+                    type="url"
+                    placeholder="https://cloud.example.com/remote.php/dav/files/username/"
+                    value={cloudConfig.webdav_url}
+                    onChange={(e) =>
+                      setCloudConfig({
+                        ...cloudConfig,
+                        webdav_url: e.target.value,
+                      })
+                    }
+                  />
+                  <p className="text-xs text-foreground-muted mt-1">
+                    Full WebDAV endpoint URL
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-2 block">
+                    Username
+                  </label>
+                  <Input
+                    type="text"
+                    placeholder="username"
+                    value={cloudConfig.username}
+                    onChange={(e) =>
+                      setCloudConfig({
+                        ...cloudConfig,
+                        username: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-2 block">
+                    Remote Path
+                  </label>
+                  <Input
+                    type="text"
+                    placeholder="/backups/"
+                    value={cloudConfig.remote_path}
+                    onChange={(e) =>
+                      setCloudConfig({
+                        ...cloudConfig,
+                        remote_path: e.target.value,
+                      })
+                    }
+                  />
+                  <p className="text-xs text-foreground-muted mt-1">
+                    Folder path on the WebDAV server
+                  </p>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="text-sm font-medium text-foreground mb-2 block">
+                    Enable Cloud Backup
+                  </label>
+                  <Select
+                    value={cloudConfig.enabled ? 'yes' : 'no'}
+                    onValueChange={(value) =>
+                      setCloudConfig({
+                        ...cloudConfig,
+                        enabled: value === 'yes',
+                      })
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="yes">Enabled</SelectItem>
+                      <SelectItem value="no">Disabled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="mt-4 p-4 rounded-lg bg-primary/10 border border-primary/20">
+                <p className="text-sm text-foreground">
+                  <strong>Security Note:</strong> The password must be set via the <code className="bg-background px-2 py-1 rounded">WEBDAV_PASSWORD</code> environment variable on the backend server. This ensures credentials are never stored in the database.
+                </p>
+              </div>
+
+              <Button
+                onClick={() => updateCloudConfigMutation.mutate(cloudConfig)}
+                disabled={updateCloudConfigMutation.isPending}
+                className="w-full mt-4"
+              >
+                <Cloud className="w-4 h-4 mr-2" />
+                Save Cloud Configuration
+              </Button>
+            </Card>
+
+            {/* Cloud Backup Actions */}
+            <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+              <h2 className="text-lg font-semibold text-foreground mb-2">Cloud Backup Operations</h2>
+              <p className="text-sm text-foreground-muted mb-6">
+                View remote backups and sync local backups to the cloud
+              </p>
+
+              <div className="flex gap-4 mb-6">
+                <Button
+                  onClick={() => listCloudBackupsMutation.mutate()}
+                  disabled={listCloudBackupsMutation.isPending || !cloudConfig.enabled}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  <RefreshCw className={`w-4 h-4 mr-2 ${listCloudBackupsMutation.isPending ? 'animate-spin' : ''}`} />
+                  {listCloudBackupsMutation.isPending ? 'Loading...' : 'List Remote Backups'}
+                </Button>
+              </div>
+
+              {cloudBackups.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Remote Backups:</h3>
+                  <div className="space-y-2">
+                    {cloudBackups.map((backup: string, index: number) => (
+                      <div key={index} className="p-3 rounded-lg bg-background border border-border flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Cloud className="w-4 h-4 text-primary" />
+                          <span className="text-sm text-foreground font-medium">{backup}</span>
+                        </div>
+                        <Badge variant="outline">Remote</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {cloudBackups.length === 0 && listCloudBackupsMutation.isSuccess && (
+                <div className="text-center py-8">
+                  <Cloud className="w-16 h-16 text-foreground-muted mx-auto mb-3" />
+                  <p className="text-sm text-foreground-muted">No remote backups found</p>
+                </div>
+              )}
+            </Card>
+
+            {/* Sync Local Backups */}
+            {backupsData && backupsData.length > 0 && (
+              <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                <h2 className="text-lg font-semibold text-foreground mb-2">Sync Local Backups to Cloud</h2>
+                <p className="text-sm text-foreground-muted mb-6">
+                  Upload your local backups to the configured WebDAV server
+                </p>
+
+                <div className="space-y-2">
+                  {backupsData.slice(0, 10).map((backup: any) => (
+                    <div key={backup.id} className="p-3 rounded-lg bg-background border border-border flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Archive className="w-4 h-4 text-foreground-muted" />
+                        <div>
+                          <p className="text-sm font-medium text-foreground">
+                            Backup #{backup.id} - {formatDate(backup.timestamp)}
+                          </p>
+                          <p className="text-xs text-foreground-muted">
+                            {formatSize(backup.size_bytes)} • {backup.type}
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => syncToCloudMutation.mutate(backup.id.toString())}
+                        disabled={syncToCloudMutation.isPending || !cloudConfig.enabled}
+                      >
+                        <CloudUpload className="w-4 h-4 mr-1" />
+                        Sync to Cloud
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </Card>
             )}
           </div>
         </TabsContent>

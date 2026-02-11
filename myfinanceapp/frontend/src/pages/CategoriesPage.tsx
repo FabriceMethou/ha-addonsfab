@@ -146,6 +146,7 @@ export default function CategoriesPage() {
       const response = await categoriesAPI.getHierarchy();
       return response.data.categories;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Create type mutation
@@ -687,7 +688,7 @@ export default function CategoriesPage() {
               </Select>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Icon (Emoji)</Label>
                 <Popover>

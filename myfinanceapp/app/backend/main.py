@@ -39,11 +39,16 @@ if not SECRET_KEY:
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# Initialize FastAPI app
+# Initialize FastAPI app — disable docs in production
+_docs_url = "/docs" if os.getenv("ENVIRONMENT", "production") != "production" else None
+_redoc_url = "/redoc" if os.getenv("ENVIRONMENT", "production") != "production" else None
+
 app = FastAPI(
     title="Finance Tracker API",
     description="Personal finance management API with transaction tracking and reporting",
-    version="2.0.0"
+    version="2.0.0",
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
 )
 
 # CORS middleware
@@ -54,6 +59,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Security headers middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Initialize services
 DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")

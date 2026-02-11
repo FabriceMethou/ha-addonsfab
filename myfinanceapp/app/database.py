@@ -470,6 +470,12 @@ class FinanceDatabase:
             )
         """)
 
+        # Add transaction_id column if it doesn't exist (virtual link to transactions)
+        try:
+            cursor.execute("ALTER TABLE envelope_transactions ADD COLUMN transaction_id INTEGER REFERENCES transactions(id)")
+        except Exception:
+            pass  # Column already exists
+
         # Recurring transaction templates
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recurring_templates (
@@ -1110,55 +1116,7 @@ class FinanceDatabase:
         """Delete an owner if not used."""
         return self._owner_crud.delete(owner_id)
 
-    # ==================== CURRENCIES ====================
-    
-    def get_currencies(self) -> List[Dict[str, Any]]:
-        """Get all currencies."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM currencies ORDER BY is_default DESC, code")
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
-
-    def add_currency(self, code: str, name: str) -> int:
-        """Add a new currency."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO currencies (code, name, is_default) VALUES (?, ?, 0)", (code, name))
-        curr_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        logger.info(f"Added currency: {code}")
-        return curr_id
-
-    def delete_currency(self, currency_id: int) -> bool:
-        """Delete a currency if not used."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        # Check if currency has accounts or transactions
-        cursor.execute("SELECT COUNT(*) FROM accounts WHERE currency = (SELECT code FROM currencies WHERE id = ?)", (currency_id,))
-        if cursor.fetchone()[0] > 0:
-            conn.close()
-            return False
-        
-        cursor.execute("DELETE FROM currencies WHERE id = ? AND is_default = 0", (currency_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
-
     # ==================== ACCOUNT TYPES ====================
-    
-    def get_account_types(self) -> List[Dict[str, Any]]:
-        """Get all account types."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM account_types ORDER BY is_default DESC, name")
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
 
     def add_account_type(self, name: str) -> int:
         """Add a new account type."""
@@ -1717,17 +1675,9 @@ class FinanceDatabase:
             amount = trans_dict['amount']
 
             # Calculate impact on balance
-            if category == 'income':
-                balance += amount
-                impact = amount
-            elif category == 'expense':
-                balance -= amount
-                impact = -amount
-            elif category == 'transfer':
-                balance += amount  # Transfers are already signed
-                impact = amount
-            else:
-                impact = 0
+            # Amounts are already signed (income=positive, expense=negative, transfer=signed)
+            balance += amount
+            impact = amount
 
             transaction_list.append({
                 'id': trans_dict['id'],
@@ -2221,18 +2171,26 @@ class FinanceDatabase:
 
     def update_type(self, type_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing transaction type."""
+        # Whitelist allowed columns to prevent SQL injection
+        ALLOWED_COLUMNS = {'name', 'category', 'icon', 'color'}
+        updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
+        if not updates:
+            return False
+
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
-        values = list(updates.values()) + [type_id]
+            set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
+            values = list(updates.values()) + [type_id]
 
-        cursor.execute(f"UPDATE transaction_types SET {set_clause} WHERE id = ?", values)
-        
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+            cursor.execute(f"UPDATE transaction_types SET {set_clause} WHERE id = ?", values)
+
+            success = cursor.rowcount > 0
+            conn.commit()
+            return success
+        finally:
+            conn.close()
 
     def delete_type(self, type_id: int) -> bool:
         """Delete a type if not used."""
@@ -2253,6 +2211,12 @@ class FinanceDatabase:
 
     def update_subtype(self, subtype_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing subtype."""
+        # Whitelist allowed columns to prevent SQL injection
+        ALLOWED_COLUMNS = {'name', 'type_id'}
+        updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
+        if not updates:
+            return False
+
         with self.db_connection(commit=True) as conn:
             cursor = conn.cursor()
 
@@ -2416,10 +2380,10 @@ class FinanceDatabase:
                         destination_amount = abs(transfer_amount)
                         self._update_account_balance(cursor, transfer_account_id, destination_amount, 'transfer')
                         logger.info(f"Cross-currency transfer: Updated destination account {transfer_account_id} with +{destination_amount}")
-                    elif amount > 0:
-                        # Same-currency transfer: use source amount for destination
-                        self._update_account_balance(cursor, transfer_account_id, amount, 'transfer')
-                        logger.info(f"Same-currency transfer: Updated destination account {transfer_account_id} with +{amount}")
+                    else:
+                        # Same-currency transfer: use abs of source amount for destination
+                        self._update_account_balance(cursor, transfer_account_id, abs(amount), 'transfer')
+                        logger.info(f"Same-currency transfer: Updated destination account {transfer_account_id} with +{abs(amount)}")
 
         conn.commit()
         conn.close()
@@ -2485,11 +2449,49 @@ class FinanceDatabase:
 
         query += " ORDER BY t.transaction_date DESC, t.created_at DESC"
 
+        if filters:
+            if 'limit' in filters:
+                query += " LIMIT ?"
+                params.append(filters['limit'])
+            if 'offset' in filters:
+                query += " OFFSET ?"
+                params.append(filters['offset'])
+
         cursor.execute(query, params)
         rows = cursor.fetchall()
         conn.close()
 
         return [dict(row) for row in rows]
+
+    def count_transactions(self, filters: Optional[Dict[str, Any]] = None) -> int:
+        """Count transactions matching filters (ignores limit/offset)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        query = "SELECT COUNT(*) FROM transactions t JOIN accounts a ON t.account_id = a.id WHERE 1=1"
+        params = []
+
+        if filters:
+            if 'account_id' in filters:
+                query += " AND t.account_id = ?"
+                params.append(filters['account_id'])
+            if 'start_date' in filters:
+                query += " AND t.transaction_date >= ?"
+                params.append(filters['start_date'])
+            if 'end_date' in filters:
+                query += " AND t.transaction_date <= ?"
+                params.append(filters['end_date'])
+            if 'type_id' in filters:
+                query += " AND t.type_id = ?"
+                params.append(filters['type_id'])
+            if 'owner_id' in filters:
+                query += " AND a.owner_id = ?"
+                params.append(filters['owner_id'])
+
+        cursor.execute(query, params)
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
 
     def get_transaction(self, transaction_id: int) -> Optional[Dict[str, Any]]:
         """Get a single transaction by ID."""
@@ -2542,6 +2544,18 @@ class FinanceDatabase:
 
         old_transaction = dict(old_transaction)
 
+        # Whitelist allowed columns to prevent SQL injection
+        ALLOWED_COLUMNS = {
+            'account_id', 'transaction_date', 'due_date', 'amount', 'type_id', 'subtype_id',
+            'description', 'destinataire', 'tags', 'confirmed', 'is_transfer',
+            'transfer_account_id', 'transfer_amount', 'is_historical', 'notes',
+            'currency', 'original_amount', 'original_currency', 'exchange_rate'
+        }
+        updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
+        if not updates:
+            conn.close()
+            return False
+
         # Reverse old balance if transaction was confirmed
         if old_transaction['confirmed']:
             # Reverse the balance change (negate the amount)
@@ -2558,9 +2572,9 @@ class FinanceDatabase:
                 if old_transaction.get('transfer_amount') is not None:
                     # Reverse cross-currency transfer using stored transfer_amount
                     self._update_account_balance(cursor, old_transaction['transfer_account_id'], -abs(old_transaction['transfer_amount']), 'transfer')
-                elif old_transaction['amount'] > 0:
+                else:
                     # Reverse same-currency transfer
-                    self._update_account_balance(cursor, old_transaction['transfer_account_id'], -old_transaction['amount'], 'transfer')
+                    self._update_account_balance(cursor, old_transaction['transfer_account_id'], -abs(old_transaction['amount']), 'transfer')
 
         # Apply updates
         set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
@@ -2594,9 +2608,9 @@ class FinanceDatabase:
                     if new_transaction.get('transfer_amount') is not None:
                         # Apply cross-currency transfer using transfer_amount
                         self._update_account_balance(cursor, new_transaction['transfer_account_id'], abs(new_transaction['transfer_amount']), 'transfer')
-                    elif new_transaction['amount'] > 0:
+                    else:
                         # Apply same-currency transfer
-                        self._update_account_balance(cursor, new_transaction['transfer_account_id'], new_transaction['amount'], 'transfer')
+                        self._update_account_balance(cursor, new_transaction['transfer_account_id'], abs(new_transaction['amount']), 'transfer')
 
         conn.commit()
         conn.close()
@@ -2641,9 +2655,9 @@ class FinanceDatabase:
                 if transaction.get('transfer_amount') is not None:
                     # Reverse cross-currency transfer using stored transfer_amount
                     self._update_account_balance(cursor, transaction['transfer_account_id'], -abs(transaction['transfer_amount']), 'transfer')
-                elif transaction['amount'] > 0:
+                else:
                     # Reverse same-currency transfer
-                    self._update_account_balance(cursor, transaction['transfer_account_id'], -transaction['amount'], 'transfer')
+                    self._update_account_balance(cursor, transaction['transfer_account_id'], -abs(transaction['amount']), 'transfer')
 
         # Delete the transaction
         cursor.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
@@ -2731,21 +2745,32 @@ class FinanceDatabase:
 
     def update_envelope(self, envelope_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing envelope."""
+        # Whitelist allowed columns to prevent SQL injection
+        ALLOWED_COLUMNS = {
+            'name', 'description', 'target_amount', 'current_amount', 'deadline',
+            'color', 'is_active', 'tags'
+        }
+        updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
+        if not updates:
+            return False
+
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
-        values = list(updates.values()) + [envelope_id]
+            set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
+            values = list(updates.values()) + [envelope_id]
 
-        cursor.execute(f"UPDATE envelopes SET {set_clause} WHERE id = ?", values)
-        
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
+            cursor.execute(f"UPDATE envelopes SET {set_clause} WHERE id = ?", values)
 
-        if success:
-            logger.info(f"Updated envelope {envelope_id}")
-        return success
+            success = cursor.rowcount > 0
+            conn.commit()
+
+            if success:
+                logger.info(f"Updated envelope {envelope_id}")
+            return success
+        finally:
+            conn.close()
 
     def delete_envelope(self, envelope_id: int) -> bool:
         """Delete an envelope (soft delete - mark as inactive)."""
@@ -2787,50 +2812,57 @@ class FinanceDatabase:
             conn.close()
 
     def add_envelope_transaction(self, envelope_transaction_data: Dict[str, Any]) -> int:
-        """Add money to an envelope (allocation)."""
+        """Add money to an envelope (allocation). Optionally link to an existing transaction."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
-        # Insert envelope transaction
+
+        # Insert envelope transaction with optional transaction_id link
         cursor.execute("""
-            INSERT INTO envelope_transactions 
-            (envelope_id, transaction_date, amount, account_id, description)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO envelope_transactions
+            (envelope_id, transaction_date, amount, account_id, description, transaction_id)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
             envelope_transaction_data['envelope_id'],
             envelope_transaction_data['transaction_date'],
             envelope_transaction_data['amount'],
             envelope_transaction_data['account_id'],
-            envelope_transaction_data.get('description', '')
+            envelope_transaction_data.get('description', ''),
+            envelope_transaction_data.get('transaction_id')
         ))
-        
+
         transaction_id = cursor.lastrowid
-        
+
         # Update envelope current_amount
         cursor.execute("""
-            UPDATE envelopes 
-            SET current_amount = current_amount + ? 
+            UPDATE envelopes
+            SET current_amount = current_amount + ?
             WHERE id = ?
         """, (envelope_transaction_data['amount'], envelope_transaction_data['envelope_id']))
-        
+
         conn.commit()
         conn.close()
         logger.info(f"Added envelope transaction: {envelope_transaction_data['amount']} to envelope {envelope_transaction_data['envelope_id']}")
         return transaction_id
 
     def get_envelope_transactions(self, envelope_id: int) -> List[Dict[str, Any]]:
-        """Get all transactions for an envelope."""
+        """Get all transactions for an envelope, including linked transaction details if present."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
-            SELECT et.*, a.name as account_name
+            SELECT
+                et.*,
+                a.name as account_name,
+                t.date as linked_transaction_date,
+                t.description as linked_transaction_description,
+                t.amount as linked_transaction_amount
             FROM envelope_transactions et
-            JOIN accounts a ON et.account_id = a.id
+            LEFT JOIN accounts a ON et.account_id = a.id
+            LEFT JOIN transactions t ON et.transaction_id = t.id
             WHERE et.envelope_id = ?
             ORDER BY et.transaction_date DESC
         """, (envelope_id,))
-        
+
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
@@ -2987,6 +3019,17 @@ class FinanceDatabase:
                         processed_updates[key] = value
             else:
                 processed_updates[key] = value
+
+        # Whitelist allowed columns to prevent SQL injection
+        ALLOWED_COLUMNS = {
+            'account_id', 'type_id', 'subtype_id', 'amount', 'description', 'destinataire',
+            'tags', 'recurrence_pattern', 'recurrence_day', 'start_date', 'end_date',
+            'is_active', 'is_transfer', 'transfer_account_id'
+        }
+        processed_updates = {k: v for k, v in processed_updates.items() if k in ALLOWED_COLUMNS}
+        if not processed_updates:
+            conn.close()
+            return False
 
         set_clause = ", ".join([f"{key} = ?" for key in processed_updates.keys()])
         values = list(processed_updates.values()) + [template_id]
@@ -3529,63 +3572,74 @@ class FinanceDatabase:
 
         If the debt is fully paid (current_balance <= 0), the recurring template is deleted.
         """
+        # Whitelist allowed columns to prevent SQL injection
+        ALLOWED_COLUMNS = {
+            'name', 'principal_amount', 'current_balance', 'interest_rate', 'interest_type',
+            'monthly_payment', 'start_date', 'payment_day', 'is_active', 'notes',
+            'linked_account_id', 'currency'
+        }
+        updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
+        if not updates:
+            return False
+
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
-        values = list(updates.values()) + [debt_id]
+            set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
+            values = list(updates.values()) + [debt_id]
 
-        cursor.execute(f"UPDATE debts SET {set_clause} WHERE id = ?", values)
+            cursor.execute(f"UPDATE debts SET {set_clause} WHERE id = ?", values)
 
-        success = cursor.rowcount > 0
+            success = cursor.rowcount > 0
 
-        # Check if debt is fully paid off
-        if success and 'current_balance' in updates:
-            new_balance = updates['current_balance']
-            if new_balance <= 0:
-                # Debt is fully paid - DELETE the recurring template
-                cursor.execute("DELETE FROM recurring_templates WHERE linked_debt_id = ?", (debt_id,))
-                deleted_count = cursor.rowcount
-                if deleted_count > 0:
-                    logger.info(f"Debt {debt_id} fully paid! Deleted recurring template.")
+            # Check if debt is fully paid off
+            if success and 'current_balance' in updates:
+                new_balance = updates['current_balance']
+                if new_balance <= 0:
+                    # Debt is fully paid - DELETE the recurring template
+                    cursor.execute("DELETE FROM recurring_templates WHERE linked_debt_id = ?", (debt_id,))
+                    deleted_count = cursor.rowcount
+                    if deleted_count > 0:
+                        logger.info(f"Debt {debt_id} fully paid! Deleted recurring template.")
 
-                # Also deactivate the debt
-                cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (debt_id,))
-                logger.info(f"Debt {debt_id} marked as inactive (fully paid)")
+                    # Also deactivate the debt
+                    cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (debt_id,))
+                    logger.info(f"Debt {debt_id} marked as inactive (fully paid)")
 
-                conn.commit()
-                conn.close()
-                return success
+                    conn.commit()
+                    return success
 
-        # Update the recurring template if relevant fields changed (and debt not paid off)
-        if success and any(key in updates for key in ['monthly_payment', 'payment_day', 'linked_account_id', 'name', 'currency']):
-            # Build update for recurring template
-            template_updates = {}
-            if 'monthly_payment' in updates:
-                template_updates['amount'] = updates['monthly_payment']
-            if 'payment_day' in updates:
-                template_updates['day_of_month'] = updates['payment_day']
-            if 'linked_account_id' in updates:
-                template_updates['account_id'] = updates['linked_account_id']
-            if 'name' in updates:
-                template_updates['name'] = f"Debt Payment: {updates['name']}"
-                template_updates['destinataire'] = updates['name']
-                template_updates['description'] = f"Monthly payment for {updates['name']}"
-            if 'currency' in updates:
-                template_updates['currency'] = updates['currency']
+            # Update the recurring template if relevant fields changed (and debt not paid off)
+            if success and any(key in updates for key in ['monthly_payment', 'payment_day', 'linked_account_id', 'name', 'currency']):
+                # Build update for recurring template
+                template_updates = {}
+                if 'monthly_payment' in updates:
+                    template_updates['amount'] = updates['monthly_payment']
+                if 'payment_day' in updates:
+                    template_updates['day_of_month'] = updates['payment_day']
+                if 'linked_account_id' in updates:
+                    template_updates['account_id'] = updates['linked_account_id']
+                if 'name' in updates:
+                    template_updates['name'] = f"Debt Payment: {updates['name']}"
+                    template_updates['destinataire'] = updates['name']
+                    template_updates['description'] = f"Monthly payment for {updates['name']}"
+                if 'currency' in updates:
+                    template_updates['currency'] = updates['currency']
 
-            if template_updates:
-                set_template_clause = ", ".join([f"{key} = ?" for key in template_updates.keys()])
-                template_values = list(template_updates.values()) + [debt_id]
-                cursor.execute(
-                    f"UPDATE recurring_templates SET {set_template_clause} WHERE linked_debt_id = ?",
-                    template_values
-                )
-                logger.info(f"Updated recurring template for debt {debt_id}")
+                if template_updates:
+                    set_template_clause = ", ".join([f"{key} = ?" for key in template_updates.keys()])
+                    template_values = list(template_updates.values()) + [debt_id]
+                    cursor.execute(
+                        f"UPDATE recurring_templates SET {set_template_clause} WHERE linked_debt_id = ?",
+                        template_values
+                    )
+                    logger.info(f"Updated recurring template for debt {debt_id}")
 
-        conn.commit()
-        conn.close()
-        return success
+            conn.commit()
+            return success
+        finally:
+            conn.close()
 
     def delete_debt(self, debt_id: int) -> bool:
         """Deactivate a debt and DELETE its associated recurring template."""
@@ -3746,79 +3800,81 @@ class FinanceDatabase:
     def add_debt_payment(self, payment_data: Dict[str, Any]) -> int:
         """Record a debt payment linked to a transaction."""
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        # Get debt info to calculate interest
-        cursor.execute("SELECT * FROM debts WHERE id = ?", (payment_data['debt_id'],))
-        debt = dict(cursor.fetchone())
-        
-        # Calculate interest for this payment
-        annual_rate = debt['interest_rate'] / 100
-        monthly_rate = annual_rate / 12
-        current_balance = debt['current_balance']
-        
-        # Calculate interest portion
-        if debt['interest_type'] == 'simple':
-            # Simple interest: (Balance × Annual Rate) / 12
-            interest_paid = (current_balance * annual_rate) / 12
-        else:
-            # Compound interest: Balance × Monthly Rate
-            interest_paid = current_balance * monthly_rate
-        
-        # Calculate principal portion
-        total_payment = payment_data['amount']
-        extra_payment = payment_data.get('extra_payment', 0)
-        
-        # Principal = Total Payment - Interest - Extra
-        # But if total < interest (shouldn't happen), just record as is
-        principal_paid = max(0, total_payment - interest_paid - extra_payment)
-        
-        # If extra payment specified, it all goes to principal
-        total_principal = principal_paid + extra_payment
-        
-        cursor.execute("""
-            INSERT INTO debt_payments 
-            (debt_id, transaction_id, payment_date, amount, principal_paid, interest_paid, extra_payment)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            payment_data['debt_id'],
-            payment_data['transaction_id'],
-            payment_data['payment_date'],
-            total_payment,
-            principal_paid,
-            round(interest_paid, 2),
-            extra_payment
-        ))
-        
-        payment_id = cursor.lastrowid
-        
-        # Update debt balance (subtract principal + extra)
-        cursor.execute("""
-            UPDATE debts
-            SET current_balance = current_balance - ?
-            WHERE id = ?
-        """, (total_principal, payment_data['debt_id']))
+            # Get debt info to calculate interest
+            cursor.execute("SELECT * FROM debts WHERE id = ?", (payment_data['debt_id'],))
+            debt = dict(cursor.fetchone())
 
-        # Check if debt is now fully paid
-        cursor.execute("SELECT current_balance FROM debts WHERE id = ?", (payment_data['debt_id'],))
-        result = cursor.fetchone()
-        if result:
-            new_balance = result[0]
-            if new_balance <= 0:
-                # Debt is fully paid - DELETE the recurring template
-                cursor.execute("DELETE FROM recurring_templates WHERE linked_debt_id = ?", (payment_data['debt_id'],))
-                deleted_count = cursor.rowcount
-                if deleted_count > 0:
-                    logger.info(f"Debt {payment_data['debt_id']} fully paid! Deleted recurring template.")
+            # Calculate interest for this payment
+            annual_rate = debt['interest_rate'] / 100
+            monthly_rate = annual_rate / 12
+            current_balance = debt['current_balance']
 
-                # Mark debt as inactive (paid off)
-                cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (payment_data['debt_id'],))
-                logger.info(f"Debt {payment_data['debt_id']} marked as inactive (fully paid)")
+            # Calculate interest portion
+            if debt['interest_type'] == 'simple':
+                # Simple interest: (Balance × Annual Rate) / 12
+                interest_paid = (current_balance * annual_rate) / 12
+            else:
+                # Compound interest: Balance × Monthly Rate
+                interest_paid = current_balance * monthly_rate
 
-        conn.commit()
-        conn.close()
-        logger.info(f"Added debt payment for debt {payment_data['debt_id']}: Interest={interest_paid:.2f}, Principal={principal_paid:.2f}, Extra={extra_payment}")
-        return payment_id
+            # Calculate principal portion
+            total_payment = payment_data['amount']
+            extra_payment = payment_data.get('extra_payment', 0)
+
+            # Principal = Total Payment - Interest - Extra
+            # But if total < interest (shouldn't happen), just record as is
+            principal_paid = max(0, total_payment - interest_paid - extra_payment)
+
+            # If extra payment specified, it all goes to principal
+            total_principal = principal_paid + extra_payment
+
+            cursor.execute("""
+                INSERT INTO debt_payments
+                (debt_id, transaction_id, payment_date, amount, principal_paid, interest_paid, extra_payment)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                payment_data['debt_id'],
+                payment_data['transaction_id'],
+                payment_data['payment_date'],
+                total_payment,
+                principal_paid,
+                round(interest_paid, 2),
+                extra_payment
+            ))
+
+            payment_id = cursor.lastrowid
+
+            # Update debt balance (subtract principal + extra)
+            cursor.execute("""
+                UPDATE debts
+                SET current_balance = current_balance - ?
+                WHERE id = ?
+            """, (total_principal, payment_data['debt_id']))
+
+            # Check if debt is now fully paid
+            cursor.execute("SELECT current_balance FROM debts WHERE id = ?", (payment_data['debt_id'],))
+            result = cursor.fetchone()
+            if result:
+                new_balance = result[0]
+                if new_balance <= 0:
+                    # Debt is fully paid - DELETE the recurring template
+                    cursor.execute("DELETE FROM recurring_templates WHERE linked_debt_id = ?", (payment_data['debt_id'],))
+                    deleted_count = cursor.rowcount
+                    if deleted_count > 0:
+                        logger.info(f"Debt {payment_data['debt_id']} fully paid! Deleted recurring template.")
+
+                    # Mark debt as inactive (paid off)
+                    cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (payment_data['debt_id'],))
+                    logger.info(f"Debt {payment_data['debt_id']} marked as inactive (fully paid)")
+
+            conn.commit()
+            logger.info(f"Added debt payment for debt {payment_data['debt_id']}: Interest={interest_paid:.2f}, Principal={principal_paid:.2f}, Extra={extra_payment}")
+            return payment_id
+        finally:
+            conn.close()
 
     def get_debt_payments(self, debt_id: int) -> List[Dict[str, Any]]:
         """Get all payments for a specific debt."""
@@ -3905,6 +3961,72 @@ class FinanceDatabase:
             'current_balance': balance,
             'monthly_payment': monthly_payment
         }
+
+    def generate_amortization_schedule(self, debt_id: int) -> List[Dict[str, Any]]:
+        """Generate month-by-month amortization schedule for a debt.
+
+        Args:
+            debt_id: ID of the debt to generate schedule for
+
+        Returns:
+            List of dictionaries containing payment schedule details:
+            - payment_number: Payment number in sequence
+            - date: Payment date (YYYY-MM-DD)
+            - payment: Total payment amount
+            - principal: Principal portion of payment
+            - interest: Interest portion of payment
+            - balance: Remaining balance after payment
+        """
+        from datetime import datetime
+        from dateutil.relativedelta import relativedelta
+
+        debt = self.get_debt(debt_id)
+        if not debt:
+            return []
+
+        schedule = []
+        balance = float(debt['current_balance'])
+        monthly_rate = (float(debt['interest_rate']) / 100) / 12
+        payment = float(debt['monthly_payment'])
+
+        # Start from today
+        current_date = datetime.now().date()
+
+        # Generate schedule until balance is paid off (max 360 months = 30 years)
+        while balance > 0.01 and len(schedule) < 360:
+            # Calculate interest for this period
+            if debt.get('interest_type') == 'simple':
+                # Simple interest: I = P * r * t (annual)
+                interest = (balance * float(debt['interest_rate']) / 100) / 12
+            else:
+                # Compound interest: I = P * (monthly_rate)
+                interest = balance * monthly_rate
+
+            # Principal is what's left after interest
+            principal = min(payment - interest, balance)
+
+            # If payment doesn't cover interest, set principal to 0
+            if principal < 0:
+                principal = 0
+
+            # Update balance
+            balance -= principal
+
+            # Add to schedule
+            schedule.append({
+                'payment_number': len(schedule) + 1,
+                'date': current_date.strftime('%Y-%m-%d'),
+                'payment': round(min(payment, principal + interest), 2),
+                'principal': round(principal, 2),
+                'interest': round(interest, 2),
+                'balance': round(max(balance, 0), 2),
+            })
+
+            # Move to next month
+            current_date = current_date + relativedelta(months=1)
+
+        return schedule
+
 # ==================== BUDGETS ====================
 
     def get_budgets(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
@@ -3970,18 +4092,29 @@ class FinanceDatabase:
 
     def update_budget(self, budget_id: int, updates: Dict[str, Any]) -> bool:
         """Update a budget."""
+        # Whitelist allowed columns to prevent SQL injection
+        ALLOWED_COLUMNS = {
+            'type_id', 'subtype_id', 'amount', 'period', 'start_date', 'end_date',
+            'is_active', 'rollover', 'notes'
+        }
+        updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
+        if not updates:
+            return False
+
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
-        values = list(updates.values()) + [budget_id]
+            set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
+            values = list(updates.values()) + [budget_id]
 
-        cursor.execute(f"UPDATE budgets SET {set_clause} WHERE id = ?", values)
-        
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+            cursor.execute(f"UPDATE budgets SET {set_clause} WHERE id = ?", values)
+
+            success = cursor.rowcount > 0
+            conn.commit()
+            return success
+        finally:
+            conn.close()
 
     def delete_budget(self, budget_id: int) -> bool:
         """Deactivate a budget."""
@@ -4117,8 +4250,19 @@ class FinanceDatabase:
         # Get user's display currency for UI formatting
         display_currency = self.get_preference('display_currency', 'EUR')
 
-        # Get active budgets (now includes currency field)
-        budgets = self.get_budgets()
+        # Get active budgets and filter by date range
+        all_budgets = self.get_budgets()
+        budgets = []
+        for b in all_budgets:
+            # Include budget if the requested month falls within its date range
+            b_start = b.get('start_date')
+            b_end = b.get('end_date')
+            month_str = start_date.isoformat()
+            if b_start and month_str < b_start:
+                continue  # Budget hasn't started yet
+            if b_end and month_str > b_end:
+                continue  # Budget has ended
+            budgets.append(b)
 
         # Get actual spending
         transactions = self.get_transactions({
@@ -4530,22 +4674,31 @@ class FinanceDatabase:
         return security_id
 
     def update_security(self, security_id: int, update_data: Dict[str, Any]) -> bool:
-        """Update security information."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
+        """Update security information.
+
+        NOTE: This method appears to be duplicated in the codebase - consider removing duplicate.
+        """
+        # Whitelist allowed columns to prevent SQL injection
+        ALLOWED_COLUMNS = {
+            'symbol', 'name', 'isin', 'investment_type', 'currency',
+            'current_price', 'notes', 'is_active'
+        }
+        update_data = {k: v for k, v in update_data.items() if k in ALLOWED_COLUMNS}
         if not update_data:
             return False
-        
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
         set_clause = ", ".join([f"{key} = ?" for key in update_data.keys()])
         values = list(update_data.values()) + [security_id]
-        
+
         cursor.execute(f"UPDATE securities SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
-        
+
         success = cursor.rowcount > 0
         conn.commit()
         conn.close()
-        
+
         if success:
             logger.info(f"Updated security {security_id}")
         return success
@@ -4644,22 +4797,31 @@ class FinanceDatabase:
         return security_id
 
     def update_security(self, security_id: int, update_data: Dict[str, Any]) -> bool:
-        """Update security information."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
+        """Update security information.
+
+        NOTE: This method appears to be duplicated in the codebase - consider removing duplicate.
+        """
+        # Whitelist allowed columns to prevent SQL injection
+        ALLOWED_COLUMNS = {
+            'symbol', 'name', 'isin', 'investment_type', 'currency',
+            'current_price', 'notes', 'is_active'
+        }
+        update_data = {k: v for k, v in update_data.items() if k in ALLOWED_COLUMNS}
         if not update_data:
             return False
-        
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
         set_clause = ", ".join([f"{key} = ?" for key in update_data.keys()])
         values = list(update_data.values()) + [security_id]
-        
+
         cursor.execute(f"UPDATE securities SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
-        
+
         success = cursor.rowcount > 0
         conn.commit()
         conn.close()
-        
+
         if success:
             logger.info(f"Updated security {security_id}")
         return success

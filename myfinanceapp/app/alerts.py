@@ -8,6 +8,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Dict, List, Optional
 import json
+import os
 from pathlib import Path
 
 
@@ -17,6 +18,7 @@ class AlertManager:
     def __init__(self, config_path: str = "data/alerts_config.json"):
         self.config_path = Path(config_path)
         self.config = self._load_config()
+        self._session_password = None  # Temporary storage for password during session
 
     def _load_config(self) -> Dict:
         """Load alert configuration."""
@@ -29,7 +31,6 @@ class AlertManager:
                 'smtp_server': '',
                 'smtp_port': 587,
                 'username': '',
-                'password': '',
                 'from_email': '',
                 'to_email': ''
             },
@@ -49,16 +50,22 @@ class AlertManager:
     def update_email_settings(self, smtp_server: str, smtp_port: int,
                                username: str, password: str,
                                from_email: str, to_email: str):
-        """Update email notification settings."""
+        """Update email notification settings.
+
+        Note: Password parameter is accepted for test email functionality
+        but is NOT persisted to config. Use SMTP_PASSWORD env var instead.
+        """
         self.config['email'].update({
             'enabled': True,
             'smtp_server': smtp_server,
             'smtp_port': smtp_port,
             'username': username,
-            'password': password,
             'from_email': from_email,
             'to_email': to_email
         })
+        # Store password temporarily for current session (e.g., test emails)
+        # but don't save to config file
+        self._session_password = password
         self.save_config()
 
     def update_thresholds(self, daily_spending: float = 0,
@@ -73,11 +80,23 @@ class AlertManager:
         self.save_config()
 
     def send_email(self, subject: str, body: str) -> bool:
-        """Send email notification."""
+        """Send email notification.
+
+        Uses SMTP_PASSWORD environment variable for authentication.
+        Falls back to session password if set (for test emails).
+        """
         if not self.config['email']['enabled']:
             return False
 
         try:
+            # Get password from env var or session (for test emails)
+            password = os.getenv("SMTP_PASSWORD", "")
+            if not password and hasattr(self, '_session_password'):
+                password = self._session_password
+
+            if not password:
+                raise ValueError("SMTP password not configured. Set SMTP_PASSWORD environment variable.")
+
             msg = MIMEMultipart()
             msg['From'] = self.config['email']['from_email']
             msg['To'] = self.config['email']['to_email']
@@ -92,7 +111,7 @@ class AlertManager:
             server.starttls()
             server.login(
                 self.config['email']['username'],
-                self.config['email']['password']
+                password
             )
             server.send_message(msg)
             server.quit()

@@ -106,14 +106,14 @@ class WebDAVAdapter(CloudStorageAdapter):
     def list_files(self, prefix: str = "") -> List[str]:
         try:
             return self.client.list(prefix)
-        except:
+        except Exception:
             return []
 
     def delete(self, remote_path: str) -> bool:
         try:
             self.client.clean(remote_path)
             return True
-        except:
+        except Exception:
             return False
 
 
@@ -150,12 +150,14 @@ class CloudBackupManager:
         success = self.adapter.upload(str(local_path), remote_path)
 
         if success:
+            from datetime import datetime
+            now = datetime.now().isoformat()
             self.config['synced_backups'].append({
                 'local': str(local_path),
                 'remote': remote_path,
-                'synced_at': str(Path().resolve())
+                'synced_at': now
             })
-            self.config['last_sync'] = str(Path().resolve())
+            self.config['last_sync'] = now
             self._save_config()
 
         return success

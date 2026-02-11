@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -170,39 +170,28 @@ export default function TransactionsPage() {
     setCurrentPage(1);
   }, [debouncedFilters, pageSize]);
 
-  const { data: transactionsData, isLoading: transactionsLoading } = useQuery({
-    queryKey: ['transactions', debouncedFilters],
+  const { data: transactionsResponse, isLoading: transactionsLoading } = useQuery({
+    queryKey: ['transactions', debouncedFilters, currentPage, pageSize],
     queryFn: async () => {
-      const params: any = { limit: 1000 };
+      const params: any = { limit: pageSize, offset: (currentPage - 1) * pageSize };
       if (debouncedFilters.start_date) params.start_date = debouncedFilters.start_date;
       if (debouncedFilters.end_date) params.end_date = debouncedFilters.end_date;
       if (debouncedFilters.account_id) params.account_id = debouncedFilters.account_id;
       if (debouncedFilters.owner_id) params.owner_id = debouncedFilters.owner_id;
       if (debouncedFilters.category_id) params.type_id = debouncedFilters.category_id;
+      if (debouncedFilters.recipient) params.recipient = debouncedFilters.recipient;
+      if (debouncedFilters.tags) params.tags = debouncedFilters.tags;
 
       const response = await transactionsAPI.getAll(params);
-      let transactions = response.data.transactions;
+      const transactions = response.data.transactions;
+      const total = response.data.total ?? response.data.count ?? transactions.length;
 
-      // Client-side filtering for recipient
-      if (debouncedFilters.recipient) {
-        const searchLower = debouncedFilters.recipient.toLowerCase();
-        transactions = transactions.filter((t: any) =>
-          (t.description?.toLowerCase().includes(searchLower)) ||
-          (t.destinataire?.toLowerCase().includes(searchLower))
-        );
-      }
-
-      // Client-side filtering for tags
-      if (debouncedFilters.tags) {
-        const tagLower = debouncedFilters.tags.toLowerCase();
-        transactions = transactions.filter((t: any) =>
-          t.tags?.toLowerCase().includes(tagLower)
-        );
-      }
-
-      return transactions;
+      return { transactions, total };
     },
+    placeholderData: (prev) => prev,
   });
+
+  const transactionsData = transactionsResponse?.transactions;
 
   const { data: accountsData } = useQuery({
     queryKey: ['accounts'],
@@ -210,6 +199,7 @@ export default function TransactionsPage() {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: ownersData } = useQuery({
@@ -218,6 +208,7 @@ export default function TransactionsPage() {
       const response = await accountsAPI.getOwners();
       return response.data.owners;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: categoriesData } = useQuery({
@@ -226,6 +217,7 @@ export default function TransactionsPage() {
       const response = await categoriesAPI.getHierarchy();
       return response.data.categories;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: tagsData } = useQuery({
@@ -234,6 +226,7 @@ export default function TransactionsPage() {
       const response = await transactionsAPI.getAllTags();
       return response.data.tags;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const { data: recipientsData } = useQuery({
@@ -242,6 +235,7 @@ export default function TransactionsPage() {
       const response = await transactionsAPI.getAllRecipients();
       return response.data.recipients;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   const createMutation = useMutation({
@@ -598,18 +592,18 @@ export default function TransactionsPage() {
   };
 
   // Calculate summary statistics using precise decimal arithmetic
-  const incomeTransactions = (transactionsData || []).filter((t: any) => t.amount > 0 && t.category !== 'transfer');
-  const expenseTransactions = (transactionsData || []).filter((t: any) => t.amount < 0 && t.category !== 'transfer');
-  const totalIncome = sumMoney(incomeTransactions, (t: any) => t.amount);
-  const totalExpenses = absMoney(sumMoney(expenseTransactions, (t: any) => t.amount));
-  const netChange = subtractMoney(totalIncome, totalExpenses);
+  const { totalIncome, totalExpenses, netChange } = useMemo(() => {
+    const income = (transactionsData || []).filter((t: any) => t.amount > 0 && t.category !== 'transfer');
+    const expense = (transactionsData || []).filter((t: any) => t.amount < 0 && t.category !== 'transfer');
+    const inc = sumMoney(income, (t: any) => t.amount);
+    const exp = absMoney(sumMoney(expense, (t: any) => t.amount));
+    return { totalIncome: inc, totalExpenses: exp, netChange: subtractMoney(inc, exp) };
+  }, [transactionsData]);
 
-  // Pagination logic
-  const totalTransactions = transactionsData?.length || 0;
+  // Pagination logic — server-side, total from API
+  const totalTransactions = transactionsResponse?.total || 0;
   const totalPages = Math.ceil(totalTransactions / pageSize);
-  const startIndex = (currentPage - 1) * pageSize;
-  const endIndex = startIndex + pageSize;
-  const paginatedTransactions = transactionsData?.slice(startIndex, endIndex) || [];
+  const paginatedTransactions = transactionsData || [];
 
   const toggleExpandRow = (id: number) => {
     setExpandedRow(expandedRow === id ? null : id);
@@ -630,7 +624,7 @@ export default function TransactionsPage() {
       </div>
 
       {/* Summary KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6">
         <KPICard
           title="Total Transactions"
           value={totalTransactions.toString()}
@@ -840,7 +834,7 @@ export default function TransactionsPage() {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-foreground-muted">
-            {startIndex + 1}-{Math.min(endIndex, totalTransactions)} of {totalTransactions}
+            {(currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, totalTransactions)} of {totalTransactions}
           </span>
           <Button
             variant="outline"

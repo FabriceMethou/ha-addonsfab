@@ -53,13 +53,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         if (decoded.exp > currentTime) {
           setUser(JSON.parse(storedUser));
         } else {
-          // Token expired
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('user');
+          // Access token expired — the interceptor will handle refresh on next API call
+          // but if there's no refresh token either, clean up
+          const refreshToken = localStorage.getItem('refresh_token');
+          if (!refreshToken) {
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('user');
+          } else {
+            // Keep user logged in — interceptor will refresh on first API call
+            setUser(JSON.parse(storedUser));
+          }
         }
       } catch (error) {
         console.error('Invalid token:', error);
         localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
         localStorage.removeItem('user');
       }
     }
@@ -79,8 +87,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return;
       }
 
-      // Store token and user
+      // Store tokens and user
       localStorage.setItem('access_token', data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem('refresh_token', data.refresh_token);
+      }
       localStorage.setItem('user', JSON.stringify(data.user));
       setUser(data.user);
     } catch (error: any) {
@@ -97,8 +108,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const response = await authAPI.verifyMFA(mfaPending.tempToken, code);
       const data: AuthToken = response.data;
 
-      // Store token and user
+      // Store tokens and user
       localStorage.setItem('access_token', data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem('refresh_token', data.refresh_token);
+      }
       localStorage.setItem('user', JSON.stringify(data.user));
       setUser(data.user);
       setMfaPending(null);
@@ -113,6 +127,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const logout = () => {
     localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
     localStorage.removeItem('user');
     setUser(null);
     setMfaPending(null);

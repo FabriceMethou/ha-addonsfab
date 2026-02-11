@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns';
 import { accountsAPI, transactionsAPI, reportsAPI, budgetsAPI, envelopesAPI, settingsAPI } from '../services/api';
 import { Card, Badge, Progress, Spinner, Button, DashboardSkeleton } from '../components/shadcn';
 import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 import { absMoney, subtractMoney, percentChange } from '../lib/money';
+import { useIsMobile } from '../hooks/useBreakpoint';
 import {
   TrendingUp,
   TrendingDown,
@@ -107,6 +109,7 @@ function AccountBalanceItem({ name, balance, currency }: AccountBalanceItemProps
 }
 
 export default function DashboardPage() {
+  const isMobile = useIsMobile();
   // Current date calculations
   const now = new Date();
   const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
@@ -178,6 +181,7 @@ export default function DashboardPage() {
       const response = await accountsAPI.getAll();
       return response.data.accounts || [];
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Fetch spending by category
@@ -251,12 +255,58 @@ export default function DashboardPage() {
   // Helper function to safely calculate percentage change using precise decimal arithmetic
   const calculatePercentageChange = (current: number, previous: number): number => {
     if (previous === 0) {
-      // If previous is 0 and current is positive, that's technically infinite growth
-      // Return 0 to avoid NaN/Infinity in UI
       return current > 0 ? 100 : 0;
     }
     return percentChange(current, previous);
   };
+
+  // Memoize chart data (must be before early returns to satisfy Rules of Hooks)
+  const incomeExpenseChartData = useMemo(() =>
+    spendingTrends?.map((item: any) => ({
+      month: item.month,
+      income: item.total_income ?? 0,
+      expenses: absMoney(item.total_expenses ?? 0),
+    })) ?? [],
+    [spendingTrends]
+  );
+
+  const sunburstData = useMemo(() => ({
+    name: 'Expenses',
+    children: spendingByCategory?.slice(0, 8).map((cat: any) => ({
+      name: cat.category || 'Other',
+      value: absMoney(cat.total ?? 0),
+    })) ?? [],
+  }), [spendingByCategory]);
+
+  const nivoPieData = useMemo(() =>
+    incomeByCategory?.map((item: any) => ({
+      id: item.category || 'Other',
+      label: item.category || 'Other',
+      value: item.total ?? 0,
+    })) ?? [],
+    [incomeByCategory]
+  );
+
+  const budgetArray = useMemo(() =>
+    Array.isArray(budgetsVsActual) ? budgetsVsActual : [],
+    [budgetsVsActual]
+  );
+
+  const budgetChartData = useMemo(() =>
+    budgetArray.slice(0, 10).map((budget: any) => {
+      const progress = budget.budget_amount > 0 ? (budget.spent / budget.budget_amount) * 100 : 0;
+      return {
+        name: budget.category_name?.length > 15 ? budget.category_name.substring(0, 15) + '...' : (budget.category_name || 'Unknown'),
+        fullName: budget.category_name || 'Unknown',
+        progress: Math.min(progress, 100),
+        overProgress: progress > 100 ? progress - 100 : 0,
+        spent: budget.spent || 0,
+        budget: budget.budget_amount || 0,
+        isOverBudget: progress > 100,
+      };
+    }),
+    [budgetArray]
+  );
 
   // Loading state
   if (transactionsLoading || netWorthLoading) {
@@ -300,31 +350,6 @@ export default function DashboardPage() {
   const expensesChange = calculatePercentageChange(monthlyExpenses, previousExpenses);
   const savingsChange = calculatePercentageChange(monthlySavings, previousSavings);
 
-  // Prepare chart data using precise decimal arithmetic
-  const incomeExpenseChartData = spendingTrends?.map((item: any) => ({
-    month: item.month,
-    income: item.total_income ?? 0,
-    expenses: absMoney(item.total_expenses ?? 0),
-  })) ?? [];
-
-  // Prepare sunburst data
-  const sunburstData = {
-    name: 'Expenses',
-    children: spendingByCategory?.slice(0, 8).map((cat: any) => ({
-      name: cat.category || 'Other',
-      value: absMoney(cat.total ?? 0),
-    })) ?? [],
-  };
-
-  // Prepare Nivo pie data for income
-  const nivoPieData = incomeByCategory?.map((item: any) => ({
-    id: item.category || 'Other',
-    label: item.category || 'Other',
-    value: item.total ?? 0,
-  })) ?? [];
-
-  // Budget data
-  const budgetArray = Array.isArray(budgetsVsActual) ? budgetsVsActual : [];
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -336,7 +361,7 @@ export default function DashboardPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6">
         <KPICard
           title="Net Worth"
           value={formatCurrency(netWorth)}
@@ -418,9 +443,9 @@ export default function DashboardPage() {
       </Card>
 
       {/* Income vs Expenses Chart + Account Balances */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Income vs Expenses Trend */}
-        <Card className="lg:col-span-2 p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <Card className="xl:col-span-2 p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="mb-6">
             <h2 className="text-lg font-semibold text-foreground">Income vs Expenses</h2>
             <p className="text-sm text-foreground-muted">Last 6 months trend</p>
@@ -531,20 +556,9 @@ export default function DashboardPage() {
           <div className="h-[400px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
-                data={budgetArray.slice(0, 10).map((budget: any) => {
-                  const progress = budget.budget_amount > 0 ? (budget.spent / budget.budget_amount) * 100 : 0;
-                  return {
-                    name: budget.category_name?.length > 15 ? budget.category_name.substring(0, 15) + '...' : (budget.category_name || 'Unknown'),
-                    fullName: budget.category_name || 'Unknown',
-                    progress: Math.min(progress, 100),
-                    overProgress: progress > 100 ? progress - 100 : 0,
-                    spent: budget.spent || 0,
-                    budget: budget.budget_amount || 0,
-                    isOverBudget: progress > 100,
-                  };
-                })}
+                data={budgetChartData}
                 layout="vertical"
-                margin={{ left: 130, right: 40, top: 10, bottom: 10 }}
+                margin={{ left: isMobile ? 80 : 130, right: isMobile ? 10 : 40, top: 10, bottom: 10 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} horizontal={true} vertical={false} />
                 <XAxis
@@ -657,7 +671,7 @@ export default function DashboardPage() {
           <div className="h-[400px]">
             <ResponsivePie
               data={nivoPieData}
-              margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
+              margin={{ top: 20, right: isMobile ? 20 : 80, bottom: 20, left: isMobile ? 20 : 80 }}
               innerRadius={0.5}
               padAngle={0.7}
               cornerRadius={3}

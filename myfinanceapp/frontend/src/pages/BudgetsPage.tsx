@@ -16,6 +16,8 @@ import {
   Wallet,
   CheckCircle2,
   DollarSign,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   Button,
@@ -47,12 +49,15 @@ import { budgetsAPI, categoriesAPI, currenciesAPI } from '../services/api';
 import { format } from 'date-fns';
 import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 import { sumMoney, absMoney } from '../lib/money';
+import { useIsMobile } from '../hooks/useBreakpoint';
 
 export default function BudgetsPage() {
   const toast = useToast();
+  const isMobile = useIsMobile();
   const [openDialog, setOpenDialog] = useState(false);
   const [editingBudget, setEditingBudget] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
+  const [expandedBudget, setExpandedBudget] = useState<number | null>(null);
   const [currentYear] = useState(new Date().getFullYear());
   const [currentMonth] = useState(new Date().getMonth() + 1);
 
@@ -96,6 +101,7 @@ export default function BudgetsPage() {
       const response = await categoriesAPI.getHierarchy();
       return response.data.categories;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Fetch currencies for dropdown
@@ -105,6 +111,7 @@ export default function BudgetsPage() {
       const response = await currenciesAPI.getAll();
       return response.data.currencies;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Fetch budget vs actual for current month
@@ -375,64 +382,154 @@ export default function BudgetsPage() {
       <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <h2 className="text-lg font-semibold text-foreground mb-4">All Budgets</h2>
         {budgetsData && budgetsData.length > 0 ? (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Currency</TableHead>
-                  <TableHead>Period</TableHead>
-                  <TableHead>Start Date</TableHead>
-                  <TableHead>End Date</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {budgetsData.map((budget: any) => (
-                  <TableRow key={budget.id}>
-                    <TableCell className="font-medium">{budget.type_name || 'Unknown Category'}</TableCell>
-                    <TableCell>{formatCurrency(budget.amount, budget.currency)}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{budget.currency || 'EUR'}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={budget.period === 'monthly' ? 'default' : 'secondary'}>
-                        {budget.period === 'monthly' ? 'Monthly' : 'Yearly'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {budget.start_date ? format(new Date(budget.start_date), 'MMM dd, yyyy') : '-'}
-                    </TableCell>
-                    <TableCell>
-                      {budget.end_date ? format(new Date(budget.end_date), 'MMM dd, yyyy') : 'Ongoing'}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={budget.is_active ? 'success' : 'secondary'}>
-                        {budget.is_active ? 'Active' : 'Inactive'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="sm" onClick={() => handleEdit(budget)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setDeleteConfirm(budget)}
-                          className="text-error hover:text-error"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+          isMobile ? (
+            <div className="space-y-3">
+              {budgetsData.map((budget: any) => {
+                const isExpanded = expandedBudget === budget.id;
+                return (
+                  <Card
+                    key={budget.id}
+                    className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${
+                      isExpanded ? 'ring-2 ring-primary/50' : ''
+                    }`}
+                  >
+                    <div
+                      className="p-4 cursor-pointer hover:bg-surface-hover transition-colors"
+                      onClick={() => setExpandedBudget(isExpanded ? null : budget.id)}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-foreground truncate">
+                            {budget.type_name || 'Unknown Category'}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant={budget.period === 'monthly' ? 'default' : 'secondary'} className="text-xs">
+                              {budget.period === 'monthly' ? 'Monthly' : 'Yearly'}
+                            </Badge>
+                            <Badge variant="outline" className="text-xs">
+                              {budget.currency || 'EUR'}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-right">
+                            <div className="font-bold text-foreground">
+                              {formatCurrency(budget.amount, budget.currency)}
+                            </div>
+                          </div>
+                          {isExpanded ? (
+                            <ChevronUp className="h-5 w-5 text-foreground-muted flex-shrink-0" />
+                          ) : (
+                            <ChevronDown className="h-5 w-5 text-foreground-muted flex-shrink-0" />
+                          )}
+                        </div>
                       </div>
-                    </TableCell>
+                    </div>
+                    {isExpanded && (
+                      <div className="border-t border-border px-4 py-3">
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          <div>
+                            <div className="text-xs text-foreground-muted mb-1">Start Date</div>
+                            <div className="text-sm text-foreground">
+                              {budget.start_date ? format(new Date(budget.start_date), 'MMM dd, yyyy') : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-foreground-muted mb-1">End Date</div>
+                            <div className="text-sm text-foreground">
+                              {budget.end_date ? format(new Date(budget.end_date), 'MMM dd, yyyy') : 'Ongoing'}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-foreground-muted mb-1">Status</div>
+                            <div className="text-sm">
+                              <Badge variant={budget.is_active ? 'success' : 'secondary'}>
+                                {budget.is_active ? 'Active' : 'Inactive'}
+                              </Badge>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-1 pt-2 border-t border-border">
+                          <Button variant="ghost" size="sm" onClick={() => handleEdit(budget)} className="flex-1">
+                            <Pencil className="h-4 w-4 mr-2" />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setDeleteConfirm(budget)}
+                            className="flex-1 text-error hover:text-error"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Currency</TableHead>
+                    <TableHead>Period</TableHead>
+                    <TableHead>Start Date</TableHead>
+                    <TableHead>End Date</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {budgetsData.map((budget: any) => (
+                    <TableRow key={budget.id}>
+                      <TableCell className="font-medium">{budget.type_name || 'Unknown Category'}</TableCell>
+                      <TableCell>{formatCurrency(budget.amount, budget.currency)}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{budget.currency || 'EUR'}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={budget.period === 'monthly' ? 'default' : 'secondary'}>
+                          {budget.period === 'monthly' ? 'Monthly' : 'Yearly'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {budget.start_date ? format(new Date(budget.start_date), 'MMM dd, yyyy') : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {budget.end_date ? format(new Date(budget.end_date), 'MMM dd, yyyy') : 'Ongoing'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={budget.is_active ? 'success' : 'secondary'}>
+                          {budget.is_active ? 'Active' : 'Inactive'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => handleEdit(budget)}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setDeleteConfirm(budget)}
+                            className="text-error hover:text-error"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )
         ) : (
           <div className="flex flex-col items-center justify-center min-h-[200px]">
             <Target className="h-16 w-16 text-foreground-muted mb-4" />
@@ -495,7 +592,7 @@ export default function BudgetsPage() {
                 />
               </FormField>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <FormField label="Budget Amount" error={errors.amount?.message} required>
                   <Input
                     type="number"
@@ -543,7 +640,7 @@ export default function BudgetsPage() {
                 </FormField>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField label="Start Date" error={errors.start_date?.message} required>
                   <Input type="date" {...register('start_date')} />
                 </FormField>

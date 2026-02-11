@@ -9,11 +9,18 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from alerts import AlertManager
 from api.auth import get_current_user, User
+from database import FinanceDatabase
 
 router = APIRouter()
 
 # Initialize AlertManager
 alert_manager = AlertManager()
+
+# Get database instance for alert checks
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
+DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
+db = FinanceDatabase(db_path=DB_PATH)
 
 class EmailSettings(BaseModel):
     smtp_server: str
@@ -123,3 +130,67 @@ async def disable_email_notifications(current_user: User = Depends(get_current_u
     alert_manager.config['email']['enabled'] = False
     alert_manager.save_config()
     return {"message": "Email notifications disabled"}
+
+@router.post("/check")
+async def run_alert_checks(current_user: User = Depends(get_current_user)):
+    """Manually trigger budget and daily spending alert checks."""
+    if not alert_manager.config.get('email', {}).get('enabled', False):
+        raise HTTPException(
+            status_code=400,
+            detail="Email alerts are not enabled. Enable email settings first."
+        )
+
+    try:
+        from datetime import date as date_cls
+        today = date_cls.today()
+
+        # Check budget alerts
+        budget_data = db.get_budget_vs_actual(today.year, today.month)
+        categories = budget_data.get('categories', [])
+
+        # Transform budget data to format expected by check_budget_alerts
+        budgets = []
+        current_spending = {}
+        for cat in categories:
+            budgets.append({
+                'category': cat['type_name'],
+                'limit': cat['budget']
+            })
+            current_spending[cat['type_name']] = cat['actual']
+
+        # Check and collect budget alerts
+        budget_alerts = alert_manager.check_budget_alerts(budgets, current_spending)
+        sent_count = 0
+        for alert in budget_alerts:
+            alert_manager.send_alert_notification(alert)
+            sent_count += 1
+
+        # Check daily spending
+        today_filters = {
+            'start_date': today.isoformat(),
+            'end_date': today.isoformat()
+        }
+        daily_transactions = db.get_transactions(filters=today_filters)
+        daily_total = sum(
+            abs(t['amount'])
+            for t in daily_transactions
+            if t['amount'] < 0 and t.get('category') != 'transfer'
+        )
+
+        daily_alert = alert_manager.check_daily_spending(daily_total)
+        if daily_alert:
+            alert_manager.send_alert_notification(daily_alert)
+            sent_count += 1
+
+        return {
+            "message": f"Alert checks completed. {sent_count} alert(s) sent.",
+            "budget_alerts": len(budget_alerts),
+            "daily_alert": daily_alert is not None,
+            "total_sent": sent_count
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to run alert checks: {str(e)}"
+        )

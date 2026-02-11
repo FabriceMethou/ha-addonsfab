@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.0.18
+
+### Performance
+- Lazy-load all page components with React `Suspense` for faster initial load
+- Add `staleTime` / `gcTime` to React Query client and per-query caches to reduce redundant API calls
+- Add Vite `manualChunks` for vendor code splitting (react, recharts, nivo, radix-ui, forms)
+
+### Security
+- Add JWT refresh token flow with automatic silent renewal and request queuing
+- Reject refresh and MFA-pending tokens used as access tokens
+- Add security headers middleware (CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
+- Disable FastAPI docs/redoc in production by default
+- Whitelist allowed columns in `update_type` / `update_subtype` to prevent SQL injection
+- Prevent directory traversal in backup download endpoint
+- Restrict backup restore and delete to admin users only
+- Remove SMTP password from persisted config; use `SMTP_PASSWORD` env var instead
+- Generate random default admin password instead of hardcoded "admin"; support `ADMIN_DEFAULT_PASSWORD` env var
+- Enforce password strength validation via `validators.py`
+- Remove unused session management code from `auth.py`
+
+### Features
+- Add manual alert check endpoint (`POST /alerts/check`) for budget and daily spending alerts
+- Add server-side transaction pagination (`limit`/`offset` filters and `count_transactions`)
+- Add `BackupPage` as a dedicated page for backup management
+- Add `useBreakpoint` hook for responsive breakpoint detection
+- Add `transaction_id` column to envelope transactions for virtual linking
+
+### Bug Fixes
+- Fix same-currency transfer balance calculation (use `abs(amount)` for destination account)
+- Simplify balance impact calculation — amounts are already signed, remove redundant category branching
+- Fix `datetime.utcnow()` deprecation — use `datetime.now(timezone.utc)`
+
+### UI/UX
+- Mobile-responsive card layout for accounts, debts, investments, recurring, reconcile, and reports pages
+- Collapsible account cards on mobile with expand/collapse chevron
+- Improved responsive grid layouts and tab wrapping across pages
+- Updated dialog and tab component styling
+
 ## 2.0.17
 
 - Adding Reconcilation

@@ -20,6 +20,9 @@ DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
 DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 backup_mgr = BackupManager(db_path=DB_PATH)
 
+from database import FinanceDatabase
+db = FinanceDatabase(db_path=DB_PATH)
+
 class BackupCreate(BaseModel):
     backup_type: str = "manual"
     description: str = "Manual backup"
@@ -40,7 +43,9 @@ async def create_backup(backup: BackupCreate, current_user: User = Depends(get_c
 
 @router.post("/{backup_id}/restore")
 async def restore_backup(backup_id: str, current_user: User = Depends(get_current_user)):
-    """Restore from backup"""
+    """Restore from backup (admin only)"""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can restore backups")
     # Convert backup_id to int
     try:
         backup_id_int = int(backup_id)
@@ -61,7 +66,9 @@ async def restore_backup(backup_id: str, current_user: User = Depends(get_curren
 
 @router.delete("/{backup_id}")
 async def delete_backup(backup_id: str, current_user: User = Depends(get_current_user)):
-    """Delete backup"""
+    """Delete backup (admin only)"""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can delete backups")
     # Convert backup_id to int
     try:
         backup_id_int = int(backup_id)
@@ -92,6 +99,12 @@ async def download_backup(backup_id: str, current_user: User = Depends(get_curre
         raise HTTPException(status_code=404, detail=f"Backup ID {backup_id} not found")
 
     backup_file = Path(backup['path'])
+
+    # Prevent directory traversal attacks
+    backup_dir = Path(backup_mgr.backup_dir).resolve()
+    if not backup_file.resolve().is_relative_to(backup_dir):
+        raise HTTPException(status_code=400, detail="Invalid backup path")
+
     if not backup_file.exists():
         raise HTTPException(status_code=404, detail="Backup file not found on disk")
 
@@ -107,7 +120,9 @@ async def upload_backup(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user)
 ):
-    """Upload and import a backup file"""
+    """Upload and import a backup file (admin only)"""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can upload backups")
     # Validate file extension
     if not (file.filename.endswith('.db') or file.filename.endswith('.db.gz')):
         raise HTTPException(
@@ -174,3 +189,140 @@ async def cleanup_old_backups(current_user: User = Depends(get_current_user)):
         "message": "Cleanup completed",
         "statistics": backup_mgr.get_backup_statistics()
     }
+
+# Cloud Backup Endpoints
+
+class CloudConfig(BaseModel):
+    webdav_url: str
+    username: str = ""
+    remote_path: str = "/backups/"
+    enabled: bool = True
+
+@router.get("/cloud/config")
+async def get_cloud_config(current_user: User = Depends(get_current_user)):
+    """Get WebDAV cloud backup configuration"""
+    config = {
+        'webdav_url': db.get_preference('cloud_webdav_url', ''),
+        'username': db.get_preference('cloud_webdav_username', ''),
+        'remote_path': db.get_preference('cloud_webdav_path', '/backups/'),
+        'enabled': db.get_preference('cloud_enabled', 'false') == 'true',
+    }
+
+    return config
+
+@router.put("/cloud/config")
+async def update_cloud_config(config: CloudConfig, current_user: User = Depends(get_current_user)):
+    """Save WebDAV config (url, username, path). Password via WEBDAV_PASSWORD env var"""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can manage cloud backups")
+
+    db.set_preference('cloud_webdav_url', config.webdav_url)
+    db.set_preference('cloud_webdav_username', config.username)
+    db.set_preference('cloud_webdav_path', config.remote_path)
+    db.set_preference('cloud_enabled', 'true' if config.enabled else 'false')
+
+    return {
+        "message": "Cloud backup configuration updated",
+        "config": {
+            'webdav_url': config.webdav_url,
+            'username': config.username,
+            'remote_path': config.remote_path,
+            'enabled': config.enabled,
+        }
+    }
+
+@router.get("/cloud/backups")
+async def list_cloud_backups(current_user: User = Depends(get_current_user)):
+    """List remote backups on WebDAV server"""
+    from cloud_backup import WebDAVAdapter, CloudBackupManager
+
+    # Get cloud config
+    webdav_url = db.get_preference('cloud_webdav_url', '')
+    username = db.get_preference('cloud_webdav_username', '')
+    remote_path = db.get_preference('cloud_webdav_path', '/backups/')
+    enabled = db.get_preference('cloud_enabled', 'false') == 'true'
+    password = os.getenv('WEBDAV_PASSWORD', '')
+
+    if not enabled or not webdav_url:
+        raise HTTPException(status_code=400, detail="Cloud backup not configured or not enabled")
+
+    if not password:
+        raise HTTPException(status_code=400, detail="WEBDAV_PASSWORD environment variable not set")
+
+    try:
+        adapter = WebDAVAdapter(webdav_url, username, password, remote_path)
+        cloud_manager = CloudBackupManager(adapter)
+        backups = cloud_manager.list_cloud_backups()
+
+        return {
+            "backups": backups,
+            "remote_path": remote_path
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="WebDAV client not installed. Install with: pip install webdavclient3"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list cloud backups: {str(e)}")
+
+@router.post("/cloud/{backup_id}/sync")
+async def sync_backup_to_cloud(backup_id: str, current_user: User = Depends(get_current_user)):
+    """Upload a local backup to the cloud WebDAV server"""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can manage cloud backups")
+
+    from cloud_backup import WebDAVAdapter, CloudBackupManager
+
+    # Convert backup_id to int
+    try:
+        backup_id_int = int(backup_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid backup ID")
+
+    # Find backup
+    backup = next(
+        (b for b in backup_mgr.metadata['backups'] if b['id'] == backup_id_int),
+        None
+    )
+
+    if not backup:
+        raise HTTPException(status_code=404, detail=f"Backup ID {backup_id} not found")
+
+    backup_file = Path(backup['path'])
+    if not backup_file.exists():
+        raise HTTPException(status_code=404, detail="Backup file not found on disk")
+
+    # Get cloud config
+    webdav_url = db.get_preference('cloud_webdav_url', '')
+    username = db.get_preference('cloud_webdav_username', '')
+    remote_path = db.get_preference('cloud_webdav_path', '/backups/')
+    enabled = db.get_preference('cloud_enabled', 'false') == 'true'
+    password = os.getenv('WEBDAV_PASSWORD', '')
+
+    if not enabled or not webdav_url:
+        raise HTTPException(status_code=400, detail="Cloud backup not configured or not enabled")
+
+    if not password:
+        raise HTTPException(status_code=400, detail="WEBDAV_PASSWORD environment variable not set")
+
+    try:
+        adapter = WebDAVAdapter(webdav_url, username, password, remote_path)
+        cloud_manager = CloudBackupManager(adapter)
+        success = cloud_manager.sync_backup(str(backup_file))
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to upload backup to cloud")
+
+        return {
+            "message": "Backup synced to cloud successfully",
+            "backup_id": backup_id,
+            "filename": backup_file.name
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="WebDAV client not installed. Install with: pip install webdavclient3"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to sync backup to cloud: {str(e)}")

@@ -45,6 +45,7 @@ class EnvelopeTransaction(BaseModel):
     description: str
     date: Optional[str] = None
     account_id: Optional[int] = None
+    transaction_id: Optional[int] = None
 
 @router.get("/")
 async def get_envelopes(
@@ -111,23 +112,39 @@ async def delete_envelope(
 
 @router.post("/transactions")
 async def add_envelope_transaction(transaction: EnvelopeTransaction, current_user: User = Depends(get_current_user)):
-    """Add transaction to envelope"""
+    """Add transaction to envelope with optional link to existing transaction"""
+    # Check for over-allocation
+    envelope = db.get_envelope(transaction.envelope_id)
+    if not envelope:
+        raise HTTPException(status_code=404, detail="Envelope not found")
+
+    warning = None
+    if transaction.amount > 0:
+        new_total = (envelope.get('current_amount', 0) or 0) + transaction.amount
+        target = envelope.get('target_amount', 0) or 0
+        if target > 0 and new_total > target:
+            warning = f"This allocation exceeds the target by {new_total - target:.2f}"
+
     transaction_data = {
         'envelope_id': transaction.envelope_id,
         'transaction_date': transaction.date,  # API uses 'date', DB uses 'transaction_date'
         'amount': transaction.amount,
         'account_id': transaction.account_id,
-        'description': transaction.description
+        'description': transaction.description,
+        'transaction_id': transaction.transaction_id
     }
     trans_id = db.add_envelope_transaction(transaction_data)
-    return {"message": "Transaction added", "transaction_id": trans_id}
+    result = {"message": "Transaction added", "transaction_id": trans_id}
+    if warning:
+        result["warning"] = warning
+    return result
 
 @router.get("/{envelope_id}/transactions")
 async def get_envelope_transactions(envelope_id: int, current_user: User = Depends(get_current_user)):
-    """Get transactions for specific envelope"""
+    """Get transactions for specific envelope with linked transaction details"""
     transactions = db.get_envelope_transactions(envelope_id)
 
-    # Map transaction_date to date for frontend consistency
+    # Map transaction_date to date for frontend consistency and include linked transaction details
     mapped_transactions = []
     for trans in transactions:
         mapped_trans = {
@@ -138,7 +155,13 @@ async def get_envelope_transactions(envelope_id: int, current_user: User = Depen
             'description': trans.get('description'),
             'account_id': trans.get('account_id'),
             'account_name': trans.get('account_name'),
-            'created_at': trans.get('created_at')
+            'created_at': trans.get('created_at'),
+            'transaction_id': trans.get('transaction_id'),
+            'linked_transaction': {
+                'date': trans.get('linked_transaction_date'),
+                'description': trans.get('linked_transaction_description'),
+                'amount': trans.get('linked_transaction_amount')
+            } if trans.get('transaction_id') else None
         }
         mapped_transactions.append(mapped_trans)
 
