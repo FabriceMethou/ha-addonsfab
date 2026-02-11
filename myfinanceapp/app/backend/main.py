@@ -114,11 +114,21 @@ def health_check():
 @app.on_event("startup")
 async def startup_event():
     """Run on application startup"""
-    # Check for auto backup
+    import asyncio
+
+    # Run auto backup in a background thread so it doesn't block the event loop.
+    # gzip at compresslevel=9 on a large DB can take minutes on ARM devices, which
+    # would prevent uvicorn from serving any requests and cause proxy timeouts.
     if backup_mgr.should_auto_backup():
-        backup_result = backup_mgr.create_backup('auto', 'Daily automatic backup')
-        if backup_result:
-            logger.info("Auto backup created: %s", backup_result["filename"])
+        def _do_backup():
+            try:
+                result = backup_mgr.create_backup('auto', 'Daily automatic backup')
+                if result:
+                    logger.info("Auto backup created: %s", result["filename"])
+            except Exception as e:
+                logger.warning("Auto backup failed: %s", e)
+
+        asyncio.get_event_loop().run_in_executor(None, _do_backup)
 
 @app.on_event("shutdown")
 async def shutdown_event():
