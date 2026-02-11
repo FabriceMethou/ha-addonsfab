@@ -51,7 +51,19 @@ class BackupManager:
             json.dump(self.metadata, f, indent=2, default=str)
 
     def _init_cloud(self):
-        """Initialize cloud backup manager if configured."""
+        """Lazy-initialize cloud backup manager on first use.
+
+        Avoid heavy imports and network connections during startup — they block
+        the event loop and can cause proxy timeouts on low-powered HA devices.
+        """
+        # Defer actual initialization to _get_cloud_manager()
+        self.cloud_manager = None
+
+    def _get_cloud_manager(self):
+        """Return the cloud backup manager, initializing on first call."""
+        if self.cloud_manager is not None:
+            return self.cloud_manager
+
         try:
             from database import FinanceDatabase
             from cloud_backup import WebDAVAdapter, CloudBackupManager
@@ -76,6 +88,8 @@ class BackupManager:
         except Exception as e:
             logger.warning(f"Failed to initialize cloud backup: {e}")
             self.cloud_manager = None
+
+        return self.cloud_manager
 
     def _calculate_checksum(self, file_path: Path) -> str:
         """Calculate SHA256 checksum of file."""
@@ -124,7 +138,7 @@ class BackupManager:
             backup_file = self.backup_dir / f"{backup_name}.db.gz"
             # Compress backup
             with open(self.db_path, 'rb') as f_in:
-                with gzip.open(backup_file, 'wb', compresslevel=9) as f_out:
+                with gzip.open(backup_file, 'wb', compresslevel=1) as f_out:
                     shutil.copyfileobj(f_in, f_out)
         else:
             backup_file = self.backup_dir / f"{backup_name}.db"
@@ -159,7 +173,7 @@ class BackupManager:
         self._save_metadata()
         self._cleanup_old_backups()
 
-        if auto_sync and hasattr(self, 'cloud_manager') and self.cloud_manager:
+        if auto_sync and self._get_cloud_manager():
             try:
                 self.cloud_manager.sync_backup(str(backup_file))
             except Exception as e:
