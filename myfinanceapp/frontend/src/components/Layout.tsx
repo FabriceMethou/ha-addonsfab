@@ -55,17 +55,25 @@ export default function Layout() {
     return saved === 'true';
   });
   const [isMobile, setIsMobile] = useState(false);
+  const [isSmallLaptop, setIsSmallLaptop] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
 
   useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
+    const checkScreenSize = () => {
+      const width = window.innerWidth;
+      setIsMobile(width < 768);
+      const smallLaptop = width >= 768 && width < 1280;
+      setIsSmallLaptop(smallLaptop);
+      // Auto-collapse sidebar on small laptops unless user explicitly expanded
+      if (smallLaptop && !localStorage.getItem('sidebarManualExpand')) {
+        setSidebarCollapsed(true);
+      }
     };
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
+    checkScreenSize();
+    window.addEventListener('resize', checkScreenSize);
+    return () => window.removeEventListener('resize', checkScreenSize);
   }, []);
 
   useEffect(() => {
@@ -77,7 +85,16 @@ export default function Layout() {
   };
 
   const handleSidebarCollapse = () => {
-    setSidebarCollapsed(!sidebarCollapsed);
+    const newState = !sidebarCollapsed;
+    setSidebarCollapsed(newState);
+    // Track if user manually expanded on a small laptop
+    if (isSmallLaptop) {
+      if (!newState) {
+        localStorage.setItem('sidebarManualExpand', 'true');
+      } else {
+        localStorage.removeItem('sidebarManualExpand');
+      }
+    }
   };
 
   const handleNavigation = (path: string) => {

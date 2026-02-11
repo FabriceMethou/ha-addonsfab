@@ -50,7 +50,7 @@ import {
   FormField,
   EnvelopesSkeleton,
 } from '../components/shadcn';
-import { envelopesAPI, accountsAPI } from '../services/api';
+import { envelopesAPI, accountsAPI, transactionsAPI } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
 import { format, parseISO, isPast, differenceInDays } from 'date-fns';
 import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
@@ -71,6 +71,7 @@ export default function EnvelopesPage() {
     description: '',
     transaction_date: format(new Date(), 'yyyy-MM-dd'),
     account_id: '',
+    transaction_id: '',
   });
 
   // Envelope form with validation
@@ -115,6 +116,18 @@ export default function EnvelopesPage() {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
     },
+    staleTime: 30 * 60 * 1000,
+  });
+
+  // Fetch recent transactions for linking
+  const { data: recentTransactionsData } = useQuery({
+    queryKey: ['recent-transactions'],
+    queryFn: async () => {
+      const response = await transactionsAPI.getAll({ limit: 100, confirmed: 1 });
+      return response.data.transactions;
+    },
+    enabled: openTransactionDialog,
+    staleTime: 5 * 60 * 1000,
   });
 
   // Create envelope mutation
@@ -201,7 +214,7 @@ export default function EnvelopesPage() {
       queryClient.invalidateQueries({ queryKey: ['envelopes'] });
       queryClient.invalidateQueries({ queryKey: ['envelope-transactions', selectedEnvelope?.id] });
       setOpenTransactionDialog(false);
-      setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '' });
+      setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '', transaction_id: '' });
       toast.success('Transaction added successfully!');
     },
     onError: (error: any) => {
@@ -258,6 +271,11 @@ export default function EnvelopesPage() {
         data.account_id = parseInt(transactionForm.account_id);
       }
 
+      // transaction_id is optional - only include if selected
+      if (transactionForm.transaction_id) {
+        data.transaction_id = parseInt(transactionForm.transaction_id);
+      }
+
       addTransactionMutation.mutate(data);
     }
   };
@@ -265,14 +283,14 @@ export default function EnvelopesPage() {
   const handleOpenAddFunds = (envelope: any) => {
     setSelectedEnvelope(envelope);
     setTransactionType('add');
-    setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '' });
+    setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '', transaction_id: '' });
     setOpenTransactionDialog(true);
   };
 
   const handleOpenWithdraw = (envelope: any) => {
     setSelectedEnvelope(envelope);
     setTransactionType('withdraw');
-    setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '' });
+    setTransactionForm({ amount: '', description: '', transaction_date: format(new Date(), 'yyyy-MM-dd'), account_id: '', transaction_id: '' });
     setOpenTransactionDialog(true);
   };
 
@@ -658,7 +676,7 @@ export default function EnvelopesPage() {
                 />
               </FormField>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField label="Target Amount" error={errors.target_amount?.message} required>
                   <Input
                     type="number"
@@ -683,7 +701,7 @@ export default function EnvelopesPage() {
                 />
               </FormField>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <FormField label="Tags (comma-separated)" helperText="Add tags to organize your envelopes" className="col-span-2">
                   <Input
                     {...register('tags')}
@@ -788,6 +806,29 @@ export default function EnvelopesPage() {
               </Select>
               <p className="text-xs text-foreground-muted">
                 Envelope transactions are virtual allocations. Leave empty for goal tracking only.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="linkedTransaction">Link to Transaction (Optional)</Label>
+              <Select
+                value={transactionForm.transaction_id}
+                onValueChange={(value) => setTransactionForm({ ...transactionForm, transaction_id: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="None - No link to existing transaction" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">None</SelectItem>
+                  {recentTransactionsData?.map((transaction: any) => (
+                    <SelectItem key={transaction.id} value={transaction.id.toString()}>
+                      {format(parseISO(transaction.date), 'MMM dd, yyyy')} - {transaction.description} ({formatCurrency(transaction.amount)})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-foreground-muted">
+                Optionally link this envelope allocation to an existing transaction for tracking.
               </p>
             </div>
 
@@ -964,7 +1005,16 @@ function EnvelopeTransactions({ envelopeId }: { envelopeId: number }) {
             <TableCell className="text-sm">
               {transaction.date ? format(parseISO(transaction.date), 'MMM dd, yyyy') : 'N/A'}
             </TableCell>
-            <TableCell className="text-sm">{transaction.description}</TableCell>
+            <TableCell className="text-sm">
+              <div>
+                <div>{transaction.description}</div>
+                {transaction.linked_transaction && (
+                  <Badge variant="outline" className="text-xs mt-1">
+                    Linked: {transaction.linked_transaction.description}
+                  </Badge>
+                )}
+              </div>
+            </TableCell>
             <TableCell
               className={`text-right font-semibold ${
                 transaction.amount >= 0 ? 'text-success' : 'text-error'

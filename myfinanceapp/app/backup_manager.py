@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import sqlite3
 import hashlib
+import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class BackupManager:
@@ -22,6 +26,8 @@ class BackupManager:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_file = self.backup_dir / "backup_metadata.json"
         self.metadata = self._load_metadata()
+        self.cloud_manager = None
+        self._init_cloud()
 
     def _load_metadata(self) -> Dict:
         """Load backup metadata."""
@@ -43,6 +49,33 @@ class BackupManager:
         """Save backup metadata."""
         with open(self.metadata_file, 'w') as f:
             json.dump(self.metadata, f, indent=2, default=str)
+
+    def _init_cloud(self):
+        """Initialize cloud backup manager if configured."""
+        try:
+            from database import FinanceDatabase
+            from cloud_backup import WebDAVAdapter, CloudBackupManager
+
+            db = FinanceDatabase(db_path=str(self.db_path))
+
+            webdav_url = db.get_preference('cloud_webdav_url', '')
+            username = db.get_preference('cloud_webdav_username', '')
+            remote_path = db.get_preference('cloud_webdav_path', '/backups/')
+            enabled = db.get_preference('cloud_enabled', 'false') == 'true'
+            password = os.getenv('WEBDAV_PASSWORD', '')
+
+            if enabled and webdav_url and password:
+                adapter = WebDAVAdapter(webdav_url, username, password, remote_path)
+                self.cloud_manager = CloudBackupManager(adapter)
+                logger.info("Cloud backup manager initialized")
+            else:
+                self.cloud_manager = None
+        except ImportError:
+            logger.warning("WebDAV client not installed. Cloud backup disabled.")
+            self.cloud_manager = None
+        except Exception as e:
+            logger.warning(f"Failed to initialize cloud backup: {e}")
+            self.cloud_manager = None
 
     def _calculate_checksum(self, file_path: Path) -> str:
         """Calculate SHA256 checksum of file."""
@@ -67,7 +100,7 @@ class BackupManager:
             try:
                 cursor.execute(f"SELECT COUNT(*) FROM {table}")
                 stats[table] = cursor.fetchone()[0]
-            except:
+            except Exception:
                 stats[table] = 0
 
         conn.close()
@@ -105,7 +138,7 @@ class BackupManager:
 
         # Create backup record
         backup_record = {
-            'id': len(self.metadata['backups']) + 1,
+            'id': max((b['id'] for b in self.metadata['backups']), default=0) + 1,
             'filename': backup_file.name,
             'path': str(backup_file),
             'timestamp': datetime.now().isoformat(),
@@ -340,7 +373,7 @@ class BackupManager:
 
         # Create backup record
         backup_record = {
-            'id': len(self.metadata['backups']) + 1,
+            'id': max((b['id'] for b in self.metadata['backups']), default=0) + 1,
             'filename': dest.name,
             'path': str(dest),
             'timestamp': datetime.now().isoformat(),

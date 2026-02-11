@@ -5,6 +5,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useToast } from '../contexts/ToastContext';
 import { recurringTemplateSchema, type RecurringTemplateFormData } from '../lib/validations';
+import { useIsMobile } from '../hooks/useBreakpoint';
 import {
   Plus,
   Pencil,
@@ -15,6 +16,8 @@ import {
   XCircle,
   Clock,
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   Button,
@@ -52,11 +55,14 @@ import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 
 export default function RecurringPage() {
   const toast = useToast();
+  const isMobile = useIsMobile();
   const [currentTab, setCurrentTab] = useState<number | string>(0);
   const [openDialog, setOpenDialog] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
   const [selectedPending, setSelectedPending] = useState<number[]>([]);
+  const [expandedTemplate, setExpandedTemplate] = useState<number | null>(null);
+  const [expandedPending, setExpandedPending] = useState<number | null>(null);
 
   // Recurring template form with validation
   const {
@@ -111,6 +117,7 @@ export default function RecurringPage() {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Fetch categories
@@ -120,6 +127,7 @@ export default function RecurringPage() {
       const response = await categoriesAPI.getHierarchy();
       return response.data.categories;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Fetch recipients
@@ -129,6 +137,7 @@ export default function RecurringPage() {
       const response = await transactionsAPI.getAllRecipients();
       return response.data.recipients;
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Create mutation
@@ -469,77 +478,174 @@ export default function RecurringPage() {
           {/* Tab 0: Templates */}
           <TabsContent value={0}>
             {recurringData && recurringData.length > 0 ? (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Account</TableHead>
-                      <TableHead>Amount</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Frequency</TableHead>
-                      <TableHead>Next Date</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {recurringData.map((template: any) => (
-                      <TableRow key={template.id}>
-                        <TableCell>
-                          <div>
-                            <p className="font-semibold text-foreground">{template.name}</p>
-                            <p className="text-xs text-foreground-muted">{template.description}</p>
-                          </div>
-                        </TableCell>
-                        <TableCell>{template.account_name || 'Unknown'}</TableCell>
-                        <TableCell
-                          className={`font-semibold ${template.amount >= 0 ? 'text-success' : 'text-error'}`}
+              isMobile ? (
+                <div className="space-y-3">
+                  {recurringData.map((template: any) => {
+                    const isExpanded = expandedTemplate === template.id;
+                    return (
+                      <Card
+                        key={template.id}
+                        className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${
+                          isExpanded ? 'ring-2 ring-primary/50' : ''
+                        }`}
+                      >
+                        <div
+                          className="p-4 cursor-pointer hover:bg-surface-hover transition-colors"
+                          onClick={() => setExpandedTemplate(isExpanded ? null : template.id)}
                         >
-                          {formatCurrency(template.amount)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col gap-1">
-                            <Badge variant="secondary">{template.type_name}</Badge>
-                            {template.subtype_name && (
-                              <Badge variant="outline">{template.subtype_name}</Badge>
-                            )}
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-foreground truncate">{template.name}</p>
+                              {template.description && (
+                                <p className="text-xs text-foreground-muted truncate">{template.description}</p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`font-semibold text-sm ${
+                                  template.amount >= 0 ? 'text-success' : 'text-error'
+                                }`}
+                              >
+                                {formatCurrency(template.amount)}
+                              </span>
+                              {isExpanded ? (
+                                <ChevronUp className="h-5 w-5 text-foreground-muted flex-shrink-0" />
+                              ) : (
+                                <ChevronDown className="h-5 w-5 text-foreground-muted flex-shrink-0" />
+                              )}
+                            </div>
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">
-                            <RefreshCw className="h-3 w-3 mr-1" />
-                            {getFrequencyLabel(template.recurrence_pattern, template.recurrence_interval)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{formatDate(template.last_generated || template.start_date)}</TableCell>
-                        <TableCell>
-                          {template.is_active ? (
-                            <Badge variant="success">Active</Badge>
-                          ) : (
-                            <Badge variant="secondary">Inactive</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => handleEdit(template)}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setDeleteConfirm(template)}
-                              className="text-error hover:text-error"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                        </div>
+                        {isExpanded && (
+                          <div className="border-t border-border px-4 py-3">
+                            <div className="grid grid-cols-2 gap-3 mb-3">
+                              <div>
+                                <p className="text-xs text-foreground-muted mb-1">Account</p>
+                                <p className="text-sm text-foreground">{template.account_name || 'Unknown'}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-foreground-muted mb-1">Category</p>
+                                <div className="flex flex-col gap-1">
+                                  <Badge variant="secondary" className="w-fit text-xs">{template.type_name}</Badge>
+                                  {template.subtype_name && (
+                                    <Badge variant="outline" className="w-fit text-xs">{template.subtype_name}</Badge>
+                                  )}
+                                </div>
+                              </div>
+                              <div>
+                                <p className="text-xs text-foreground-muted mb-1">Frequency</p>
+                                <Badge variant="outline" className="w-fit">
+                                  <RefreshCw className="h-3 w-3 mr-1" />
+                                  {getFrequencyLabel(template.recurrence_pattern, template.recurrence_interval)}
+                                </Badge>
+                              </div>
+                              <div>
+                                <p className="text-xs text-foreground-muted mb-1">Next Date</p>
+                                <p className="text-sm text-foreground">
+                                  {formatDate(template.last_generated || template.start_date)}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-foreground-muted mb-1">Status</p>
+                                {template.is_active ? (
+                                  <Badge variant="success" className="w-fit">Active</Badge>
+                                ) : (
+                                  <Badge variant="secondary" className="w-fit">Inactive</Badge>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex gap-1 pt-2 border-t border-border">
+                              <Button variant="ghost" size="sm" onClick={() => handleEdit(template)}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDeleteConfirm(template)}
+                                className="text-error hover:text-error"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </div>
-                        </TableCell>
+                        )}
+                      </Card>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Account</TableHead>
+                        <TableHead>Amount</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead>Frequency</TableHead>
+                        <TableHead>Next Date</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {recurringData.map((template: any) => (
+                        <TableRow key={template.id}>
+                          <TableCell>
+                            <div>
+                              <p className="font-semibold text-foreground">{template.name}</p>
+                              <p className="text-xs text-foreground-muted">{template.description}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell>{template.account_name || 'Unknown'}</TableCell>
+                          <TableCell
+                            className={`font-semibold ${template.amount >= 0 ? 'text-success' : 'text-error'}`}
+                          >
+                            {formatCurrency(template.amount)}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-col gap-1">
+                              <Badge variant="secondary">{template.type_name}</Badge>
+                              {template.subtype_name && (
+                                <Badge variant="outline">{template.subtype_name}</Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              <RefreshCw className="h-3 w-3 mr-1" />
+                              {getFrequencyLabel(template.recurrence_pattern, template.recurrence_interval)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{formatDate(template.last_generated || template.start_date)}</TableCell>
+                          <TableCell>
+                            {template.is_active ? (
+                              <Badge variant="success">Active</Badge>
+                            ) : (
+                              <Badge variant="secondary">Inactive</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button variant="ghost" size="sm" onClick={() => handleEdit(template)}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDeleteConfirm(template)}
+                                className="text-error hover:text-error"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )
             ) : (
               <div className="flex flex-col items-center justify-center min-h-[300px]">
                 <RefreshCw className="h-20 w-20 text-foreground-muted mb-4" />
@@ -590,98 +696,213 @@ export default function RecurringPage() {
                     </Button>
                   </div>
                 )}
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-12">
-                          <input
-                            type="checkbox"
-                            checked={selectedPending.length === pendingData.length}
-                            onChange={toggleSelectAllPending}
-                            className="w-4 h-4 rounded border-border bg-surface"
-                          />
-                        </TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Recipient</TableHead>
-                        <TableHead>Description</TableHead>
-                        <TableHead>Account</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                        <TableHead>Template</TableHead>
-                        <TableHead className="text-center">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {pendingData.map((transaction: any) => (
-                        <TableRow key={transaction.id}>
-                          <TableCell>
-                            <input
-                              type="checkbox"
-                              checked={selectedPending.includes(transaction.id)}
-                              onChange={() => toggleSelectPending(transaction.id)}
-                              className="w-4 h-4 rounded border-border bg-surface"
-                            />
-                          </TableCell>
-                          <TableCell>{format(new Date(transaction.transaction_date), 'MMM dd, yyyy')}</TableCell>
-                          <TableCell>
-                            {transaction.destinataire && transaction.destinataire.trim() !== ''
-                              ? transaction.destinataire
-                              : '-'}
-                          </TableCell>
-                          <TableCell className="text-foreground-muted">
-                            {transaction.description && transaction.description.trim() !== ''
-                              ? transaction.description
-                              : '-'}
-                          </TableCell>
-                          <TableCell>{transaction.account_name}</TableCell>
-                          <TableCell>
-                            <div className="flex flex-col gap-1">
-                              <Badge variant="secondary">{transaction.type_name || 'Uncategorized'}</Badge>
-                              {transaction.subtype_name && (
-                                <Badge variant="outline" className="text-xs">{transaction.subtype_name}</Badge>
+                {isMobile ? (
+                  <div className="space-y-3">
+                    {pendingData.map((transaction: any) => {
+                      const isExpanded = expandedPending === transaction.id;
+                      const isSelected = selectedPending.includes(transaction.id);
+                      return (
+                        <Card
+                          key={transaction.id}
+                          className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${
+                            isExpanded ? 'ring-2 ring-primary/50' : ''
+                          }`}
+                        >
+                          <div
+                            className="p-4 cursor-pointer hover:bg-surface-hover transition-colors"
+                            onClick={() => setExpandedPending(isExpanded ? null : transaction.id)}
+                          >
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  toggleSelectPending(transaction.id);
+                                }}
+                                className="w-4 h-4 mt-1 rounded border-border bg-surface flex-shrink-0"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-start justify-between gap-2 mb-1">
+                                  <p className="text-sm text-foreground font-medium">
+                                    {format(new Date(transaction.transaction_date), 'MMM dd, yyyy')}
+                                  </p>
+                                  <span
+                                    className={`font-semibold text-sm flex-shrink-0 ${
+                                      transaction.amount >= 0 ? 'text-success' : 'text-error'
+                                    }`}
+                                  >
+                                    {formatCurrencyUtil(transaction.amount, transaction.currency || 'EUR')}
+                                  </span>
+                                </div>
+                                <p className="text-sm text-foreground truncate">
+                                  {transaction.destinataire && transaction.destinataire.trim() !== ''
+                                    ? transaction.destinataire
+                                    : transaction.description || '-'}
+                                </p>
+                              </div>
+                              {isExpanded ? (
+                                <ChevronUp className="h-5 w-5 text-foreground-muted flex-shrink-0" />
+                              ) : (
+                                <ChevronDown className="h-5 w-5 text-foreground-muted flex-shrink-0" />
                               )}
                             </div>
-                          </TableCell>
-                          <TableCell
-                            className={`text-right font-semibold ${
-                              transaction.amount >= 0 ? 'text-success' : 'text-error'
-                            }`}
-                          >
-                            {formatCurrencyUtil(transaction.amount, transaction.currency || 'EUR')}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{transaction.recurring_template_name || 'N/A'}</Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex justify-center gap-1">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => confirmMutation.mutate(transaction.id)}
-                                disabled={confirmMutation.isPending}
-                                className="text-success hover:text-success"
-                                title="Approve"
-                              >
-                                <CheckCircle className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => rejectMutation.mutate(transaction.id)}
-                                disabled={rejectMutation.isPending}
-                                className="text-error hover:text-error"
-                                title="Reject"
-                              >
-                                <XCircle className="h-4 w-4" />
-                              </Button>
+                          </div>
+                          {isExpanded && (
+                            <div className="border-t border-border px-4 py-3">
+                              <div className="grid grid-cols-2 gap-3 mb-3">
+                                <div>
+                                  <p className="text-xs text-foreground-muted mb-1">Description</p>
+                                  <p className="text-sm text-foreground">
+                                    {transaction.description && transaction.description.trim() !== ''
+                                      ? transaction.description
+                                      : '-'}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-foreground-muted mb-1">Account</p>
+                                  <p className="text-sm text-foreground">{transaction.account_name}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-foreground-muted mb-1">Category</p>
+                                  <div className="flex flex-col gap-1">
+                                    <Badge variant="secondary" className="w-fit text-xs">
+                                      {transaction.type_name || 'Uncategorized'}
+                                    </Badge>
+                                    {transaction.subtype_name && (
+                                      <Badge variant="outline" className="w-fit text-xs">{transaction.subtype_name}</Badge>
+                                    )}
+                                  </div>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-foreground-muted mb-1">Template</p>
+                                  <Badge variant="outline" className="w-fit">
+                                    {transaction.recurring_template_name || 'N/A'}
+                                  </Badge>
+                                </div>
+                              </div>
+                              <div className="flex gap-1 pt-2 border-t border-border">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => confirmMutation.mutate(transaction.id)}
+                                  disabled={confirmMutation.isPending}
+                                  className="text-success hover:text-success"
+                                  title="Approve"
+                                >
+                                  <CheckCircle className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => rejectMutation.mutate(transaction.id)}
+                                  disabled={rejectMutation.isPending}
+                                  className="text-error hover:text-error"
+                                  title="Reject"
+                                >
+                                  <XCircle className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </div>
-                          </TableCell>
+                          )}
+                        </Card>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12">
+                            <input
+                              type="checkbox"
+                              checked={selectedPending.length === pendingData.length}
+                              onChange={toggleSelectAllPending}
+                              className="w-4 h-4 rounded border-border bg-surface"
+                            />
+                          </TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Recipient</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Account</TableHead>
+                          <TableHead>Category</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
+                          <TableHead>Template</TableHead>
+                          <TableHead className="text-center">Actions</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                      </TableHeader>
+                      <TableBody>
+                        {pendingData.map((transaction: any) => (
+                          <TableRow key={transaction.id}>
+                            <TableCell>
+                              <input
+                                type="checkbox"
+                                checked={selectedPending.includes(transaction.id)}
+                                onChange={() => toggleSelectPending(transaction.id)}
+                                className="w-4 h-4 rounded border-border bg-surface"
+                              />
+                            </TableCell>
+                            <TableCell>{format(new Date(transaction.transaction_date), 'MMM dd, yyyy')}</TableCell>
+                            <TableCell>
+                              {transaction.destinataire && transaction.destinataire.trim() !== ''
+                                ? transaction.destinataire
+                                : '-'}
+                            </TableCell>
+                            <TableCell className="text-foreground-muted">
+                              {transaction.description && transaction.description.trim() !== ''
+                                ? transaction.description
+                                : '-'}
+                            </TableCell>
+                            <TableCell>{transaction.account_name}</TableCell>
+                            <TableCell>
+                              <div className="flex flex-col gap-1">
+                                <Badge variant="secondary">{transaction.type_name || 'Uncategorized'}</Badge>
+                                {transaction.subtype_name && (
+                                  <Badge variant="outline" className="text-xs">{transaction.subtype_name}</Badge>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell
+                              className={`text-right font-semibold ${
+                                transaction.amount >= 0 ? 'text-success' : 'text-error'
+                              }`}
+                            >
+                              {formatCurrencyUtil(transaction.amount, transaction.currency || 'EUR')}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{transaction.recurring_template_name || 'N/A'}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex justify-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => confirmMutation.mutate(transaction.id)}
+                                  disabled={confirmMutation.isPending}
+                                  className="text-success hover:text-success"
+                                  title="Approve"
+                                >
+                                  <CheckCircle className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => rejectMutation.mutate(transaction.id)}
+                                  disabled={rejectMutation.isPending}
+                                  className="text-error hover:text-error"
+                                  title="Reject"
+                                >
+                                  <XCircle className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
               </>
             ) : (
               <div className="flex flex-col items-center justify-center min-h-[300px]">

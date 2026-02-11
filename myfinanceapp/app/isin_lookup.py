@@ -405,7 +405,7 @@ class ISINLookup:
                 ticker = yf.Ticker(result['symbol'])
                 currency = ticker.info.get('currency', 'EUR')
                 result['currency'] = currency
-            except:
+            except Exception:
                 result['currency'] = 'EUR'  # Default to EUR for European securities
         else:
             result['current_price'] = None

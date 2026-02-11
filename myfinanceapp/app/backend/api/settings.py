@@ -18,6 +18,14 @@ DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
 DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 db = FinanceDatabase(db_path=DB_PATH)
 
+# Allowed preference keys to prevent arbitrary key injection
+ALLOWED_PREFERENCE_KEYS = {
+    'default_currency', 'date_format', 'theme', 'language', 'display_currency',
+    'debug_mode', 'debug_auto_recalculate', 'debug_show_logs',
+    'debug_log_api_calls', 'debug_log_transactions',
+    'cloud_webdav_url', 'cloud_webdav_username', 'cloud_webdav_path', 'cloud_enabled',
+}
+
 class SettingUpdate(BaseModel):
     value: Any
 
@@ -54,6 +62,13 @@ async def get_setting(key: str, current_user: User = Depends(get_current_user)):
 @router.put("/{key}")
 async def update_setting(key: str, setting: SettingUpdate, current_user: User = Depends(get_current_user)):
     """Update setting"""
+    # Validate preference key to prevent arbitrary key injection
+    if key not in ALLOWED_PREFERENCE_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid preference key: {key}"
+        )
+
     # Debug settings require admin role
     debug_settings = ['debug_mode', 'debug_auto_recalculate', 'debug_show_logs', 'debug_log_api_calls', 'debug_log_transactions']
     if key in debug_settings and not current_user.is_admin:

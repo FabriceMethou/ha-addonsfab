@@ -1,5 +1,6 @@
 // Reports Page - Financial Analytics with Modern Design
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import { useIsMobile } from '../hooks/useBreakpoint';
 import { useQuery } from '@tanstack/react-query';
 import {
   Card,
@@ -110,6 +111,7 @@ function KPICard({ title, value, change, changeLabel, icon, iconColor, colorClas
 }
 
 export default function ReportsPage() {
+  const isMobile = useIsMobile();
   const [currentTab, setCurrentTab] = useState('overview');
   const [dateRange, setDateRange] = useState('current_month');
   const [startDate, setStartDate] = useState(
@@ -166,6 +168,7 @@ export default function ReportsPage() {
       const response = await accountsAPI.getOwners();
       return response.data.owners || [];
     },
+    staleTime: 30 * 60 * 1000,
   });
 
   // Helper to get owner_id for API calls
@@ -270,12 +273,15 @@ export default function ReportsPage() {
   });
 
   // Generate year options for year-by-year selector
-  const yearByYearOptions = yearByYearData
-    ? Array.from(
-        { length: new Date().getFullYear() - yearByYearData.year_of_first_transaction + 1 },
-        (_, i) => (yearByYearData.year_of_first_transaction + i).toString()
-      ).reverse()
-    : Array.from({ length: 5 }, (_, i) => (new Date().getFullYear() - i).toString());
+  const yearByYearOptions = useMemo(() =>
+    yearByYearData
+      ? Array.from(
+          { length: new Date().getFullYear() - yearByYearData.year_of_first_transaction + 1 },
+          (_, i) => (yearByYearData.year_of_first_transaction + i).toString()
+        ).reverse()
+      : Array.from({ length: 5 }, (_, i) => (new Date().getFullYear() - i).toString()),
+    [yearByYearData]
+  );
 
   // Month options for year-by-year filter
   const monthOptions = [
@@ -349,50 +355,147 @@ export default function ReportsPage() {
   };
 
   // Prepare data for income vs expenses chart (showing just income and expenses)
-  const incomeExpensesBarData = incomeExpensesData
-    ? [
-        { name: 'Income', amount: incomeExpensesData.income, fill: '#10b981' },
-        { name: 'Expenses', amount: incomeExpensesData.expenses, fill: '#ef4444' },
-        { name: 'Net', amount: incomeExpensesData.net, fill: incomeExpensesData.net >= 0 ? '#3b82f6' : '#f59e0b' },
-      ]
-    : [];
+  const incomeExpensesBarData = useMemo(() =>
+    incomeExpensesData
+      ? [
+          { name: 'Income', amount: incomeExpensesData.income, fill: '#10b981' },
+          { name: 'Expenses', amount: incomeExpensesData.expenses, fill: '#ef4444' },
+          { name: 'Net', amount: incomeExpensesData.net, fill: incomeExpensesData.net >= 0 ? '#3b82f6' : '#f59e0b' },
+        ]
+      : [],
+    [incomeExpensesData]
+  );
 
   // Prepare data for spending by category pie chart (Nivo format)
-  const spendingChartData =
+  const spendingChartData = useMemo(() =>
     spendingData?.categories?.map((cat: any) => ({
       id: cat.category,
       label: cat.category,
       value: absMoney(cat.total ?? 0),
-    })) || [];
+    })) || [],
+    [spendingData]
+  );
 
   // Prepare data for cash flow line chart using precise decimal arithmetic
   // Use ISO date as key for proper sorting, then format for display
-  const cashFlowData = transactionsData
-    ? Object.values(
-        transactionsData.reduce((acc: Record<string, any>, transaction: any) => {
-          if (!transaction.transaction_date) return acc;
-          try {
-            const transactionDate = new Date(transaction.transaction_date);
-            if (isNaN(transactionDate.getTime())) return acc;
-            // Use ISO date substring as key to avoid merging dates across years
-            const dateKey = transaction.transaction_date.substring(0, 10);
-            const displayDate = format(transactionDate, 'MMM dd');
+  const cashFlowData = useMemo(() =>
+    transactionsData
+      ? Object.values(
+          transactionsData.reduce((acc: Record<string, any>, transaction: any) => {
+            if (!transaction.transaction_date) return acc;
+            try {
+              const transactionDate = new Date(transaction.transaction_date);
+              if (isNaN(transactionDate.getTime())) return acc;
+              // Use ISO date substring as key to avoid merging dates across years
+              const dateKey = transaction.transaction_date.substring(0, 10);
+              const displayDate = format(transactionDate, 'MMM dd');
 
-            if (!acc[dateKey]) {
-              acc[dateKey] = { date: displayDate, dateKey, income: 0, expenses: 0 };
+              if (!acc[dateKey]) {
+                acc[dateKey] = { date: displayDate, dateKey, income: 0, expenses: 0 };
+              }
+              if (transaction.amount > 0) {
+                acc[dateKey].income = addMoney(acc[dateKey].income, transaction.amount);
+              } else {
+                acc[dateKey].expenses = addMoney(acc[dateKey].expenses, absMoney(transaction.amount));
+              }
+            } catch (error) {
+              console.warn('Invalid transaction date:', transaction.transaction_date);
             }
-            if (transaction.amount > 0) {
-              acc[dateKey].income = addMoney(acc[dateKey].income, transaction.amount);
-            } else {
-              acc[dateKey].expenses = addMoney(acc[dateKey].expenses, absMoney(transaction.amount));
-            }
-          } catch (error) {
-            console.warn('Invalid transaction date:', transaction.transaction_date);
-          }
-          return acc;
-        }, {})
-      ).sort((a: any, b: any) => a.dateKey.localeCompare(b.dateKey))
-    : [];
+            return acc;
+          }, {})
+        ).sort((a: any, b: any) => a.dateKey.localeCompare(b.dateKey))
+      : [],
+    [transactionsData]
+  );
+
+  // Memoize sunburst data for spending trends tab
+  const sunburstData = useMemo(() => {
+    if (!spendingTrendsData?.all_categories?.length) return null;
+    return {
+      name: 'Spending',
+      children: spendingTrendsData.all_categories.slice(0, 8).map((cat: string) => {
+        // Calculate total for this category across all months using precise arithmetic
+        const total = sumMoney(spendingTrendsData.trends, (month: any) =>
+          absMoney(month.categories?.[cat] || 0)
+        );
+        return {
+          name: cat,
+          value: total,
+        };
+      }).filter((item: any) => item.value > 0)
+    };
+  }, [spendingTrendsData]);
+
+  // Memoize sorted trend analysis for spending trends tab
+  const sortedTrendAnalysis = useMemo(() => {
+    if (!spendingTrendsData?.trend_analysis) return [];
+    return Object.entries(spendingTrendsData.trend_analysis)
+      .sort((a: any, b: any) => Math.abs(b[1].change_percent) - Math.abs(a[1].change_percent));
+  }, [spendingTrendsData]);
+
+  // Memoize monthly summary pie chart data
+  const monthlySummaryPieData = useMemo(() => {
+    if (!monthlySummaryData?.spending_by_category) return [];
+    return monthlySummaryData.spending_by_category.slice(0, 8).map((cat: any) => ({
+      id: cat.category,
+      label: cat.category,
+      value: absMoney(cat.amount)
+    }));
+  }, [monthlySummaryData]);
+
+  // Memoize filtered income categories for year-by-year tab
+  const filteredIncomeCategories = useMemo(() => {
+    if (!yearByYearData?.categories?.income) return [];
+    return yearByYearData.categories.income.filter((item: any) =>
+      item.name.toLowerCase().includes(yearByYearSearch.toLowerCase()) ||
+      item.subcategories?.some((sub: any) =>
+        sub.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+      )
+    );
+  }, [yearByYearData, yearByYearSearch]);
+
+  // Memoize filtered expense categories for year-by-year tab
+  const filteredExpenseCategories = useMemo(() => {
+    if (!yearByYearData?.categories?.expenses) return [];
+    return yearByYearData.categories.expenses.filter((item: any) =>
+      item.name.toLowerCase().includes(yearByYearSearch.toLowerCase()) ||
+      item.subcategories?.some((sub: any) =>
+        sub.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+      )
+    );
+  }, [yearByYearData, yearByYearSearch]);
+
+  // Memoize filtered income entities for year-by-year tab
+  const filteredIncomeEntities = useMemo(() => {
+    if (!yearByYearData?.entities?.income) return [];
+    return yearByYearData.entities.income.filter((item: any) =>
+      item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+    );
+  }, [yearByYearData, yearByYearSearch]);
+
+  // Memoize filtered expense entities for year-by-year tab
+  const filteredExpenseEntities = useMemo(() => {
+    if (!yearByYearData?.entities?.expenses) return [];
+    return yearByYearData.entities.expenses.filter((item: any) =>
+      item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+    );
+  }, [yearByYearData, yearByYearSearch]);
+
+  // Memoize filtered income tags for year-by-year tab
+  const filteredIncomeTags = useMemo(() => {
+    if (!yearByYearData?.tags?.income) return [];
+    return yearByYearData.tags.income.filter((item: any) =>
+      item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+    );
+  }, [yearByYearData, yearByYearSearch]);
+
+  // Memoize filtered expense tags for year-by-year tab
+  const filteredExpenseTags = useMemo(() => {
+    if (!yearByYearData?.tags?.expenses) return [];
+    return yearByYearData.tags.expenses.filter((item: any) =>
+      item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
+    );
+  }, [yearByYearData, yearByYearSearch]);
 
   if (netWorthLoading || incomeExpensesLoading || spendingLoading) {
     return <ReportsSkeleton />;
@@ -427,7 +530,7 @@ export default function ReportsPage() {
             <div className="flex flex-wrap gap-2 justify-end">
               {/* Owner Filter */}
               <Select value={selectedOwner} onValueChange={setSelectedOwner}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="w-full sm:w-[150px]">
                   <Users className="w-4 h-4 mr-2" />
                   <SelectValue placeholder="All Owners" />
                 </SelectTrigger>
@@ -442,7 +545,7 @@ export default function ReportsPage() {
               </Select>
 
               <Select value={dateRange} onValueChange={handleDateRangeChange}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-full sm:w-[180px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -461,13 +564,13 @@ export default function ReportsPage() {
                     type="date"
                     value={startDate}
                     onChange={(e) => setStartDate(e.target.value)}
-                    className="w-[150px]"
+                    className="w-full sm:w-[150px]"
                   />
                   <Input
                     type="date"
                     value={endDate}
                     onChange={(e) => setEndDate(e.target.value)}
-                    className="w-[150px]"
+                    className="w-full sm:w-[150px]"
                   />
                 </>
               )}
@@ -625,7 +728,7 @@ export default function ReportsPage() {
                   <div className="h-[300px]">
                     <ResponsivePie
                       data={spendingChartData}
-                      margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
+                      margin={{ top: 20, right: isMobile ? 20 : 80, bottom: 20, left: isMobile ? 20 : 80 }}
                       innerRadius={0.5}
                       padAngle={0.7}
                       cornerRadius={3}
@@ -772,7 +875,7 @@ export default function ReportsPage() {
             {/* Controls */}
             <div className="flex flex-wrap gap-2">
               <Select value={selectedOwner} onValueChange={setSelectedOwner}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="w-full sm:w-[150px]">
                   <Users className="w-4 h-4 mr-2" />
                   <SelectValue placeholder="All Owners" />
                 </SelectTrigger>
@@ -787,7 +890,7 @@ export default function ReportsPage() {
               </Select>
 
               <Select value={trendMonths} onValueChange={setTrendMonths}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="w-full sm:w-[150px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -803,7 +906,7 @@ export default function ReportsPage() {
                 value={trendCategory}
                 onChange={(value) => setTrendCategory(value)}
                 placeholder="Filter by Category"
-                className="w-[250px]"
+                className="w-full sm:w-[250px]"
               />
             </div>
 
@@ -819,19 +922,7 @@ export default function ReportsPage() {
                     <h3 className="text-lg font-semibold text-foreground mb-4">Spending Distribution</h3>
                     <div className="h-[400px]">
                       <ResponsiveSunburst
-                        data={{
-                          name: 'Spending',
-                          children: spendingTrendsData.all_categories.slice(0, 8).map((cat: string) => {
-                            // Calculate total for this category across all months using precise arithmetic
-                            const total = sumMoney(spendingTrendsData.trends, (month: any) =>
-                              absMoney(month.categories?.[cat] || 0)
-                            );
-                            return {
-                              name: cat,
-                              value: total,
-                            };
-                          }).filter((item: any) => item.value > 0)
-                        }}
+                        data={sunburstData!}
                         margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
                         id="name"
                         value="value"
@@ -933,9 +1024,7 @@ export default function ReportsPage() {
                   <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                     <h3 className="text-lg font-semibold text-foreground mb-6">Trend Analysis</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {Object.entries(spendingTrendsData.trend_analysis)
-                        .sort((a: any, b: any) => Math.abs(b[1].change_percent) - Math.abs(a[1].change_percent))
-                        .map(([cat, analysis]: [string, any]) => {
+                      {sortedTrendAnalysis.map(([cat, analysis]: [string, any]) => {
                           const isIncreasing = analysis.change_percent > 5;
                           const isDecreasing = analysis.change_percent < -5;
 
@@ -1023,7 +1112,7 @@ export default function ReportsPage() {
             {/* Controls */}
             <div className="flex flex-wrap gap-2">
               <Select value={selectedOwner} onValueChange={setSelectedOwner}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="w-full sm:w-[150px]">
                   <Users className="w-4 h-4 mr-2" />
                   <SelectValue placeholder="All Owners" />
                 </SelectTrigger>
@@ -1038,7 +1127,7 @@ export default function ReportsPage() {
               </Select>
 
               <Select value={summaryYear} onValueChange={setSummaryYear}>
-                <SelectTrigger className="w-[120px]">
+                <SelectTrigger className="w-full sm:w-[120px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1050,7 +1139,7 @@ export default function ReportsPage() {
               </Select>
 
               <Select value={summaryMonth} onValueChange={setSummaryMonth}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="w-full sm:w-[150px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1130,12 +1219,8 @@ export default function ReportsPage() {
                       <h3 className="text-lg font-semibold text-foreground mb-4">Category Distribution</h3>
                       <div className="h-[300px]">
                         <ResponsivePie
-                          data={monthlySummaryData.spending_by_category.slice(0, 8).map((cat: any) => ({
-                            id: cat.category,
-                            label: cat.category,
-                            value: absMoney(cat.amount)
-                          }))}
-                          margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
+                          data={monthlySummaryPieData}
+                          margin={{ top: 20, right: isMobile ? 20 : 80, bottom: 20, left: isMobile ? 20 : 80 }}
                           innerRadius={0.5}
                           padAngle={0.7}
                           cornerRadius={3}
@@ -1180,7 +1265,7 @@ export default function ReportsPage() {
             {/* Controls */}
             <div className="flex gap-2">
               <Select value={selectedOwner} onValueChange={setSelectedOwner}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="w-full sm:w-[150px]">
                   <Users className="w-4 h-4 mr-2" />
                   <SelectValue placeholder="All Owners" />
                 </SelectTrigger>
@@ -1195,7 +1280,7 @@ export default function ReportsPage() {
               </Select>
 
               <Select value={netWorthMonths} onValueChange={setNetWorthMonths}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="w-full sm:w-[150px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1308,10 +1393,10 @@ export default function ReportsPage() {
                 value={yearByYearSelected}
                 onChange={(value) => setYearByYearSelected(value)}
                 placeholder="Select year"
-                className="w-[150px]"
+                className="w-full sm:w-[150px]"
               />
               <Select value={yearByYearMonth} onValueChange={setYearByYearMonth}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="w-full sm:w-[150px]">
                   <SelectValue placeholder="All Year" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1373,7 +1458,7 @@ export default function ReportsPage() {
                           })),
                           links: yearByYearData.sankey.links
                         }}
-                        margin={{ top: 20, right: 160, bottom: 20, left: 160 }}
+                        margin={{ top: 20, right: isMobile ? 20 : 160, bottom: 20, left: isMobile ? 20 : 160 }}
                         align="justify"
                         colors={(node: any) => {
                           const nodeData = yearByYearData.sankey.nodes.find((n: any) => n.id === node.id);
@@ -1443,14 +1528,7 @@ export default function ReportsPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {yearByYearData.categories.income
-                            .filter((item: any) =>
-                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase()) ||
-                              item.subcategories?.some((sub: any) =>
-                                sub.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                              )
-                            )
-                            .map((item: any) => {
+                          {filteredIncomeCategories.map((item: any) => {
                               const isExpanded = expandedIncomeCategories.has(item.name);
                               const hasSubcategories = item.subcategories && item.subcategories.length > 0;
                               return (
@@ -1494,9 +1572,7 @@ export default function ReportsPage() {
                                 </React.Fragment>
                               );
                             })}
-                          {yearByYearData.categories.income.filter((item: any) =>
-                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                          ).length === 0 && (
+                          {filteredIncomeCategories.length === 0 && (
                             <TableRow>
                               <TableCell colSpan={2} className="text-center text-foreground-muted">
                                 No income data
@@ -1523,14 +1599,7 @@ export default function ReportsPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {yearByYearData.categories.expenses
-                            .filter((item: any) =>
-                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase()) ||
-                              item.subcategories?.some((sub: any) =>
-                                sub.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                              )
-                            )
-                            .map((item: any) => {
+                          {filteredExpenseCategories.map((item: any) => {
                               const isExpanded = expandedExpenseCategories.has(item.name);
                               const hasSubcategories = item.subcategories && item.subcategories.length > 0;
                               return (
@@ -1574,9 +1643,7 @@ export default function ReportsPage() {
                                 </React.Fragment>
                               );
                             })}
-                          {yearByYearData.categories.expenses.filter((item: any) =>
-                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                          ).length === 0 && (
+                          {filteredExpenseCategories.length === 0 && (
                             <TableRow>
                               <TableCell colSpan={2} className="text-center text-foreground-muted">
                                 No expense data
@@ -1603,21 +1670,15 @@ export default function ReportsPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {yearByYearData.entities.income
-                            .filter((item: any) =>
-                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                            )
-                            .map((item: any, index: number) => (
-                              <TableRow key={item.name + index}>
-                                <TableCell>{item.name}</TableCell>
-                                <TableCell className="text-right text-success">
-                                  {formatCurrency(item.amount)}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          {yearByYearData.entities.income.filter((item: any) =>
-                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                          ).length === 0 && (
+                          {filteredIncomeEntities.map((item: any, index: number) => (
+                            <TableRow key={item.name + index}>
+                              <TableCell>{item.name}</TableCell>
+                              <TableCell className="text-right text-success">
+                                {formatCurrency(item.amount)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {filteredIncomeEntities.length === 0 && (
                             <TableRow>
                               <TableCell colSpan={2} className="text-center text-foreground-muted">
                                 No income vendors
@@ -1644,21 +1705,15 @@ export default function ReportsPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {yearByYearData.entities.expenses
-                            .filter((item: any) =>
-                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                            )
-                            .map((item: any, index: number) => (
-                              <TableRow key={item.name + index}>
-                                <TableCell>{item.name}</TableCell>
-                                <TableCell className="text-right text-error">
-                                  {formatCurrency(item.amount)}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          {yearByYearData.entities.expenses.filter((item: any) =>
-                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                          ).length === 0 && (
+                          {filteredExpenseEntities.map((item: any, index: number) => (
+                            <TableRow key={item.name + index}>
+                              <TableCell>{item.name}</TableCell>
+                              <TableCell className="text-right text-error">
+                                {formatCurrency(item.amount)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {filteredExpenseEntities.length === 0 && (
                             <TableRow>
                               <TableCell colSpan={2} className="text-center text-foreground-muted">
                                 No expense vendors
@@ -1685,23 +1740,17 @@ export default function ReportsPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {yearByYearData.tags.income
-                            .filter((item: any) =>
-                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                            )
-                            .map((item: any, index: number) => (
-                              <TableRow key={item.name + index}>
-                                <TableCell>
-                                  <Badge variant="secondary">{item.name}</Badge>
-                                </TableCell>
-                                <TableCell className="text-right text-success">
-                                  {formatCurrency(item.amount)}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          {yearByYearData.tags.income.filter((item: any) =>
-                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                          ).length === 0 && (
+                          {filteredIncomeTags.map((item: any, index: number) => (
+                            <TableRow key={item.name + index}>
+                              <TableCell>
+                                <Badge variant="secondary">{item.name}</Badge>
+                              </TableCell>
+                              <TableCell className="text-right text-success">
+                                {formatCurrency(item.amount)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {filteredIncomeTags.length === 0 && (
                             <TableRow>
                               <TableCell colSpan={2} className="text-center text-foreground-muted">
                                 No income tags
@@ -1728,23 +1777,17 @@ export default function ReportsPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {yearByYearData.tags.expenses
-                            .filter((item: any) =>
-                              item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                            )
-                            .map((item: any, index: number) => (
-                              <TableRow key={item.name + index}>
-                                <TableCell>
-                                  <Badge variant="secondary">{item.name}</Badge>
-                                </TableCell>
-                                <TableCell className="text-right text-error">
-                                  {formatCurrency(item.amount)}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          {yearByYearData.tags.expenses.filter((item: any) =>
-                            item.name.toLowerCase().includes(yearByYearSearch.toLowerCase())
-                          ).length === 0 && (
+                          {filteredExpenseTags.map((item: any, index: number) => (
+                            <TableRow key={item.name + index}>
+                              <TableCell>
+                                <Badge variant="secondary">{item.name}</Badge>
+                              </TableCell>
+                              <TableCell className="text-right text-error">
+                                {formatCurrency(item.amount)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {filteredExpenseTags.length === 0 && (
                             <TableRow>
                               <TableCell colSpan={2} className="text-center text-foreground-muted">
                                 No expense tags
@@ -1775,11 +1818,11 @@ export default function ReportsPage() {
                 value={selectedTag}
                 onChange={(value) => setSelectedTag(value)}
                 placeholder="Choose a tag"
-                className="w-[250px]"
+                className="w-full sm:w-[250px]"
               />
 
               <Select value={dateRange} onValueChange={handleDateRangeChange}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-full sm:w-[180px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1794,8 +1837,8 @@ export default function ReportsPage() {
 
               {dateRange === 'custom' && (
                 <>
-                  <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-[150px]" />
-                  <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-[150px]" />
+                  <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-full sm:w-[150px]" />
+                  <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-full sm:w-[150px]" />
                 </>
               )}
             </div>
@@ -1858,7 +1901,7 @@ export default function ReportsPage() {
                             label: cat.category,
                             value: absMoney(cat.amount)
                           }))}
-                          margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
+                          margin={{ top: 20, right: isMobile ? 20 : 80, bottom: 20, left: isMobile ? 20 : 80 }}
                           innerRadius={0.5}
                           padAngle={0.7}
                           cornerRadius={3}
@@ -1903,7 +1946,7 @@ export default function ReportsPage() {
                             label: acc.account,
                             value: absMoney(acc.amount)
                           }))}
-                          margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
+                          margin={{ top: 20, right: isMobile ? 20 : 80, bottom: 20, left: isMobile ? 20 : 80 }}
                           innerRadius={0.5}
                           padAngle={0.7}
                           cornerRadius={3}

@@ -2,40 +2,21 @@
   "backups": [
     {
       "id": 1,
-      "filename": "finance_backup_20251216_145018_manual.db",
-      "path": "data/backups/finance_backup_20251216_145018_manual.db",
-      "timestamp": "2025-12-16T14:50:18.249872",
-      "type": "manual",
-      "description": "test",
-      "size_bytes": 348160,
-      "original_size": 348160,
-      "checksum": "c2666fa5e10b54c45904c74692a80337a4200c436446d9ae5d99de49426e9a78",
-      "compressed": false,
-      "stats": {
-        "transactions": 168,
-        "accounts": 11,
-        "envelopes": 0,
-        "debts": 10,
-        "file_size": 348160
-      }
-    },
-    {
-      "id": 2,
-      "filename": "finance_backup_20251216_172102_auto.db",
-      "path": "data/backups/finance_backup_20251216_172102_auto.db",
-      "timestamp": "2025-12-16T17:21:02.451311",
+      "filename": "finance_backup_20260129_173604_auto.db.gz",
+      "path": "data/backups/finance_backup_20260129_173604_auto.db.gz",
+      "timestamp": "2026-01-29T17:36:04.585794",
       "type": "auto",
       "description": "Daily automatic backup",
-      "size_bytes": 348160,
-      "original_size": 348160,
-      "checksum": "c2666fa5e10b54c45904c74692a80337a4200c436446d9ae5d99de49426e9a78",
-      "compressed": false,
+      "size_bytes": 25950,
+      "original_size": 286720,
+      "checksum": "b137426852da91142aa45d48a96217ef2764fae476d5b79728fa18c1b7818767",
+      "compressed": true,
       "stats": {
-        "transactions": 168,
-        "accounts": 11,
-        "envelopes": 0,
-        "debts": 10,
-        "file_size": 348160
+        "transactions": 135,
+        "accounts": 12,
+        "envelopes": 2,
+        "debts": 1,
+        "file_size": 286720
       }
     }
   ],
@@ -43,7 +24,7 @@
     "auto_backup_enabled": true,
     "retention_days": 30,
     "max_backups": 50,
-    "compress_backups": false,
-    "last_auto_backup": "2025-12-16T17:21:02.451323"
+    "compress_backups": true,
+    "last_auto_backup": "2026-01-29T17:36:04.585808"
   }
 }

@@ -13,6 +13,8 @@ import {
   RefreshCw,
   AlertTriangle,
   DollarSign,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   Button,
@@ -50,6 +52,7 @@ import { format, parseISO } from 'date-fns';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 import { addMoney, subtractMoney, multiplyMoney, percentOf } from '../lib/money';
+import { useIsMobile } from '../hooks/useBreakpoint';
 
 // Colors for pie charts
 const PORTFOLIO_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
@@ -100,6 +103,11 @@ const formatDate = (dateString: string | null | undefined): string => {
 };
 
 export default function InvestmentsPage() {
+  const isMobile = useIsMobile();
+  const [expandedSecurity, setExpandedSecurity] = useState<number | null>(null);
+  const [expandedHolding, setExpandedHolding] = useState<number | null>(null);
+  const [expandedInvTx, setExpandedInvTx] = useState<number | null>(null);
+
   const [tabValue, setTabValue] = useState<number | string>(0);
   const [holdingDialog, setHoldingDialog] = useState(false);
   const [transactionDialog, setTransactionDialog] = useState(false);
@@ -219,21 +227,21 @@ export default function InvestmentsPage() {
     queryFn: async () => {
       try {
         const response = await accountsAPI.getAll();
-        
+
         if (!response || !response.data || !response.data.accounts) {
           throw new Error('Invalid API response format - missing accounts array');
         }
-        
+
         const allAccounts = response.data.accounts;
-        
+
         if (!Array.isArray(allAccounts)) {
           throw new Error('Accounts data is not an array');
         }
-        
-        const investmentAccounts = allAccounts.filter(account => 
+
+        const investmentAccounts = allAccounts.filter(account =>
           account.account_type === 'investment'
         );
-        
+
         return investmentAccounts;
 	      } catch (error: any) {
 	        console.error('Detailed error in accounts query:', {
@@ -246,6 +254,7 @@ export default function InvestmentsPage() {
 	      }
     },
     retry: 3, // Retry failed requests up to 3 times
+    staleTime: 30 * 60 * 1000,
   });
 
   // Fetch holdings
@@ -1017,7 +1026,7 @@ export default function InvestmentsPage() {
       {holdingsData && holdingsData.length > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <h2 className="text-lg font-semibold text-foreground mb-4">Top Holdings</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-5 gap-4">
             {holdingsData
               .sort((a: any, b: any) => {
                 const aValue = a.current_value || (a.quantity * (a.current_price || a.average_cost || 0));
@@ -1076,54 +1085,102 @@ export default function InvestmentsPage() {
             </div>
 
             {securitiesData && securitiesData.length > 0 ? (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Symbol</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>ISIN</TableHead>
-                      <TableHead>Exchange</TableHead>
-                      <TableHead>Currency</TableHead>
-                      <TableHead>Sector</TableHead>
-                      <TableHead>Country</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {securitiesData.map((security: any) => (
-                      <TableRow key={security.id}>
-                        <TableCell className="font-semibold">{security.symbol}</TableCell>
-                        <TableCell>{security.name}</TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">{security.investment_type}</Badge>
-                        </TableCell>
-                        <TableCell className="text-xs">{security.isin || '-'}</TableCell>
-                        <TableCell>{security.exchange || '-'}</TableCell>
-                        <TableCell>{security.currency}</TableCell>
-                        <TableCell>{security.sector || '-'}</TableCell>
-                        <TableCell>{security.country || '-'}</TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => handleEditSecurity(security)}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setDeleteConfirm(security)}
-                              className="text-error hover:text-error"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+              isMobile ? (
+                <div className="space-y-2">
+                  {securitiesData.map((security: any) => {
+                    const isExpanded = expandedSecurity === security.id;
+                    return (
+                      <Card key={security.id} className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${isExpanded ? 'ring-2 ring-primary/50' : ''}`}>
+                        <div className="p-4 cursor-pointer hover:bg-surface-hover transition-colors" onClick={() => setExpandedSecurity(isExpanded ? null : security.id)}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-foreground">{security.symbol}</p>
+                              <p className="text-xs text-foreground-muted truncate">{security.name}</p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <Badge variant="default" size="sm">{security.investment_type}</Badge>
+                              {isExpanded ? <ChevronUp className="w-4 h-4 text-foreground-muted" /> : <ChevronDown className="w-4 h-4 text-foreground-muted" />}
+                            </div>
                           </div>
-                        </TableCell>
+                        </div>
+                        {isExpanded && (
+                          <div className="border-t border-border px-4 py-3">
+                            <div className="grid grid-cols-2 gap-3 mb-3">
+                              <div><p className="text-xs text-foreground-muted">ISIN</p><p className="text-sm">{security.isin || '-'}</p></div>
+                              <div><p className="text-xs text-foreground-muted">Exchange</p><p className="text-sm">{security.exchange || '-'}</p></div>
+                              <div><p className="text-xs text-foreground-muted">Currency</p><p className="text-sm">{security.currency || '-'}</p></div>
+                              <div><p className="text-xs text-foreground-muted">Sector</p><p className="text-sm">{security.sector || '-'}</p></div>
+                              <div><p className="text-xs text-foreground-muted">Country</p><p className="text-sm">{security.country || '-'}</p></div>
+                            </div>
+                            <div className="flex gap-1 pt-2 border-t border-border">
+                              <Button variant="ghost" size="sm" onClick={() => handleEditSecurity(security)}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDeleteConfirm(security)}
+                                className="text-error hover:text-error"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </Card>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Symbol</TableHead>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>ISIN</TableHead>
+                        <TableHead>Exchange</TableHead>
+                        <TableHead>Currency</TableHead>
+                        <TableHead>Sector</TableHead>
+                        <TableHead>Country</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {securitiesData.map((security: any) => (
+                        <TableRow key={security.id}>
+                          <TableCell className="font-semibold">{security.symbol}</TableCell>
+                          <TableCell>{security.name}</TableCell>
+                          <TableCell>
+                            <Badge variant="secondary">{security.investment_type}</Badge>
+                          </TableCell>
+                          <TableCell className="text-xs">{security.isin || '-'}</TableCell>
+                          <TableCell>{security.exchange || '-'}</TableCell>
+                          <TableCell>{security.currency}</TableCell>
+                          <TableCell>{security.sector || '-'}</TableCell>
+                          <TableCell>{security.country || '-'}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button variant="ghost" size="sm" onClick={() => handleEditSecurity(security)}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDeleteConfirm(security)}
+                                className="text-error hover:text-error"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )
             ) : (
               <div className="flex flex-col items-center justify-center min-h-[300px]">
                 <LineChart className="h-20 w-20 text-foreground-muted mb-4" />
@@ -1197,60 +1254,50 @@ export default function InvestmentsPage() {
                           </div>
                         </div>
 
-                        <div className="overflow-x-auto">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Symbol</TableHead>
-                                <TableHead>Name</TableHead>
-                                <TableHead>Type</TableHead>
-                                <TableHead className="text-right">Quantity</TableHead>
-                                <TableHead className="text-right">Avg Cost</TableHead>
-                                <TableHead className="text-right">Current Price</TableHead>
-                                <TableHead className="text-right">Current Value</TableHead>
-                                <TableHead className="text-right">Gain/Loss</TableHead>
-                                <TableHead>Last Updated</TableHead>
-                                <TableHead className="text-right">Actions</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {accountData.holdings.map((holding: any) => {
-                                const currentValue = holding.quantity * (holding.current_price || holding.average_cost);
-                                const costBasis = holding.quantity * holding.average_cost;
-                                const gainLoss = currentValue - costBasis;
-                                const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+                        {isMobile ? (
+                          <div className="space-y-2">
+                            {accountData.holdings.map((holding: any) => {
+                              const currentValue = holding.quantity * (holding.current_price || holding.average_cost);
+                              const costBasis = holding.quantity * holding.average_cost;
+                              const gainLoss = currentValue - costBasis;
+                              const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+                              const isExpanded = expandedHolding === holding.id;
 
-                                return (
-                                  <TableRow key={holding.id}>
-                                    <TableCell className="font-semibold">{holding.symbol}</TableCell>
-                                    <TableCell>{holding.name}</TableCell>
-                                    <TableCell>
-                                      <Badge variant="secondary">{holding.investment_type}</Badge>
-                                    </TableCell>
-                                    <TableCell className="text-right">{holding.quantity}</TableCell>
-                                    <TableCell className="text-right">{formatCurrency(holding.average_cost)}</TableCell>
-                                    <TableCell className="text-right">
-                                      {formatCurrency(holding.current_price || holding.average_cost)}
-                                    </TableCell>
-                                    <TableCell className="text-right font-semibold">{formatCurrency(currentValue)}</TableCell>
-                                    <TableCell className={`text-right font-semibold ${gainLoss >= 0 ? 'text-success' : 'text-error'}`}>
-                                      {formatCurrency(gainLoss)}
-                                      <span className="block text-xs">
-                                        ({gainLossPercent >= 0 ? '+' : ''}
-                                        {gainLossPercent.toFixed(2)}%)
-                                      </span>
-                                    </TableCell>
-                                    <TableCell>
-                                      {holding.last_price_update ? (
-                                        <span className="text-xs text-foreground-muted">
-                                          {format(parseISO(holding.last_price_update), 'MMM dd, yyyy HH:mm')}
-                                        </span>
-                                      ) : (
-                                        <span className="text-xs text-foreground-muted">Never</span>
-                                      )}
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                      <div className="flex justify-end gap-1">
+                              return (
+                                <Card key={holding.id} className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${isExpanded ? 'ring-2 ring-primary/50' : ''}`}>
+                                  <div className="p-4 cursor-pointer hover:bg-surface-hover transition-colors" onClick={() => setExpandedHolding(isExpanded ? null : holding.id)}>
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div className="min-w-0 flex-1">
+                                        <p className="font-medium text-foreground">{holding.symbol}</p>
+                                        <p className={`text-sm font-semibold ${gainLoss >= 0 ? 'text-success' : 'text-error'}`}>
+                                          {formatCurrency(currentValue)}
+                                        </p>
+                                      </div>
+                                      <div className="flex items-center gap-2 flex-shrink-0">
+                                        <p className={`text-xs font-medium ${gainLoss >= 0 ? 'text-success' : 'text-error'}`}>
+                                          {gainLossPercent >= 0 ? '+' : ''}{gainLossPercent.toFixed(2)}%
+                                        </p>
+                                        {isExpanded ? <ChevronUp className="w-4 h-4 text-foreground-muted" /> : <ChevronDown className="w-4 h-4 text-foreground-muted" />}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  {isExpanded && (
+                                    <div className="border-t border-border px-4 py-3">
+                                      <div className="grid grid-cols-2 gap-3 mb-3">
+                                        <div><p className="text-xs text-foreground-muted">Name</p><p className="text-sm">{holding.name}</p></div>
+                                        <div><p className="text-xs text-foreground-muted">Type</p><p className="text-sm"><Badge variant="secondary" size="sm">{holding.investment_type}</Badge></p></div>
+                                        <div><p className="text-xs text-foreground-muted">Quantity</p><p className="text-sm">{holding.quantity}</p></div>
+                                        <div><p className="text-xs text-foreground-muted">Avg Cost</p><p className="text-sm">{formatCurrency(holding.average_cost)}</p></div>
+                                        <div><p className="text-xs text-foreground-muted">Current Price</p><p className="text-sm">{formatCurrency(holding.current_price || holding.average_cost)}</p></div>
+                                        <div><p className="text-xs text-foreground-muted">Gain/Loss</p><p className={`text-sm font-semibold ${gainLoss >= 0 ? 'text-success' : 'text-error'}`}>{formatCurrency(gainLoss)}</p></div>
+                                        <div className="col-span-2">
+                                          <p className="text-xs text-foreground-muted">Last Updated</p>
+                                          <p className="text-sm">
+                                            {holding.last_price_update ? format(parseISO(holding.last_price_update), 'MMM dd, yyyy HH:mm') : 'Never'}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <div className="flex gap-1 pt-2 border-t border-border">
                                         <Button
                                           variant="ghost"
                                           size="sm"
@@ -1286,13 +1333,110 @@ export default function InvestmentsPage() {
                                           <Trash2 className="h-4 w-4" />
                                         </Button>
                                       </div>
-                                    </TableCell>
-                                  </TableRow>
-                                );
-                              })}
-                            </TableBody>
-                          </Table>
-                        </div>
+                                    </div>
+                                  )}
+                                </Card>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Symbol</TableHead>
+                                  <TableHead>Name</TableHead>
+                                  <TableHead>Type</TableHead>
+                                  <TableHead className="text-right">Quantity</TableHead>
+                                  <TableHead className="text-right">Avg Cost</TableHead>
+                                  <TableHead className="text-right">Current Price</TableHead>
+                                  <TableHead className="text-right">Current Value</TableHead>
+                                  <TableHead className="text-right">Gain/Loss</TableHead>
+                                  <TableHead>Last Updated</TableHead>
+                                  <TableHead className="text-right">Actions</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {accountData.holdings.map((holding: any) => {
+                                  const currentValue = holding.quantity * (holding.current_price || holding.average_cost);
+                                  const costBasis = holding.quantity * holding.average_cost;
+                                  const gainLoss = currentValue - costBasis;
+                                  const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+
+                                  return (
+                                    <TableRow key={holding.id}>
+                                      <TableCell className="font-semibold">{holding.symbol}</TableCell>
+                                      <TableCell>{holding.name}</TableCell>
+                                      <TableCell>
+                                        <Badge variant="secondary">{holding.investment_type}</Badge>
+                                      </TableCell>
+                                      <TableCell className="text-right">{holding.quantity}</TableCell>
+                                      <TableCell className="text-right">{formatCurrency(holding.average_cost)}</TableCell>
+                                      <TableCell className="text-right">
+                                        {formatCurrency(holding.current_price || holding.average_cost)}
+                                      </TableCell>
+                                      <TableCell className="text-right font-semibold">{formatCurrency(currentValue)}</TableCell>
+                                      <TableCell className={`text-right font-semibold ${gainLoss >= 0 ? 'text-success' : 'text-error'}`}>
+                                        {formatCurrency(gainLoss)}
+                                        <span className="block text-xs">
+                                          ({gainLossPercent >= 0 ? '+' : ''}
+                                          {gainLossPercent.toFixed(2)}%)
+                                        </span>
+                                      </TableCell>
+                                      <TableCell>
+                                        {holding.last_price_update ? (
+                                          <span className="text-xs text-foreground-muted">
+                                            {format(parseISO(holding.last_price_update), 'MMM dd, yyyy HH:mm')}
+                                          </span>
+                                        ) : (
+                                          <span className="text-xs text-foreground-muted">Never</span>
+                                        )}
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        <div className="flex justify-end gap-1">
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => updateHoldingPriceMutation.mutate(holding.id)}
+                                            disabled={updateHoldingPriceMutation.isPending}
+                                            className="text-success hover:text-success"
+                                            title="Auto-update price from Yahoo Finance"
+                                          >
+                                            <RefreshCw className="h-4 w-4" />
+                                          </Button>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => {
+                                              setManualPriceHolding(holding);
+                                              setManualPrice((holding.current_price || holding.average_cost || 0).toString());
+                                              setManualPriceDialog(true);
+                                            }}
+                                            className="text-primary hover:text-primary"
+                                            title="Manually set price"
+                                          >
+                                            <DollarSign className="h-4 w-4" />
+                                          </Button>
+                                          <Button variant="ghost" size="sm" onClick={() => handleEditHolding(holding)}>
+                                            <Pencil className="h-4 w-4" />
+                                          </Button>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => setDeleteConfirm(holding)}
+                                            className="text-error hover:text-error"
+                                          >
+                                            <Trash2 className="h-4 w-4" />
+                                          </Button>
+                                        </div>
+                                      </TableCell>
+                                    </TableRow>
+                                  );
+                                })}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )}
                       </Card>
                     );
                   });
@@ -1335,64 +1479,124 @@ export default function InvestmentsPage() {
             </div>
 
             {transactionsData && transactionsData.length > 0 ? (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Symbol</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead className="text-right">Quantity</TableHead>
-                      <TableHead className="text-right">Price</TableHead>
-                      <TableHead className="text-right">Total</TableHead>
-                      <TableHead className="text-right">Fees</TableHead>
-                      <TableHead className="text-right">Tax</TableHead>
-                      <TableHead>Notes</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {transactionsData.map((transaction: any) => (
-                      <TableRow key={transaction.id}>
-                        <TableCell>{formatDate(transaction.transaction_date)}</TableCell>
-                        <TableCell className="font-semibold">{transaction.symbol}</TableCell>
-                        <TableCell>
-                          <Badge variant={transaction.transaction_type === 'buy' ? 'success' : 'destructive'}>
-                            {transaction.transaction_type}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">{transaction.quantity || '-'}</TableCell>
-                        <TableCell className="text-right">{transaction.price ? formatCurrency(transaction.price) : '-'}</TableCell>
-                        <TableCell className="text-right font-semibold">
-                          {transaction.total_amount ? formatCurrency(transaction.total_amount) : formatCurrency((transaction.quantity || 0) * (transaction.price || 0))}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {transaction.fees > 0 ? formatCurrency(transaction.fees) : '-'}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {transaction.tax > 0 ? formatCurrency(transaction.tax) : '-'}
-                        </TableCell>
-                        <TableCell>{transaction.notes || '-'}</TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => handleEditTransaction(transaction)}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setDeleteConfirm({ ...transaction, isTransaction: true })}
-                              className="text-error hover:text-error"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+              isMobile ? (
+                <div className="space-y-2">
+                  {transactionsData.map((transaction: any) => {
+                    const isExpanded = expandedInvTx === transaction.id;
+                    const totalAmount = transaction.total_amount ? transaction.total_amount : (transaction.quantity || 0) * (transaction.price || 0);
+
+                    return (
+                      <Card key={transaction.id} className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${isExpanded ? 'ring-2 ring-primary/50' : ''}`}>
+                        <div className="p-4 cursor-pointer hover:bg-surface-hover transition-colors" onClick={() => setExpandedInvTx(isExpanded ? null : transaction.id)}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="text-xs text-foreground-muted">{formatDate(transaction.transaction_date)}</p>
+                                <Badge variant={transaction.transaction_type === 'buy' ? 'success' : 'destructive'} size="sm">
+                                  {transaction.transaction_type}
+                                </Badge>
+                              </div>
+                              <p className="font-medium text-foreground">{transaction.symbol}</p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <p className="text-sm font-semibold text-foreground">{formatCurrency(totalAmount)}</p>
+                              {isExpanded ? <ChevronUp className="w-4 h-4 text-foreground-muted" /> : <ChevronDown className="w-4 h-4 text-foreground-muted" />}
+                            </div>
                           </div>
-                        </TableCell>
+                        </div>
+                        {isExpanded && (
+                          <div className="border-t border-border px-4 py-3">
+                            <div className="grid grid-cols-2 gap-3 mb-3">
+                              <div><p className="text-xs text-foreground-muted">Quantity</p><p className="text-sm">{transaction.quantity || '-'}</p></div>
+                              <div><p className="text-xs text-foreground-muted">Price</p><p className="text-sm">{transaction.price ? formatCurrency(transaction.price) : '-'}</p></div>
+                              <div><p className="text-xs text-foreground-muted">Fees</p><p className="text-sm">{transaction.fees > 0 ? formatCurrency(transaction.fees) : '-'}</p></div>
+                              <div><p className="text-xs text-foreground-muted">Tax</p><p className="text-sm">{transaction.tax > 0 ? formatCurrency(transaction.tax) : '-'}</p></div>
+                              {transaction.notes && (
+                                <div className="col-span-2">
+                                  <p className="text-xs text-foreground-muted">Notes</p>
+                                  <p className="text-sm">{transaction.notes}</p>
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex gap-1 pt-2 border-t border-border">
+                              <Button variant="ghost" size="sm" onClick={() => handleEditTransaction(transaction)}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDeleteConfirm({ ...transaction, isTransaction: true })}
+                                className="text-error hover:text-error"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </Card>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Symbol</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead className="text-right">Quantity</TableHead>
+                        <TableHead className="text-right">Price</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                        <TableHead className="text-right">Fees</TableHead>
+                        <TableHead className="text-right">Tax</TableHead>
+                        <TableHead>Notes</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {transactionsData.map((transaction: any) => (
+                        <TableRow key={transaction.id}>
+                          <TableCell>{formatDate(transaction.transaction_date)}</TableCell>
+                          <TableCell className="font-semibold">{transaction.symbol}</TableCell>
+                          <TableCell>
+                            <Badge variant={transaction.transaction_type === 'buy' ? 'success' : 'destructive'}>
+                              {transaction.transaction_type}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">{transaction.quantity || '-'}</TableCell>
+                          <TableCell className="text-right">{transaction.price ? formatCurrency(transaction.price) : '-'}</TableCell>
+                          <TableCell className="text-right font-semibold">
+                            {transaction.total_amount ? formatCurrency(transaction.total_amount) : formatCurrency((transaction.quantity || 0) * (transaction.price || 0))}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {transaction.fees > 0 ? formatCurrency(transaction.fees) : '-'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {transaction.tax > 0 ? formatCurrency(transaction.tax) : '-'}
+                          </TableCell>
+                          <TableCell>{transaction.notes || '-'}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button variant="ghost" size="sm" onClick={() => handleEditTransaction(transaction)}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDeleteConfirm({ ...transaction, isTransaction: true })}
+                                className="text-error hover:text-error"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )
             ) : (
               <p className="text-sm text-foreground-muted text-center py-8">No transactions yet</p>
             )}
@@ -1411,7 +1615,7 @@ export default function InvestmentsPage() {
           </DialogHeader>
 
           <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="securitySymbol">Symbol</Label>
                 <Input
@@ -1432,7 +1636,7 @@ export default function InvestmentsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="security-type">Type</Label>
                 <Select
@@ -1481,7 +1685,7 @@ export default function InvestmentsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="securityExchange">Exchange (Optional)</Label>
                 <Input
@@ -1511,7 +1715,7 @@ export default function InvestmentsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="securitySector">Sector (Optional)</Label>
                 <Input
@@ -1638,7 +1842,7 @@ export default function InvestmentsPage() {
               ) : null}
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="quantity">Quantity</Label>
                 <Input
@@ -1661,7 +1865,7 @@ export default function InvestmentsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="purchaseDate">Purchase Date</Label>
                 <Input
@@ -1726,7 +1930,7 @@ export default function InvestmentsPage() {
 
           <div className="space-y-4 py-4">
             {/* Two-step selection: Account first, then Security */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="tx-account">Account</Label>
                 <Select
@@ -1768,7 +1972,7 @@ export default function InvestmentsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="tx-type">Transaction Type</Label>
                 <Select
@@ -1822,7 +2026,7 @@ export default function InvestmentsPage() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="txFees">Fees (Optional)</Label>
                 <Input

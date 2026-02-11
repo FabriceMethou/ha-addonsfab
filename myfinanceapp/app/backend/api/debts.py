@@ -203,42 +203,44 @@ async def add_debt_payment(payment: DebtPayment, current_user: User = Depends(ge
 
     account_id = debt.get('linked_account_id')
     if not account_id:
-        raise HTTPException(status_code=400, detail=f"Debt has no linked account. Debt data: {debt}")
+        raise HTTPException(status_code=400, detail="Debt has no linked account. Please link an account to this debt first.")
 
     # Get or create Debt Payment transaction type and subtype
     conn = db._get_connection()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    # Find "Debt" type
-    cursor.execute("SELECT id FROM transaction_types WHERE name = 'Debt' AND category = 'expense'")
-    result = cursor.fetchone()
+        # Find "Debt" type
+        cursor.execute("SELECT id FROM transaction_types WHERE name = 'Debt' AND category = 'expense'")
+        result = cursor.fetchone()
 
-    if result:
-        debt_type_id = result['id']
-    else:
-        # Create Debt type if it doesn't exist
-        cursor.execute("""
-            INSERT INTO transaction_types (name, category, icon, color)
-            VALUES ('Debt', 'expense', '💳', '#FF6B6B')
-        """)
-        debt_type_id = cursor.lastrowid
+        if result:
+            debt_type_id = result['id']
+        else:
+            # Create Debt type if it doesn't exist
+            cursor.execute("""
+                INSERT INTO transaction_types (name, category, icon, color)
+                VALUES ('Debt', 'expense', '💳', '#FF6B6B')
+            """)
+            debt_type_id = cursor.lastrowid
 
-    # Find or create "Payment" subtype for Debt
-    cursor.execute("SELECT id FROM transaction_subtypes WHERE type_id = ? AND name = 'Payment'", (debt_type_id,))
-    subtype_result = cursor.fetchone()
+        # Find or create "Payment" subtype for Debt
+        cursor.execute("SELECT id FROM transaction_subtypes WHERE type_id = ? AND name = 'Payment'", (debt_type_id,))
+        subtype_result = cursor.fetchone()
 
-    if subtype_result:
-        debt_subtype_id = subtype_result['id']
-    else:
-        # Create Payment subtype if it doesn't exist
-        cursor.execute("""
-            INSERT INTO transaction_subtypes (type_id, name)
-            VALUES (?, 'Payment')
-        """, (debt_type_id,))
-        debt_subtype_id = cursor.lastrowid
+        if subtype_result:
+            debt_subtype_id = subtype_result['id']
+        else:
+            # Create Payment subtype if it doesn't exist
+            cursor.execute("""
+                INSERT INTO transaction_subtypes (type_id, name)
+                VALUES (?, 'Payment')
+            """, (debt_type_id,))
+            debt_subtype_id = cursor.lastrowid
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
     # Determine payment description and tags based on type
     if payment.payment_type == "extra":
@@ -317,3 +319,19 @@ async def get_debt_payments(debt_id: int, current_user: User = Depends(get_curre
         mapped_payments.append(mapped_payment)
 
     return {"payments": mapped_payments}
+
+@router.get("/{debt_id}/schedule")
+async def get_amortization_schedule(debt_id: int, current_user: User = Depends(get_current_user)):
+    """Get amortization schedule for a debt"""
+    schedule = db.generate_amortization_schedule(debt_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Debt not found or no payments needed")
+    return {"schedule": schedule}
+
+@router.get("/{debt_id}/payoff")
+async def get_payoff_summary(debt_id: int, current_user: User = Depends(get_current_user)):
+    """Get payoff summary for a debt (exposes existing calculate_debt_payoff)"""
+    summary = db.calculate_debt_payoff(debt_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Debt not found")
+    return summary

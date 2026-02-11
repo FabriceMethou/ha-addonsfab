@@ -121,6 +121,7 @@ export default function SettingsPage() {
       return response.data.currencies || [];
     },
     initialData: [],
+    staleTime: 30 * 60 * 1000,
   });
 
   // Fetch users (admin only)
@@ -1059,7 +1060,7 @@ export default function SettingsPage() {
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label htmlFor="currency-code" className="text-sm font-medium text-foreground mb-2 block">Currency Code</label>
                 <Input

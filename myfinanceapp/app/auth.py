@@ -1,6 +1,6 @@
 """
 Authentication module for Finance Tracker
-Handles user authentication, password hashing, session management, and MFA (future).
+Handles user authentication, password hashing, and MFA.
 """
 
 import hashlib
@@ -22,7 +22,7 @@ except ImportError:
 
 
 class AuthManager:
-    """Manages user authentication, sessions, and MFA."""
+    """Manages user authentication and MFA."""
 
     def __init__(self, db_path: str = "data/finance.db"):
         self.db_path = db_path
@@ -66,20 +66,6 @@ class AuthManager:
         if 'requires_password_change' not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN requires_password_change BOOLEAN DEFAULT 0")
 
-        # Session tokens table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                session_token TEXT NOT NULL UNIQUE,
-                expires_at TIMESTAMP NOT NULL,
-                ip_address TEXT,
-                user_agent TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-        """)
-
         # Login history for audit
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS login_history (
@@ -115,7 +101,11 @@ class AuthManager:
         self._ensure_default_admin()
 
     def _ensure_default_admin(self):
-        """Create default admin user if no users exist."""
+        """Create default admin user if no users exist.
+
+        Uses ADMIN_DEFAULT_PASSWORD env var if set, otherwise generates a random password
+        and prints it to stdout (visible in container logs on first run).
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -125,9 +115,16 @@ class AuthManager:
         user_count = result['count']
 
         if user_count == 0:
-            # Create default admin user
+            # Use env var or generate random password
+            import os
+            default_password = os.getenv("ADMIN_DEFAULT_PASSWORD", "")
+            if not default_password:
+                default_password = secrets.token_urlsafe(16)
+                print(f"[AUTH] Default admin user created. Password: {default_password}")
+                print("[AUTH] Change this password immediately via the UI or set ADMIN_DEFAULT_PASSWORD env var.")
+
             salt = self._generate_salt()
-            password_hash = self._hash_password("admin", salt)
+            password_hash = self._hash_password(default_password, salt)
 
             cursor.execute("""
                 INSERT INTO users (username, email, password_hash, salt, role, requires_password_change)
@@ -167,8 +164,10 @@ class AuthManager:
         By default, new users are required to change password on first login.
         Returns (success, message).
         """
-        if len(password) < 8:
-            return False, "Password must be at least 8 characters long"
+        from validators import validate_password_strength
+        is_valid, errors = validate_password_strength(password)
+        if not is_valid:
+            return False, "; ".join(errors)
 
         if not username or len(username) < 3:
             return False, "Username must be at least 3 characters long"
@@ -229,8 +228,10 @@ class AuthManager:
 
     def update_user_password(self, user_id: int, new_password: str, clear_password_change_requirement: bool = True) -> Tuple[bool, str]:
         """Update user password and optionally clear password change requirement."""
-        if len(new_password) < 8:
-            return False, "Password must be at least 8 characters long"
+        from validators import validate_password_strength
+        is_valid, errors = validate_password_strength(new_password)
+        if not is_valid:
+            return False, "; ".join(errors)
 
         salt = self._generate_salt()
         password_hash = self._hash_password(new_password, salt)
@@ -461,85 +462,6 @@ class AuthManager:
         """, (user_id, username, success, ip_address, user_agent, failure_reason))
         conn.commit()
         conn.close()
-
-    # ========== Session Management ==========
-
-    def create_session(self, user_id: int, ip_address: str = None,
-                      user_agent: str = None, expires_hours: int = 24) -> str:
-        """Create a new session token for user."""
-        session_token = secrets.token_urlsafe(64)
-        expires_at = datetime.now() + timedelta(hours=expires_hours)
-
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO user_sessions (user_id, session_token, expires_at, ip_address, user_agent)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, session_token, expires_at.isoformat(), ip_address, user_agent))
-        conn.commit()
-        conn.close()
-
-        return session_token
-
-    def validate_session(self, session_token: str) -> Optional[Dict[str, Any]]:
-        """Validate session token and return user data if valid."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT s.user_id, s.expires_at, u.username, u.email, u.role, u.is_active, u.mfa_enabled
-            FROM user_sessions s
-            JOIN users u ON s.user_id = u.id
-            WHERE s.session_token = ?
-        """, (session_token,))
-        result = cursor.fetchone()
-        conn.close()
-
-        if not result:
-            return None
-
-        # Check if session expired
-        expires_at = datetime.fromisoformat(result['expires_at'])
-        if datetime.now() > expires_at:
-            self.invalidate_session(session_token)
-            return None
-
-        # Check if user is still active
-        if not result['is_active']:
-            return None
-
-        return {
-            'id': result['user_id'],
-            'username': result['username'],
-            'email': result['email'],
-            'role': result['role'],
-            'mfa_enabled': result['mfa_enabled']
-        }
-
-    def invalidate_session(self, session_token: str):
-        """Invalidate a session token (logout)."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM user_sessions WHERE session_token = ?", (session_token,))
-        conn.commit()
-        conn.close()
-
-    def invalidate_all_user_sessions(self, user_id: int):
-        """Invalidate all sessions for a user."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
-        conn.commit()
-        conn.close()
-
-    def cleanup_expired_sessions(self):
-        """Remove all expired sessions from database."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM user_sessions WHERE expires_at < ?", (datetime.now().isoformat(),))
-        deleted = cursor.rowcount
-        conn.commit()
-        conn.close()
-        return deleted
 
     # ========== MFA (Multi-Factor Authentication) ==========
 

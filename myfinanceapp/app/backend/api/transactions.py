@@ -23,6 +23,29 @@ DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 db = FinanceDatabase(db_path=DB_PATH)
 categorizer = TransactionCategorizer()
 
+# Alert deduplication: track sent alerts to avoid sending the same alert multiple times per day
+import threading
+_alert_lock = threading.Lock()
+_sent_alerts: set = set()
+
+def _is_alert_sent_today(alert: dict) -> bool:
+    """Check if an alert of this type was already sent today."""
+    from datetime import date as date_cls
+    today = date_cls.today().isoformat()
+    alert_key = (alert['type'], alert.get('category', 'daily'), today)
+    with _alert_lock:
+        return alert_key in _sent_alerts
+
+def _mark_alert_sent(alert: dict):
+    """Mark an alert as sent for today."""
+    from datetime import date as date_cls
+    today = date_cls.today().isoformat()
+    alert_key = (alert['type'], alert.get('category', 'daily'), today)
+    with _alert_lock:
+        _sent_alerts.add(alert_key)
+        # Clean up old entries (keep only today's)
+        _sent_alerts.difference_update({k for k in _sent_alerts if k[2] != today})
+
 # Pydantic models
 class TransactionCreate(BaseModel):
     account_id: int
@@ -98,6 +121,9 @@ async def get_transactions(
     if offset:
         filters['offset'] = offset
 
+    # Get total count (ignores limit/offset) for pagination
+    total = db.count_transactions(filters=filters if filters else None)
+
     transactions = db.get_transactions(filters=filters if filters else None)
 
     # Map transaction_date to date for frontend compatibility
@@ -106,7 +132,7 @@ async def get_transactions(
             transaction['date'] = transaction['transaction_date']
             # Keep transaction_date for backward compatibility
 
-    return {"transactions": transactions, "count": len(transactions)}
+    return {"transactions": transactions, "count": len(transactions), "total": total}
 
 @router.get("/{transaction_id}")
 async def get_transaction(
@@ -136,55 +162,54 @@ async def create_transaction(
     try:
         # Get transaction type category from database directly
         conn = db._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (transaction.type_id,))
-        result = cursor.fetchone()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (transaction.type_id,))
+            result = cursor.fetchone()
 
-        if not result:
-            conn.close()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid transaction type: type_id {transaction.type_id} not found"
-            )
+            if not result:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid transaction type: type_id {transaction.type_id} not found"
+                )
 
-        category = result['category']
+            category = result['category']
 
-        # Validate account exists
-        cursor.execute("SELECT currency FROM accounts WHERE id = ?", (transaction.account_id,))
-        account_result = cursor.fetchone()
+            # Validate account exists
+            cursor.execute("SELECT currency FROM accounts WHERE id = ?", (transaction.account_id,))
+            account_result = cursor.fetchone()
 
-        if not account_result:
-            conn.close()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid account: account_id {transaction.account_id} not found"
-            )
+            if not account_result:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid account: account_id {transaction.account_id} not found"
+                )
 
-        account_currency = account_result['currency']
+            account_currency = account_result['currency']
 
-        # Determine amount sign based on category
-        amount = transaction.amount
-        if category == 'expense':
-            amount = -abs(amount)  # Expenses are negative
-        elif category == 'income':
-            amount = abs(amount)  # Income is positive
-        elif category == 'transfer':
-            amount = -abs(amount)  # Transfers are negative (money leaving source account)
+            # Determine amount sign based on category
+            amount = transaction.amount
+            if category == 'expense':
+                amount = -abs(amount)  # Expenses are negative
+            elif category == 'income':
+                amount = abs(amount)  # Income is positive
+            elif category == 'transfer':
+                amount = -abs(amount)  # Transfers are negative (money leaving source account)
 
-        # Determine destinataire - priority: explicit destinataire > transfer account name > description
-        if transaction.destinataire:
-            destinataire = transaction.destinataire
-        elif category == 'transfer' and transaction.transfer_account_id:
-            cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
-            dest_account_result = cursor.fetchone()
-            if dest_account_result:
-                destinataire = dest_account_result['name']
+            # Determine destinataire - priority: explicit destinataire > transfer account name > description
+            if transaction.destinataire:
+                destinataire = transaction.destinataire
+            elif category == 'transfer' and transaction.transfer_account_id:
+                cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
+                dest_account_result = cursor.fetchone()
+                if dest_account_result:
+                    destinataire = dest_account_result['name']
+                else:
+                    destinataire = transaction.description
             else:
                 destinataire = transaction.description
-        else:
-            destinataire = transaction.description
-
-        conn.close()
+        finally:
+            conn.close()
 
         # Auto-detect and set is_transfer flag
         # Transfers should update BOTH accounts (source and destination)
@@ -213,6 +238,58 @@ async def create_transaction(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Failed to create transaction"
             )
+
+        # Check alerts after successful transaction creation
+        # Wrap in try/except so alert failures don't block the transaction
+        try:
+            from alerts import AlertManager
+            alert_mgr = AlertManager()
+            if alert_mgr.config.get('email', {}).get('enabled', False):
+                from datetime import date as date_cls
+                today = date_cls.today()
+
+                # Check budget alerts
+                budget_data = db.get_budget_vs_actual(today.year, today.month)
+                categories = budget_data.get('categories', [])
+
+                # Transform budget data to format expected by check_budget_alerts
+                budgets = []
+                current_spending = {}
+                for cat in categories:
+                    budgets.append({
+                        'category': cat['type_name'],
+                        'limit': cat['budget']
+                    })
+                    current_spending[cat['type_name']] = cat['actual']
+
+                # Check and send budget alerts
+                alerts_list = alert_mgr.check_budget_alerts(budgets, current_spending)
+                for alert in alerts_list:
+                    # Check if already sent today
+                    if not _is_alert_sent_today(alert):
+                        alert_mgr.send_alert_notification(alert)
+                        _mark_alert_sent(alert)
+
+                # Check daily spending
+                # Get today's transactions to calculate daily total
+                today_filters = {
+                    'start_date': today.isoformat(),
+                    'end_date': today.isoformat()
+                }
+                daily_transactions = db.get_transactions(filters=today_filters)
+                daily_total = sum(
+                    abs(t['amount'])
+                    for t in daily_transactions
+                    if t['amount'] < 0 and t.get('category') != 'transfer'
+                )
+
+                daily_alert = alert_mgr.check_daily_spending(daily_total)
+                if daily_alert and not _is_alert_sent_today(daily_alert):
+                    alert_mgr.send_alert_notification(daily_alert)
+                    _mark_alert_sent(daily_alert)
+        except Exception:
+            # Don't block transaction creation if alerts fail
+            pass
 
         return {
             "message": "Transaction created successfully",

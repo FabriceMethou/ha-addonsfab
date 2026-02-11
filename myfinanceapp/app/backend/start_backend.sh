@@ -1,30 +1,24 @@
 #!/bin/bash
-# Simple script to start the FastAPI backend for local/dev use
-
-set -e
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DATA_DIR="${PROJECT_ROOT}/data"
+# Simple script to start the FastAPI backend
 
 echo "🚀 Starting Finance Tracker Backend..."
 echo ""
 
-# Ensure local data directory exists
-mkdir -p "$DATA_DIR"
-if [ ! -w "$DATA_DIR" ]; then
-    echo "⚠️  Data directory is not writable: $DATA_DIR"
-    echo "    Fix permissions and re-run the script."
-    exit 1
+# Fix data directory permissions if needed
+if [ ! -w "/home/fab/Documents/Development/myfinanceapp/data" ]; then
+    echo "⚠️  Data directory needs permission fix. Running:"
+    echo "   sudo chown -R $USER:$USER /home/fab/Documents/Development/myfinanceapp/data/"
+    sudo chown -R $USER:$USER /home/fab/Documents/Development/myfinanceapp/data/
+    echo ""
 fi
 
 # Set environment variables
-export JWT_SECRET_KEY="${JWT_SECRET_KEY:-dev-secret-key-change-in-production}"
-export PYTHONPATH="$PROJECT_ROOT"
-export DATABASE_PATH="${DATA_DIR}/finance.db"
+export JWT_SECRET_KEY="dev-secret-key-change-in-production"
+export PYTHONPATH=/home/fab/Documents/Development/myfinanceapp
+export DATABASE_PATH=/home/fab/Documents/Development/myfinanceapp/data/finance.db
 
 # Change to backend directory
-cd "$SCRIPT_DIR"
+cd /home/fab/Documents/Development/myfinanceapp/backend
 
 # Check if virtual environment exists
 if [ ! -d "venv" ]; then
