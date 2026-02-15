@@ -93,9 +93,19 @@ export PROMETHEUS_EXPORTER_ENABLED="false"
 
 cd /var/app
 
+# ===== Diagnostics =====
+bashio::log.info "Ruby version: $(ruby --version)"
+bashio::log.info "Bundle path: $(bundle config path 2>&1 | tail -1)"
+bashio::log.info "GEM_HOME=${GEM_HOME}"
+bashio::log.info "BUNDLE_PATH=${BUNDLE_PATH}"
+bashio::log.info "Checking rails gem..."
+bundle show rails 2>&1 | head -3 | while read -r line; do bashio::log.info "  ${line}"; done
+
 # ===== Run database migrations =====
 bashio::log.info "Running database migrations..."
-bundle exec rails db:prepare 2>&1 || true
+if ! bundle exec rails db:prepare 2>&1; then
+    bashio::log.warning "Database migration had issues, continuing..."
+fi
 
 # ===== Start Sidekiq in background =====
 bashio::log.info "Starting Sidekiq..."
