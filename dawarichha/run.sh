@@ -93,6 +93,12 @@ if [ -n "${EXTERNAL_HOST}" ]; then
 fi
 export APPLICATION_HOSTS
 export APPLICATION_PROTOCOL="${APPLICATION_PROTOCOL}"
+# DOMAIN is used by Rails/Devise for generating URLs in emails (password reset, etc.)
+if [ -n "${EXTERNAL_HOST}" ]; then
+    export DOMAIN="${EXTERNAL_HOST}"
+else
+    export DOMAIN="${LOCAL_HOST}"
+fi
 export TIME_ZONE="${TIME_ZONE}"
 export SECRET_KEY_BASE="${SECRET_KEY_BASE}"
 export RAILS_LOG_TO_STDOUT="true"
