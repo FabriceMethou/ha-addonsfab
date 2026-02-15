@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgeos-dev \
     libproj-dev \
     libgdal-dev \
+    python3 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /run/postgresql /var/lib/postgresql/data \
     && chown -R postgres:postgres /run/postgresql /var/lib/postgresql
@@ -43,6 +44,7 @@ RUN ldconfig
 WORKDIR /var/app
 
 COPY run.sh /
-RUN chmod a+x /run.sh
+COPY ha_bridge.py /
+RUN chmod a+x /run.sh /ha_bridge.py
 
 CMD [ "/run.sh" ]

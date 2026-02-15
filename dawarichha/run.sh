@@ -112,6 +112,15 @@ bashio::log.info "Starting Sidekiq..."
 export BACKGROUND_PROCESSING_CONCURRENCY="${BACKGROUND_PROCESSING_CONCURRENCY}"
 bundle exec sidekiq &
 
+# ===== Start HA Bridge if enabled =====
+HA_BRIDGE_ENABLED=$(bashio::config 'HA_BRIDGE_ENABLED')
+if [ "${HA_BRIDGE_ENABLED}" = "true" ]; then
+    bashio::log.info "Starting smart HA-to-Dawarich location bridge..."
+    python3 /ha_bridge.py &
+else
+    bashio::log.info "HA Bridge is disabled. Set HA_BRIDGE_ENABLED to true to send HA locations to Dawarich."
+fi
+
 # ===== Start Dawarich app =====
 bashio::log.info "Starting Dawarich application on port 3000..."
 exec bundle exec rails server -b 0.0.0.0 -p 3000

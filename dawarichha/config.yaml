@@ -1,6 +1,6 @@
 name: "Dawarich"
 description: "Self-hosted alternative to Google Timeline for location history tracking and visualization."
-version: "0.1.7"
+version: "0.2.0"
 slug: "dawarich"
 init: false
 arch:
@@ -8,6 +8,7 @@ arch:
   - aarch64
 
 startup: services
+homeassistant_api: true
 ports:
   3000/tcp: 3000
 map:
@@ -24,6 +25,18 @@ options:
   APPLICATION_HOSTS: "localhost"
   APPLICATION_PROTOCOL: "http"
   BACKGROUND_PROCESSING_CONCURRENCY: 10
+  HA_BRIDGE_ENABLED: true
+  DAWARICH_API_KEY: ""
+  HOME_WIFI_SSIDS:
+    - "MyHomeWiFi"
+  CAR_BLUETOOTH_DEVICES:
+    - "Car Stereo"
+  BRIDGE_MIN_DISTANCE_METERS: 50
+  BRIDGE_INTERVAL_DRIVING: 10
+  BRIDGE_INTERVAL_CYCLING: 15
+  BRIDGE_INTERVAL_WALKING: 30
+  BRIDGE_INTERVAL_STATIONARY: 300
+  BRIDGE_INTERVAL_HOME: 0
 
 schema:
   POSTGRES_USER: str
@@ -34,3 +47,15 @@ schema:
   APPLICATION_HOSTS: str
   APPLICATION_PROTOCOL: "list(http|https)"
   BACKGROUND_PROCESSING_CONCURRENCY: int
+  HA_BRIDGE_ENABLED: bool
+  DAWARICH_API_KEY: str
+  HOME_WIFI_SSIDS:
+    - str
+  CAR_BLUETOOTH_DEVICES:
+    - str
+  BRIDGE_MIN_DISTANCE_METERS: int
+  BRIDGE_INTERVAL_DRIVING: int
+  BRIDGE_INTERVAL_CYCLING: int
+  BRIDGE_INTERVAL_WALKING: int
+  BRIDGE_INTERVAL_STATIONARY: int
+  BRIDGE_INTERVAL_HOME: int
