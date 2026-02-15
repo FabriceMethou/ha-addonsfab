@@ -31,9 +31,7 @@ if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
     sed -i "s/shared_buffers = 128MB/shared_buffers = 256MB/" "${PG_DATA}/postgresql.conf"
 fi
 
-chown -R postgres:postgres "${PG_DATA}" /run/postgresql
-touch "${DATA_DIR}/postgresql.log"
-chown postgres:postgres "${DATA_DIR}/postgresql.log"
+chown -R postgres:postgres "${DATA_DIR}" /run/postgresql
 su-exec postgres pg_ctl -D "${PG_DATA}" -l "${DATA_DIR}/postgresql.log" start
 
 # Wait for PostgreSQL to be ready
