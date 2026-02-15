@@ -66,8 +66,13 @@ def load_config():
         if person_id and key:
             user_map[person_id] = key
 
+    # Extract first host from APPLICATION_HOSTS (may be comma-separated)
+    app_hosts = opts.get("APPLICATION_HOSTS", "localhost")
+    app_host = app_hosts.split(",")[0].strip()
+
     return {
         "user_map": user_map,
+        "application_host": app_host,
         "home_wifi_ssids": [s.lower() for s in opts.get("HOME_WIFI_SSIDS", [])],
         "car_bt_devices": [s.lower() for s in opts.get("CAR_BLUETOOTH_DEVICES", [])],
         "min_distance_m": opts.get("BRIDGE_MIN_DISTANCE_METERS", 50),
@@ -114,7 +119,7 @@ def ha_get_all_states():
 # Dawarich API
 # ---------------------------------------------------------------------------
 
-DAWARICH_URL = "http://127.0.0.1:3000"
+DAWARICH_URL = None  # Set dynamically from config
 
 
 def dawarich_healthy():
@@ -351,7 +356,9 @@ def update_tracker(person_id, lat, lon):
 
 
 def main():
+    global DAWARICH_URL
     config = load_config()
+    DAWARICH_URL = f"http://{config['application_host']}:3000"
     user_map = config["user_map"]
 
     # Validate user mapping
