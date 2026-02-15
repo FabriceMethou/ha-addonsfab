@@ -32,6 +32,8 @@ if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
 fi
 
 chown -R postgres:postgres "${PG_DATA}" /run/postgresql
+touch "${DATA_DIR}/postgresql.log"
+chown postgres:postgres "${DATA_DIR}/postgresql.log"
 su-exec postgres pg_ctl -D "${PG_DATA}" -l "${DATA_DIR}/postgresql.log" start
 
 # Wait for PostgreSQL to be ready
