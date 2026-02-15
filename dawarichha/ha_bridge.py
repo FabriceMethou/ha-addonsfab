@@ -58,8 +58,16 @@ def load_config():
         log.error("Cannot read /data/options.json")
         sys.exit(1)
 
+    # Build person → API key mapping from DAWARICH_USERS list
+    user_map = {}
+    for entry in opts.get("DAWARICH_USERS", []):
+        person_id = entry.get("ha_person", "").strip()
+        key = entry.get("api_key", "").strip()
+        if person_id and key:
+            user_map[person_id] = key
+
     return {
-        "dawarich_api_key": opts.get("DAWARICH_API_KEY", ""),
+        "user_map": user_map,
         "home_wifi_ssids": [s.lower() for s in opts.get("HOME_WIFI_SSIDS", [])],
         "car_bt_devices": [s.lower() for s in opts.get("CAR_BLUETOOTH_DEVICES", [])],
         "min_distance_m": opts.get("BRIDGE_MIN_DISTANCE_METERS", 50),
@@ -344,24 +352,16 @@ def update_tracker(person_id, lat, lon):
 
 def main():
     config = load_config()
+    user_map = config["user_map"]
 
-    # Validate API key
-    api_key = config["dawarich_api_key"]
-    if not api_key:
-        # Check persistent file
-        try:
-            with open("/data/dawarich/ha_bridge_api_key") as f:
-                api_key = f.read().strip()
-        except FileNotFoundError:
-            pass
-
-    if not api_key:
-        log.error("No DAWARICH_API_KEY configured.")
-        log.error("1. Open Dawarich web UI and create an account")
-        log.error("2. Go to Settings > Account > copy your API Key")
-        log.error("3. Paste it in the addon config as DAWARICH_API_KEY")
+    # Validate user mapping
+    if not user_map:
+        log.error("No DAWARICH_USERS configured.")
+        log.error("For each person you want to track:")
+        log.error("1. Create a user account in Dawarich web UI")
+        log.error("2. Go to Settings > Account > copy their API Key")
+        log.error("3. Add an entry in DAWARICH_USERS with ha_person and api_key")
         log.error("4. Restart the addon")
-        # Stay alive but idle
         while True:
             time.sleep(3600)
 
@@ -371,6 +371,8 @@ def main():
         time.sleep(5)
     log.info("Dawarich is ready.")
 
+    log.info("Tracking %d person(s): %s",
+             len(user_map), ", ".join(user_map.keys()))
     log.info("Bridge config: home_wifi=%s, car_bt=%s, min_dist=%dm",
              config["home_wifi_ssids"], config["car_bt_devices"],
              config["min_distance_m"])
@@ -389,16 +391,13 @@ def main():
             time.sleep(BASE_POLL)
             continue
 
-        # Find all person entities
-        persons = {eid: s for eid, s in all_states.items()
-                   if eid.startswith("person.")}
+        # Process only configured persons
+        for person_id, api_key in user_map.items():
+            person_entity = all_states.get(person_id)
+            if not person_entity:
+                log.debug("%s: not found in HA states", person_id)
+                continue
 
-        if not persons:
-            log.debug("No person entities found")
-            time.sleep(BASE_POLL)
-            continue
-
-        for person_id, person_entity in persons.items():
             attrs = person_entity.get("attributes", {})
             lat = attrs.get("latitude")
             lon = attrs.get("longitude")
