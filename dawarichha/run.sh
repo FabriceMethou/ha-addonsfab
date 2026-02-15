@@ -20,7 +20,19 @@ mkdir -p "${PG_DATA}" "${REDIS_DATA}" "${DATA_DIR}/storage" "${DATA_DIR}/public"
 # ===== Start PostgreSQL =====
 bashio::log.info "Starting PostgreSQL..."
 
+PG_EXPECTED_VERSION="17"
+NEED_INIT=false
+
 if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
+    NEED_INIT=true
+elif [ "$(cat "${PG_DATA}/PG_VERSION")" != "${PG_EXPECTED_VERSION}" ]; then
+    bashio::log.warning "PostgreSQL data version $(cat "${PG_DATA}/PG_VERSION") does not match installed version ${PG_EXPECTED_VERSION}. Re-initializing..."
+    rm -rf "${PG_DATA}"
+    mkdir -p "${PG_DATA}"
+    NEED_INIT=true
+fi
+
+if [ "${NEED_INIT}" = true ]; then
     bashio::log.info "Initializing PostgreSQL database..."
     chown -R postgres:postgres "${PG_DATA}"
     gosu postgres /usr/lib/postgresql/17/bin/initdb -D "${PG_DATA}"
@@ -28,11 +40,14 @@ if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
     echo "host all all 0.0.0.0/0 md5" >> "${PG_DATA}/pg_hba.conf"
     echo "local all all trust" >> "${PG_DATA}/pg_hba.conf"
     sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '127.0.0.1'/" "${PG_DATA}/postgresql.conf"
-    sed -i "s/shared_buffers = 128MB/shared_buffers = 256MB/" "${PG_DATA}/postgresql.conf"
 fi
 
 chown -R postgres:postgres "${DATA_DIR}" /run/postgresql
-gosu postgres /usr/lib/postgresql/17/bin/pg_ctl -D "${PG_DATA}" -l "${DATA_DIR}/postgresql.log" start
+if ! gosu postgres /usr/lib/postgresql/17/bin/pg_ctl -D "${PG_DATA}" -l "${DATA_DIR}/postgresql.log" start; then
+    bashio::log.error "PostgreSQL failed to start. Log output:"
+    cat "${DATA_DIR}/postgresql.log" >&2
+    exit 1
+fi
 
 # Wait for PostgreSQL to be ready
 until gosu postgres pg_isready -h 127.0.0.1; do
