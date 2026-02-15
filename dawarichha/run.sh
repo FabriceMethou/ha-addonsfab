@@ -83,12 +83,15 @@ export DATABASE_PORT="5432"
 export DATABASE_USERNAME="${POSTGRES_USER}"
 export DATABASE_PASSWORD="${POSTGRES_PASSWORD}"
 export DATABASE_NAME="${POSTGRES_DB}"
-# Build APPLICATION_HOSTS from local + external
-if [ -n "${EXTERNAL_HOST}" ]; then
-    export APPLICATION_HOSTS="${LOCAL_HOST},${EXTERNAL_HOST}"
-else
-    export APPLICATION_HOSTS="${LOCAL_HOST}"
+# Build APPLICATION_HOSTS — always include localhost for internal bridge communication
+APPLICATION_HOSTS="localhost"
+if [ "${LOCAL_HOST}" != "localhost" ] && [ -n "${LOCAL_HOST}" ]; then
+    APPLICATION_HOSTS="${APPLICATION_HOSTS},${LOCAL_HOST}"
 fi
+if [ -n "${EXTERNAL_HOST}" ]; then
+    APPLICATION_HOSTS="${APPLICATION_HOSTS},${EXTERNAL_HOST}"
+fi
+export APPLICATION_HOSTS
 export APPLICATION_PROTOCOL="${APPLICATION_PROTOCOL}"
 export TIME_ZONE="${TIME_ZONE}"
 export SECRET_KEY_BASE="${SECRET_KEY_BASE}"

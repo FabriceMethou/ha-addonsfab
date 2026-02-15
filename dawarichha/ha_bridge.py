@@ -123,7 +123,9 @@ DAWARICH_URL = "http://localhost:3000"  # Always local — bridge runs in same c
 def dawarich_healthy():
     """Check if Dawarich is up."""
     try:
-        req = urllib.request.Request(f"{DAWARICH_URL}/api/v1/health")
+        req = urllib.request.Request(f"{DAWARICH_URL}/api/v1/health", headers={
+            "Host": "localhost",
+        })
         with urllib.request.urlopen(req, timeout=5):
             return True
     except (urllib.error.URLError, OSError):
