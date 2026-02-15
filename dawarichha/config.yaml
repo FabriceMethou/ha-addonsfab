@@ -1,6 +1,6 @@
 name: "Dawarich"
 description: "Self-hosted alternative to Google Timeline for location history tracking and visualization."
-version: "0.1.6"
+version: "0.1.7"
 slug: "dawarich"
 init: false
 arch:
