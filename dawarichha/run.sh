@@ -76,7 +76,7 @@ export SELF_HOSTED="true"
 export STORE_GEODATA="true"
 export PROMETHEUS_EXPORTER_ENABLED="false"
 
-cd /app
+cd /var/app
 
 # ===== Run database migrations =====
 bashio::log.info "Running database migrations..."
