@@ -1,0 +1,36 @@
+name: "Dawarich"
+description: "Self-hosted alternative to Google Timeline for location history tracking and visualization."
+version: "0.1.0"
+slug: "dawarich"
+init: false
+arch:
+  - amd64
+  - aarch64
+
+startup: services
+ports:
+  3000/tcp: 3000
+map:
+  - share:rw
+
+webui: "http://[HOST]:[PORT:3000]"
+
+options:
+  POSTGRES_USER: "dawarich"
+  POSTGRES_PASSWORD: "dawarich"
+  POSTGRES_DB: "dawarich_production"
+  SECRET_KEY_BASE: "please-change-me-to-a-random-string"
+  TIME_ZONE: "Europe/Paris"
+  APPLICATION_HOSTS: "localhost"
+  APPLICATION_PROTOCOL: "http"
+  BACKGROUND_PROCESSING_CONCURRENCY: 10
+
+schema:
+  POSTGRES_USER: str
+  POSTGRES_PASSWORD: password
+  POSTGRES_DB: str
+  SECRET_KEY_BASE: password
+  TIME_ZONE: str
+  APPLICATION_HOSTS: str
+  APPLICATION_PROTOCOL: "list(http|https)"
+  BACKGROUND_PROCESSING_CONCURRENCY: int
