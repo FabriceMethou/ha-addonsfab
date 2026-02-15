@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgmp10 \
     libpq5 \
     zlib1g \
+    libyaml-0-2 \
+    libffi8 \
     tzdata \
     libgeos-dev \
     libproj-dev \
