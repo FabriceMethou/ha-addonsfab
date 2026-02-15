@@ -2,33 +2,33 @@ ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 # Install PostgreSQL, PostGIS, Redis, and dependencies
-RUN apk add --no-cache \
-    postgresql17 \
-    postgresql17-contrib \
-    postgis \
-    redis \
-    bash \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql \
+    postgresql-contrib \
+    postgresql-17-postgis-3 \
+    redis-server \
+    gosu \
     curl \
-    su-exec \
+    libjemalloc2 \
+    libgmp10 \
+    libpq5 \
+    zlib1g \
+    tzdata \
+    libgeos-dev \
+    libproj-dev \
+    libgdal-dev \
+    && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /run/postgresql /var/lib/postgresql/data \
     && chown -R postgres:postgres /run/postgresql /var/lib/postgresql
 
-# Pull the Dawarich application image contents
-COPY --from=freikin/dawarich:latest /var/app /var/app
+# Copy Ruby runtime and application from Dawarich image
+COPY --from=freikin/dawarich:latest /usr/local/bin/ /usr/local/bin/
+COPY --from=freikin/dawarich:latest /usr/local/lib/ /usr/local/lib/
 COPY --from=freikin/dawarich:latest /usr/local/bundle /usr/local/bundle
+COPY --from=freikin/dawarich:latest /var/app /var/app
 
-# Install Ruby runtime needed by the app
-RUN apk add --no-cache \
-    ruby \
-    ruby-bundler \
-    libpq \
-    gcompat \
-    nodejs \
-    yarn \
-    tzdata \
-    geos \
-    proj \
-    gdal
+# Ensure shared libraries are found
+RUN ldconfig
 
 WORKDIR /var/app
 

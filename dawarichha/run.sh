@@ -23,7 +23,7 @@ bashio::log.info "Starting PostgreSQL..."
 if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
     bashio::log.info "Initializing PostgreSQL database..."
     chown -R postgres:postgres "${PG_DATA}"
-    su-exec postgres initdb -D "${PG_DATA}"
+    gosu postgres /usr/lib/postgresql/17/bin/initdb -D "${PG_DATA}"
     # Allow local connections
     echo "host all all 0.0.0.0/0 md5" >> "${PG_DATA}/pg_hba.conf"
     echo "local all all trust" >> "${PG_DATA}/pg_hba.conf"
@@ -32,23 +32,23 @@ if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
 fi
 
 chown -R postgres:postgres "${DATA_DIR}" /run/postgresql
-su-exec postgres pg_ctl -D "${PG_DATA}" -l "${DATA_DIR}/postgresql.log" start
+gosu postgres /usr/lib/postgresql/17/bin/pg_ctl -D "${PG_DATA}" -l "${DATA_DIR}/postgresql.log" start
 
 # Wait for PostgreSQL to be ready
-until su-exec postgres pg_isready -h 127.0.0.1; do
+until gosu postgres pg_isready -h 127.0.0.1; do
     bashio::log.info "Waiting for PostgreSQL..."
     sleep 1
 done
 
 # Create user and database if needed
-su-exec postgres psql -h 127.0.0.1 -tc "SELECT 1 FROM pg_roles WHERE rolname='${POSTGRES_USER}'" | grep -q 1 || \
-    su-exec postgres psql -h 127.0.0.1 -c "CREATE USER ${POSTGRES_USER} WITH PASSWORD '${POSTGRES_PASSWORD}' SUPERUSER;"
+gosu postgres psql -h 127.0.0.1 -tc "SELECT 1 FROM pg_roles WHERE rolname='${POSTGRES_USER}'" | grep -q 1 || \
+    gosu postgres psql -h 127.0.0.1 -c "CREATE USER ${POSTGRES_USER} WITH PASSWORD '${POSTGRES_PASSWORD}' SUPERUSER;"
 
-su-exec postgres psql -h 127.0.0.1 -tc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1 || \
-    su-exec postgres psql -h 127.0.0.1 -c "CREATE DATABASE ${POSTGRES_DB} OWNER ${POSTGRES_USER};"
+gosu postgres psql -h 127.0.0.1 -tc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1 || \
+    gosu postgres psql -h 127.0.0.1 -c "CREATE DATABASE ${POSTGRES_DB} OWNER ${POSTGRES_USER};"
 
 # Enable PostGIS extension
-su-exec postgres psql -h 127.0.0.1 -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS postgis;" || true
+gosu postgres psql -h 127.0.0.1 -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS postgis;" || true
 
 # ===== Start Redis =====
 bashio::log.info "Starting Redis..."
