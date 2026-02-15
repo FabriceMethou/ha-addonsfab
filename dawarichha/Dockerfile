@@ -14,7 +14,7 @@ RUN apk add --no-cache \
     && chown -R postgres:postgres /run/postgresql /var/lib/postgresql
 
 # Pull the Dawarich application image contents
-COPY --from=freikin/dawarich:latest /app /app
+COPY --from=freikin/dawarich:latest /var/app /var/app
 COPY --from=freikin/dawarich:latest /usr/local/bundle /usr/local/bundle
 
 # Install Ruby runtime needed by the app
@@ -30,7 +30,7 @@ RUN apk add --no-cache \
     proj \
     gdal
 
-WORKDIR /app
+WORKDIR /var/app
 
 COPY run.sh /
 RUN chmod a+x /run.sh
