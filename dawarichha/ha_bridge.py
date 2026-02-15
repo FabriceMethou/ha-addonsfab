@@ -59,16 +59,19 @@ def load_config():
         sys.exit(1)
 
     # Build person → API key mapping from DAWARICH_USERS list
+    # Accepts either "fabrice" or "person.fabrice" — normalizes to "person.fabrice"
     user_map = {}
     for entry in opts.get("DAWARICH_USERS", []):
         person_id = entry.get("ha_person", "").strip()
         key = entry.get("api_key", "").strip()
         if person_id and key:
+            if not person_id.startswith("person."):
+                person_id = f"person.{person_id}"
             user_map[person_id] = key
 
     return {
         "user_map": user_map,
-        "home_wifi_ssids": [s.lower() for s in opts.get("HOME_WIFI_SSIDS", [])],
+        "home_wifi_names": [s.lower() for s in opts.get("HOME_WIFI_NAMES", [])],
         "car_bt_devices": [s.lower() for s in opts.get("CAR_BLUETOOTH_DEVICES", [])],
         "min_distance_m": opts.get("BRIDGE_MIN_DISTANCE_METERS", 50),
         "interval_driving": opts.get("BRIDGE_INTERVAL_DRIVING", 10),
@@ -187,17 +190,19 @@ def detect_activity_state(all_states, device_name, config):
     Determine the current activity state for a device.
     Returns one of: "home", "driving", "cycling", "walking", "stationary"
     """
-    # 1. Check WiFi SSID for home detection
+    # 1. Check WiFi name for home detection (from person's phone sensor)
     wifi_state, wifi_attrs = get_sensor_value(all_states, device_name, "wifi_connection")
-    current_ssid = None
+    current_wifi = None
     if wifi_state is not None:
-        # The SSID can be in the state itself or in attributes
-        current_ssid = wifi_attrs.get("ssid") or wifi_attrs.get("SSID")
-        if current_ssid is None and wifi_state not in ("0", "disconnected", "off"):
-            current_ssid = wifi_state
+        # WiFi name can be in attributes (ssid/SSID) or in the sensor state itself
+        current_wifi = (wifi_attrs.get("current_wifi")
+                        or wifi_attrs.get("ssid")
+                        or wifi_attrs.get("SSID"))
+        if current_wifi is None and wifi_state not in ("0", "disconnected", "off", "<not connected>"):
+            current_wifi = wifi_state
 
-    if current_ssid and current_ssid.lower() in config["home_wifi_ssids"]:
-        return "home", current_ssid
+    if current_wifi and current_wifi.lower() in config["home_wifi_names"]:
+        return "home", current_wifi
 
     # 2. Check activity sensor
     activity, _ = get_sensor_value(all_states, device_name, "detected_activity")
@@ -216,18 +221,22 @@ def detect_activity_state(all_states, device_name, config):
             if car_connected:
                 break
 
-    # 4. Determine state
-    if activity == "in_vehicle" or car_connected:
-        return "driving", current_ssid
+    # 4. Check Android Auto
+    aa_entity = all_states.get(f"binary_sensor.{device_name}_android_auto")
+    android_auto = aa_entity and aa_entity.get("state") == "on"
+
+    # 5. Determine state
+    if activity == "in_vehicle" or car_connected or android_auto:
+        return "driving", current_wifi
     elif activity == "on_bicycle":
-        return "cycling", current_ssid
+        return "cycling", current_wifi
     elif activity in ("walking", "running", "on_foot"):
-        return "walking", current_ssid
+        return "walking", current_wifi
     elif activity == "still":
-        return "stationary", current_ssid
+        return "stationary", current_wifi
     else:
         # Unknown activity — default to stationary
-        return "stationary", current_ssid
+        return "stationary", current_wifi
 
 
 def get_interval_for_state(state, config):
@@ -245,7 +254,7 @@ def get_interval_for_state(state, config):
 # Build OwnTracks payload
 # ---------------------------------------------------------------------------
 
-def build_payload(person_entity, all_states, device_name, current_ssid):
+def build_payload(person_entity, all_states, device_name, current_wifi):
     """Build an OwnTracks-compatible location payload."""
     attrs = person_entity.get("attributes", {})
     lat = attrs.get("latitude")
@@ -272,7 +281,7 @@ def build_payload(person_entity, all_states, device_name, current_ssid):
     vel = int(float(speed)) if speed is not None else 0
 
     # Connection type
-    conn = "w" if current_ssid else "m"
+    conn = "w" if current_wifi else "m"
 
     payload = {
         "_type": "location",
@@ -297,8 +306,8 @@ def build_payload(person_entity, all_states, device_name, current_ssid):
     if bs > 0:
         payload["bs"] = bs
 
-    if current_ssid:
-        payload["SSID"] = current_ssid
+    if current_wifi:
+        payload["SSID"] = current_wifi
 
     return payload
 
@@ -374,12 +383,30 @@ def main():
     log.info("Tracking %d person(s): %s",
              len(user_map), ", ".join(user_map.keys()))
     log.info("Bridge config: home_wifi=%s, car_bt=%s, min_dist=%dm",
-             config["home_wifi_ssids"], config["car_bt_devices"],
+             config["home_wifi_names"], config["car_bt_devices"],
              config["min_distance_m"])
     log.info("Intervals: driving=%ds, cycling=%ds, walking=%ds, stationary=%ds, home=%s",
              config["interval_driving"], config["interval_cycling"],
              config["interval_walking"], config["interval_stationary"],
              f"{config['interval_home']}s" if config["interval_home"] > 0 else "disabled")
+
+    # Log device resolution for each person on first successful fetch
+    initial_states = None
+    while not initial_states:
+        initial_states = ha_get_all_states()
+        if not initial_states:
+            time.sleep(5)
+    for person_id in user_map:
+        person_entity = initial_states.get(person_id)
+        if person_entity:
+            device = device_name_from_person(person_entity, initial_states)
+            source = person_entity.get("attributes", {}).get("source", "unknown")
+            friendly = person_entity.get("attributes", {}).get("friendly_name", person_id)
+            log.info("  %s (%s) -> %s -> sensors: %s_*",
+                     person_id, friendly, source, device)
+        else:
+            log.warning("  %s: NOT FOUND in HA — check the name in DAWARICH_USERS",
+                        person_id)
 
     # Fast base poll loop (5 seconds)
     BASE_POLL = 5
@@ -407,7 +434,7 @@ def main():
 
             lat, lon = float(lat), float(lon)
             device_name = device_name_from_person(person_entity, all_states)
-            activity_state, current_ssid = detect_activity_state(
+            activity_state, current_wifi = detect_activity_state(
                 all_states, device_name, config)
 
             push, reason = should_push(
@@ -419,7 +446,7 @@ def main():
                 continue
 
             payload = build_payload(
-                person_entity, all_states, device_name, current_ssid)
+                person_entity, all_states, device_name, current_wifi)
             if payload is None:
                 continue
 
