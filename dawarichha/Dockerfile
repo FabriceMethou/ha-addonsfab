@@ -5,7 +5,7 @@ FROM ${BUILD_FROM}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql \
     postgresql-contrib \
-    postgresql-15-postgis-3 \
+    postgresql-17-postgis-3 \
     redis-server \
     gosu \
     curl \
