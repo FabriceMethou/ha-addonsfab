@@ -1,6 +1,6 @@
 name: "Dawarich"
 description: "Self-hosted alternative to Google Timeline for location history tracking and visualization."
-version: "0.2.6"
+version: "0.2.7"
 slug: "dawarich"
 init: false
 arch:
@@ -42,6 +42,12 @@ options:
   BRIDGE_INTERVAL_WALKING: 30
   BRIDGE_INTERVAL_STATIONARY: 300
   BRIDGE_INTERVAL_HOME: 0
+  SMTP_SERVER: ""
+  SMTP_PORT: 587
+  SMTP_DOMAIN: ""
+  SMTP_USERNAME: ""
+  SMTP_PASSWORD: ""
+  SMTP_FROM: ""
 
 schema:
   POSTGRES_USER: str
@@ -67,3 +73,9 @@ schema:
   BRIDGE_INTERVAL_WALKING: int
   BRIDGE_INTERVAL_STATIONARY: int
   BRIDGE_INTERVAL_HOME: int
+  SMTP_SERVER: str
+  SMTP_PORT: int
+  SMTP_DOMAIN: str
+  SMTP_USERNAME: str
+  SMTP_PASSWORD: password
+  SMTP_FROM: str
