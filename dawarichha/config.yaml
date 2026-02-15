@@ -1,6 +1,6 @@
 name: "Dawarich"
 description: "Self-hosted alternative to Google Timeline for location history tracking and visualization."
-version: "0.2.0"
+version: "0.2.1"
 slug: "dawarich"
 init: false
 arch:
@@ -26,7 +26,11 @@ options:
   APPLICATION_PROTOCOL: "http"
   BACKGROUND_PROCESSING_CONCURRENCY: 10
   HA_BRIDGE_ENABLED: true
-  DAWARICH_API_KEY: ""
+  DAWARICH_USERS:
+    - ha_person: "person.fabrice"
+      api_key: ""
+    - ha_person: "person.katja"
+      api_key: ""
   HOME_WIFI_SSIDS:
     - "MyHomeWiFi"
   CAR_BLUETOOTH_DEVICES:
@@ -48,7 +52,9 @@ schema:
   APPLICATION_PROTOCOL: "list(http|https)"
   BACKGROUND_PROCESSING_CONCURRENCY: int
   HA_BRIDGE_ENABLED: bool
-  DAWARICH_API_KEY: str
+  DAWARICH_USERS:
+    - ha_person: str
+      api_key: password
   HOME_WIFI_SSIDS:
     - str
   CAR_BLUETOOTH_DEVICES:
