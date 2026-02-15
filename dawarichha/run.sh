@@ -23,7 +23,7 @@ bashio::log.info "Starting PostgreSQL..."
 if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
     bashio::log.info "Initializing PostgreSQL database..."
     chown -R postgres:postgres "${PG_DATA}"
-    gosu postgres /usr/lib/postgresql/17/bin/initdb -D "${PG_DATA}"
+    gosu postgres /usr/lib/postgresql/15/bin/initdb -D "${PG_DATA}"
     # Allow local connections
     echo "host all all 0.0.0.0/0 md5" >> "${PG_DATA}/pg_hba.conf"
     echo "local all all trust" >> "${PG_DATA}/pg_hba.conf"
@@ -32,7 +32,7 @@ if [ ! -f "${PG_DATA}/PG_VERSION" ]; then
 fi
 
 chown -R postgres:postgres "${DATA_DIR}" /run/postgresql
-gosu postgres /usr/lib/postgresql/17/bin/pg_ctl -D "${PG_DATA}" -l "${DATA_DIR}/postgresql.log" start
+gosu postgres /usr/lib/postgresql/15/bin/pg_ctl -D "${PG_DATA}" -l "${DATA_DIR}/postgresql.log" start
 
 # Wait for PostgreSQL to be ready
 until gosu postgres pg_isready -h 127.0.0.1; do
