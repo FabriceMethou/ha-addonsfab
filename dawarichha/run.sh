@@ -100,6 +100,20 @@ export SELF_HOSTED="true"
 export STORE_GEODATA="true"
 export PROMETHEUS_EXPORTER_ENABLED="false"
 
+# ===== SMTP configuration (optional) =====
+SMTP_SERVER=$(bashio::config 'SMTP_SERVER')
+if [ -n "${SMTP_SERVER}" ]; then
+    export SMTP_SERVER
+    export SMTP_PORT=$(bashio::config 'SMTP_PORT')
+    export SMTP_DOMAIN=$(bashio::config 'SMTP_DOMAIN')
+    export SMTP_USERNAME=$(bashio::config 'SMTP_USERNAME')
+    export SMTP_PASSWORD=$(bashio::config 'SMTP_PASSWORD')
+    export SMTP_FROM=$(bashio::config 'SMTP_FROM')
+    bashio::log.info "SMTP configured: ${SMTP_SERVER}:${SMTP_PORT} from ${SMTP_FROM}"
+else
+    bashio::log.info "SMTP not configured — email features (password reset, digests) will be unavailable."
+fi
+
 cd /var/app
 
 # ===== Diagnostics =====
