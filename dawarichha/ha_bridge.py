@@ -134,8 +134,10 @@ def dawarich_push(api_key, payload):
     """Push an OwnTracks location point to Dawarich. Returns True on success."""
     url = f"{DAWARICH_URL}/api/v1/owntracks/points?api_key={api_key}"
     data = json.dumps(payload).encode()
+    # Set Host header without port to pass Rails HostAuthorization
     req = urllib.request.Request(url, data=data, headers={
         "Content-Type": "application/json",
+        "Host": "localhost",
     }, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
