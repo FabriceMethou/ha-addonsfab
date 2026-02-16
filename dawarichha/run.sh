@@ -83,7 +83,7 @@ export DATABASE_PORT="5432"
 export DATABASE_USERNAME="${POSTGRES_USER}"
 export DATABASE_PASSWORD="${POSTGRES_PASSWORD}"
 export DATABASE_NAME="${POSTGRES_DB}"
-# Build APPLICATION_HOSTS — always include localhost for internal bridge communication
+# Build APPLICATION_HOSTS — used by Dawarich for URL generation
 APPLICATION_HOSTS="localhost"
 if [ "${LOCAL_HOST}" != "localhost" ] && [ -n "${LOCAL_HOST}" ]; then
     APPLICATION_HOSTS="${APPLICATION_HOSTS},${LOCAL_HOST}"

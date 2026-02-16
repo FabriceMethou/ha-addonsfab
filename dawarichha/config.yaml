@@ -1,6 +1,6 @@
 name: "Dawarich"
 description: "Self-hosted alternative to Google Timeline for location history tracking and visualization."
-version: "0.2.9"
+version: "0.3.0"
 slug: "dawarich"
 init: false
 arch:
@@ -9,6 +9,11 @@ arch:
 
 startup: services
 homeassistant_api: true
+ingress: true
+ingress_port: 3000
+ingress_stream: true
+panel_icon: "mdi:map-marker-path"
+panel_title: "Dawarich"
 ports:
   3000/tcp: 3000
 map:
