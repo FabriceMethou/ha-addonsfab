@@ -180,12 +180,15 @@ def device_name_from_person(person_state, all_states):
     return person_state["entity_id"].replace("person.", "")
 
 
-def get_sensor_value(all_states, device_name, sensor_suffix):
-    """Get a sensor state for a device. Returns (state, attributes) or (None, {})."""
-    entity_id = f"sensor.{device_name}_{sensor_suffix}"
-    entity = all_states.get(entity_id)
-    if entity and entity.get("state") not in (None, "unknown", "unavailable"):
-        return entity["state"], entity.get("attributes", {})
+def get_sensor_value(all_states, device_name, sensor_suffix, alt_suffixes=None):
+    """Get a sensor state for a device. Tries alternative suffixes if the primary fails.
+    Returns (state, attributes) or (None, {})."""
+    suffixes = [sensor_suffix] + (alt_suffixes or [])
+    for suffix in suffixes:
+        entity_id = f"sensor.{device_name}_{suffix}"
+        entity = all_states.get(entity_id)
+        if entity and entity.get("state") not in (None, "unknown", "unavailable"):
+            return entity["state"], entity.get("attributes", {})
     return None, {}
 
 
@@ -195,7 +198,7 @@ def detect_activity_state(all_states, device_name, config):
     Returns one of: "home", "driving", "cycling", "walking", "stationary"
     """
     # 1. Check WiFi name for home detection (from person's phone sensor)
-    wifi_state, wifi_attrs = get_sensor_value(all_states, device_name, "wifi_connection")
+    wifi_state, wifi_attrs = get_sensor_value(all_states, device_name, "wi_fi_connection", ["wifi_connection"])
     current_wifi = None
     if wifi_state is not None:
         # WiFi name can be in attributes (ssid/SSID) or in the sensor state itself
@@ -212,7 +215,7 @@ def detect_activity_state(all_states, device_name, config):
     activity, _ = get_sensor_value(all_states, device_name, "detected_activity")
 
     # 3. Check Bluetooth for car detection
-    _, bt_attrs = get_sensor_value(all_states, device_name, "bluetooth_connection")
+    _, bt_attrs = get_sensor_value(all_states, device_name, "bluetooth_connection", ["ble_connection"])
     connected_bt = bt_attrs.get("connected_paired_devices", [])
     car_connected = False
     if connected_bt and config["car_bt_devices"]:
