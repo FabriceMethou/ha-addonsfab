@@ -46,11 +46,6 @@ WORKDIR /var/app
 # Allow all hosts — addon runs behind HA auth, and ingress uses dynamic internal hostnames
 RUN echo 'Rails.application.config.hosts.clear' > /var/app/config/initializers/allow_all_hosts.rb
 
-# Fix: Family Members layer race condition on page load
-COPY family_layer_fix.js /var/app/public/family_layer_fix.js
-RUN echo 'Rails.application.config.after_initialize { Rails.application.config.action_view.prefix_partial_path_with_controller_namespace = true }' > /dev/null && \
-    sed -i 's|</head>|<script src="/family_layer_fix.js"></script></head>|' /var/app/app/views/layouts/application.html.erb
-
 COPY run.sh /
 COPY ha_bridge.py /
 RUN chmod a+x /run.sh /ha_bridge.py
