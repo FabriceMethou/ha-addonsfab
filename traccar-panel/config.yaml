@@ -1,0 +1,21 @@
+name: "Traccar Panel"
+version: "0.1.0"
+slug: "traccar-panel"
+description: "Modern Life360-style frontend for Traccar GPS tracking"
+init: false
+arch:
+  - amd64
+  - aarch64
+startup: services
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:map-marker-multiple
+panel_title: "Family Map"
+options:
+  traccar_url: "http://192.168.1.100:8082"
+  traccar_username: "admin"
+  traccar_password: "admin"
+schema:
+  traccar_url: str
+  traccar_username: str
+  traccar_password: password
