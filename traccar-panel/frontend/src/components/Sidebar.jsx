@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import useTraccarStore from '../store/useTraccarStore.js'
 import DeviceCard from './DeviceCard.jsx'
+import DeviceTripsView from './DeviceTripsView.jsx'
 import PlacesList from './PlacesList.jsx'
 import { HistoryControls } from './HistoryPlayer.jsx'
 import EventLog from './EventLog.jsx'
@@ -58,15 +59,17 @@ export default function Sidebar({ mapRef }) {
   const loading = useTraccarStore((s) => s.loading)
   const { setSelectedDevice, setActiveTab, toggleDarkMode, refresh } = useTraccarStore()
 
+  const [profileDevice, setProfileDevice] = useState(null) // null = list view; device object = profile view
   const [sortBy, setSortBy] = useState('lastSeen')
   const [filterText, setFilterText] = useState('')
   const [notifDismissed, setNotifDismissed] = useState(
     () => localStorage.getItem('notifBannerDismissed') === 'true'
   )
 
-  function handleDeviceClick(id) {
-    setSelectedDevice(id)
-    const pos = useTraccarStore.getState().positions[id]
+  function handleDeviceClick(device) {
+    setSelectedDevice(device.id)
+    setProfileDevice(device)
+    const pos = useTraccarStore.getState().positions[device.id]
     if (pos && mapRef?.current) {
       mapRef.current.flyTo([pos.latitude, pos.longitude], 15)
     }
@@ -175,48 +178,56 @@ export default function Sidebar({ mapRef }) {
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'live' && (
-          <div className="flex flex-col h-full">
-            {/* Sort + Search controls */}
-            <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-              <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">Sort:</span>
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-                className="text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-1.5 py-0.5"
-              >
-                {SORT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-            {/* Search filter */}
-            <div className="px-3 pb-1">
-              <input
-                type="search"
-                placeholder="Search by name..."
-                value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
-                className="w-full text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1 placeholder-gray-400"
-              />
-            </div>
+          profileDevice ? (
+            <DeviceTripsView
+              device={profileDevice}
+              onBack={() => setProfileDevice(null)}
+              mapRef={mapRef}
+            />
+          ) : (
+            <div className="flex flex-col h-full">
+              {/* Sort + Search controls */}
+              <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+                <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">Sort:</span>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-1.5 py-0.5"
+                >
+                  {SORT_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              {/* Search filter */}
+              <div className="px-3 pb-1">
+                <input
+                  type="search"
+                  placeholder="Search by name..."
+                  value={filterText}
+                  onChange={(e) => setFilterText(e.target.value)}
+                  className="w-full text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1 placeholder-gray-400"
+                />
+              </div>
 
-            <div className="flex-1 overflow-y-auto px-2 pb-2">
-              {devices.length === 0 ? (
-                <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">No devices found.</p>
-              ) : filteredDevices.length === 0 ? (
-                <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">No match for "{filterText}".</p>
-              ) : (
-                filteredDevices.map((device) => (
-                  <DeviceCard
-                    key={device.id}
-                    device={device}
-                    isSelected={selectedDeviceId === device.id}
-                    onClick={() => handleDeviceClick(device.id)}
-                  />
-                ))
-              )}
+              <div className="flex-1 overflow-y-auto px-2 pb-2">
+                {devices.length === 0 ? (
+                  <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">No devices found.</p>
+                ) : filteredDevices.length === 0 ? (
+                  <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">No match for "{filterText}".</p>
+                ) : (
+                  filteredDevices.map((device) => (
+                    <DeviceCard
+                      key={device.id}
+                      device={device}
+                      isSelected={selectedDeviceId === device.id}
+                      onClick={() => handleDeviceClick(device)}
+                    />
+                  ))
+                )}
+              </div>
             </div>
-          </div>
+          )
         )}
 
         {activeTab === 'places' && <PlacesList mapRef={mapRef} />}
