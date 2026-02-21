@@ -130,7 +130,7 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
       )}
 
       <div className="overflow-y-auto max-h-72">
-        {trips.map((trip, i) => {
+        {trips.map((trip) => {
           const start = new Date(trip.startTime)
           const distM = trip.distance ?? 0
           const durMs = trip.duration ?? 0
@@ -140,7 +140,7 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
           const isSelected = selectedStartTime === trip.startTime
           return (
             <button
-              key={i}
+              key={trip.startTime}
               onClick={() => onSelectTrip(trip)}
               className={`w-full text-left px-3 py-2 border-b border-gray-100 dark:border-gray-700 transition-colors ${
                 isSelected

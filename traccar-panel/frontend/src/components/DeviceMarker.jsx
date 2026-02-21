@@ -88,7 +88,7 @@ export default function DeviceMarker({ device, position, onClick }) {
     <Marker
       position={[latitude, longitude]}
       icon={icon}
-      eventHandlers={{ click: () => onClick?.(device.id) }}
+      eventHandlers={{ click: () => onClick?.(device) }}
     >
       {/* Name label: always visible for selected device, hover-only for others */}
       <Tooltip permanent={isSelected} direction="top" offset={[0, -62]}>

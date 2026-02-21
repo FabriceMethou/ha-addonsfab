@@ -137,7 +137,7 @@ export default function Map({ mapRef }) {
   const mapTile = useTraccarStore((s) => s.mapTile)
   const darkMode = useTraccarStore((s) => s.darkMode)
   const setMapTile = useTraccarStore((s) => s.setMapTile)
-  const { setSelectedDevice } = useTraccarStore()
+  const { openDeviceProfile } = useTraccarStore()
 
   const tile = TILES[mapTile] ?? TILES.osm
 
@@ -155,7 +155,7 @@ export default function Map({ mapRef }) {
               key={device.id}
               device={device}
               position={positions[device.id]}
-              onClick={setSelectedDevice}
+              onClick={openDeviceProfile}
             />
           ))}
         </MarkerClusterGroup>

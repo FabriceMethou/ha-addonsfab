@@ -106,7 +106,7 @@ export default function DayTimeline({ deviceId, onSelectTrip, selectedStartTime 
             const maxKmh = Math.round((item.maxSpeed ?? 0) * 1.852)
 
             return (
-              <div key={i} className="flex gap-2">
+              <div key={`trip-${item.startTime}`} className="flex gap-2">
                 {/* Vertical timeline rail */}
                 <div className="flex flex-col items-center w-4 flex-shrink-0">
                   <div className="w-2.5 h-2.5 rounded-full bg-blue-400 mt-2 flex-shrink-0 ring-2 ring-white dark:ring-gray-800" />
@@ -145,7 +145,7 @@ export default function DayTimeline({ deviceId, onSelectTrip, selectedStartTime 
           // Stop entry
           const durMs = item.duration ?? 0
           return (
-            <div key={i} className="flex gap-2">
+            <div key={`stop-${item.startTime}`} className="flex gap-2">
               <div className="flex flex-col items-center w-4 flex-shrink-0">
                 <div className="w-2.5 h-2.5 rounded-full bg-gray-300 dark:bg-gray-600 mt-2 flex-shrink-0 ring-2 ring-white dark:ring-gray-800" />
                 {!isLast && <div className="w-0.5 flex-1 bg-gray-200 dark:bg-gray-700 min-h-[8px]" />}

@@ -53,13 +53,13 @@ export default function Sidebar({ mapRef }) {
   const devices = useTraccarStore((s) => s.devices)
   const positions = useTraccarStore((s) => s.positions)
   const selectedDeviceId = useTraccarStore((s) => s.selectedDeviceId)
+  const profileDevice = useTraccarStore((s) => s.profileDevice)
   const activeTab = useTraccarStore((s) => s.activeTab)
   const connected = useTraccarStore((s) => s.connected)
   const darkMode = useTraccarStore((s) => s.darkMode)
   const loading = useTraccarStore((s) => s.loading)
-  const { setSelectedDevice, setActiveTab, toggleDarkMode, refresh } = useTraccarStore()
+  const { setProfileDevice, openDeviceProfile, setActiveTab, toggleDarkMode, refresh } = useTraccarStore()
 
-  const [profileDevice, setProfileDevice] = useState(null) // null = list view; device object = profile view
   const [sortBy, setSortBy] = useState('lastSeen')
   const [filterText, setFilterText] = useState('')
   const [notifDismissed, setNotifDismissed] = useState(
@@ -67,8 +67,7 @@ export default function Sidebar({ mapRef }) {
   )
 
   function handleDeviceClick(device) {
-    setSelectedDevice(device.id)
-    setProfileDevice(device)
+    openDeviceProfile(device) // sets selectedDeviceId + profileDevice + activeTab:'live'
     const pos = useTraccarStore.getState().positions[device.id]
     if (pos && mapRef?.current) {
       mapRef.current.flyTo([pos.latitude, pos.longitude], 15)
