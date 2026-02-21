@@ -1,33 +1,65 @@
-import React, { useRef } from 'react'
+import React, { useState } from 'react'
 import useTraccarStore from '../store/useTraccarStore.js'
 import DeviceCard from './DeviceCard.jsx'
 import PlacesList from './PlacesList.jsx'
 import { HistoryControls } from './HistoryPlayer.jsx'
 import EventLog from './EventLog.jsx'
+import WeeklyReport from './WeeklyReport.jsx'
 
 const TABS = [
   { id: 'live', label: 'Live' },
   { id: 'places', label: 'Places' },
   { id: 'history', label: 'History' },
   { id: 'events', label: 'Events' },
+  { id: 'report', label: 'Report' },
 ]
+
+const SORT_OPTIONS = [
+  { value: 'lastSeen', label: 'Last seen' },
+  { value: 'driving', label: 'Driving first' },
+  { value: 'name', label: 'Name A–Z' },
+]
+
+function sortDevices(devices, positions, sortBy) {
+  return [...devices].sort((a, b) => {
+    if (sortBy === 'name') return a.name.localeCompare(b.name)
+
+    if (sortBy === 'driving') {
+      const aKmh = Math.round((positions[a.id]?.speed ?? 0) * 1.852)
+      const bKmh = Math.round((positions[b.id]?.speed ?? 0) * 1.852)
+      const aDriving = aKmh > 5
+      const bDriving = bKmh > 5
+      if (aDriving !== bDriving) return aDriving ? -1 : 1
+      return bKmh - aKmh
+    }
+
+    // lastSeen — most recent fixTime first, offline devices last
+    const aTime = positions[a.id]?.fixTime ? new Date(positions[a.id].fixTime).getTime() : 0
+    const bTime = positions[b.id]?.fixTime ? new Date(positions[b.id].fixTime).getTime() : 0
+    return bTime - aTime
+  })
+}
 
 export default function Sidebar({ mapRef }) {
   const devices = useTraccarStore((s) => s.devices)
+  const positions = useTraccarStore((s) => s.positions)
   const selectedDeviceId = useTraccarStore((s) => s.selectedDeviceId)
   const activeTab = useTraccarStore((s) => s.activeTab)
   const connected = useTraccarStore((s) => s.connected)
   const darkMode = useTraccarStore((s) => s.darkMode)
   const { setSelectedDevice, setActiveTab, toggleDarkMode } = useTraccarStore()
 
+  const [sortBy, setSortBy] = useState('lastSeen')
+
   function handleDeviceClick(id) {
     setSelectedDevice(id)
-    // Fly to device on map
     const pos = useTraccarStore.getState().positions[id]
     if (pos && mapRef?.current) {
       mapRef.current.flyTo([pos.latitude, pos.longitude], 15)
     }
   }
+
+  const sortedDevices = sortDevices(devices, positions, sortBy)
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700">
@@ -35,7 +67,6 @@ export default function Sidebar({ mapRef }) {
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700">
         <span className="font-bold text-sm dark:text-white">Family Map</span>
         <div className="flex items-center gap-2">
-          {/* Connection indicator */}
           <span
             title={connected ? 'Connected' : 'Disconnected'}
             className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`}
@@ -79,19 +110,35 @@ export default function Sidebar({ mapRef }) {
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'live' && (
-          <div className="p-2">
-            {devices.length === 0 ? (
-              <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">No devices found.</p>
-            ) : (
-              devices.map((device) => (
-                <DeviceCard
-                  key={device.id}
-                  device={device}
-                  isSelected={selectedDeviceId === device.id}
-                  onClick={() => handleDeviceClick(device.id)}
-                />
-              ))
-            )}
+          <div className="flex flex-col h-full">
+            {/* Sort control */}
+            <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+              <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">Sort:</span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="flex-1 text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-1.5 py-0.5"
+              >
+                {SORT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-2 pb-2">
+              {devices.length === 0 ? (
+                <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">No devices found.</p>
+              ) : (
+                sortedDevices.map((device) => (
+                  <DeviceCard
+                    key={device.id}
+                    device={device}
+                    isSelected={selectedDeviceId === device.id}
+                    onClick={() => handleDeviceClick(device.id)}
+                  />
+                ))
+              )}
+            </div>
           </div>
         )}
 
@@ -100,6 +147,8 @@ export default function Sidebar({ mapRef }) {
         {activeTab === 'history' && <HistoryControls mapRef={mapRef} />}
 
         {activeTab === 'events' && <EventLog />}
+
+        {activeTab === 'report' && <WeeklyReport />}
       </div>
     </div>
   )

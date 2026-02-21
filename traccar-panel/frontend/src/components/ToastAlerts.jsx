@@ -5,12 +5,14 @@ const ICONS = {
   geofenceEnter: '📍',
   geofenceExit: '🚪',
   lowBattery: '🔋',
+  deviceOverspeed: '⚡',
 }
 
 const COLORS = {
   geofenceEnter: 'border-green-400 bg-green-50 dark:bg-green-900/40',
   geofenceExit: 'border-orange-400 bg-orange-50 dark:bg-orange-900/40',
   lowBattery: 'border-red-400 bg-red-50 dark:bg-red-900/40',
+  deviceOverspeed: 'border-yellow-400 bg-yellow-50 dark:bg-yellow-900/40',
 }
 
 function Toast({ alert, onDismiss }) {
@@ -23,6 +25,7 @@ function Toast({ alert, onDismiss }) {
   if (alert.type === 'geofenceEnter') body = <>arrived at <strong>{alert.geofenceName}</strong></>
   else if (alert.type === 'geofenceExit') body = <>left <strong>{alert.geofenceName}</strong></>
   else if (alert.type === 'lowBattery') body = <>battery low ({alert.battery}%)</>
+  else if (alert.type === 'deviceOverspeed') body = <>speeding{alert.speedKmh ? ` — ${alert.speedKmh} km/h` : ''}</>
   else body = alert.type
 
   return (

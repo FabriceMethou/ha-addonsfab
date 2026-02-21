@@ -102,20 +102,21 @@ const useTraccarStore = create((set, get) => ({
     }
   },
 
-  // Handle incoming WS events (geofenceEnter, geofenceExit, etc.)
+  // Handle incoming WS events (geofenceEnter, geofenceExit, deviceOverspeed, etc.)
   handleWsEvent: (event) => {
-    const { type, deviceId, geofenceId } = event
-    if (type !== 'geofenceEnter' && type !== 'geofenceExit') return
+    const { type, deviceId, geofenceId, attributes } = event
     const { devices, geofences } = get()
     const device = devices.find((d) => d.id === deviceId)
-    const geofence = geofences.find((g) => g.id === geofenceId)
-    if (!device || !geofence) return
-    get().pushAlert({
-      type,
-      deviceName: device.name,
-      geofenceName: geofence.name,
-      ts: Date.now(),
-    })
+
+    if (type === 'geofenceEnter' || type === 'geofenceExit') {
+      const geofence = geofences.find((g) => g.id === geofenceId)
+      if (!device || !geofence) return
+      get().pushAlert({ type, deviceName: device.name, geofenceName: geofence.name, ts: Date.now() })
+    } else if (type === 'deviceOverspeed') {
+      if (!device) return
+      const speedKmh = Math.round((attributes?.speed ?? 0) * 1.852)
+      get().pushAlert({ type, deviceName: device.name, speedKmh, ts: Date.now() })
+    }
   },
 
   // Derived helpers
