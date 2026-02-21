@@ -9,6 +9,7 @@ import logging
 import os
 import time
 from collections import OrderedDict
+from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 from aiohttp import web, WSMsgType
@@ -211,7 +212,9 @@ async def traccar_ws_task(app: web.Application):
             await asyncio.sleep(10)
             continue
 
-        ws_url = TRACCAR_URL.replace("http://", "ws://").replace("https://", "wss://") + "/api/socket"
+        _parsed = urlparse(TRACCAR_URL)
+        _ws_scheme = "wss" if _parsed.scheme == "https" else "ws"
+        ws_url = urlunparse(_parsed._replace(scheme=_ws_scheme)) + "/api/socket"
         log.info("Connecting to Traccar WS: %s", ws_url)
         try:
             async with http.ws_connect(
@@ -339,6 +342,15 @@ async def geocode_worker(app: web.Application):
                 data = await resp.json()
                 address = data.get("display_name", address)
                 log.debug("Nominatim OK (%.0f ms): %.4f,%.4f → %s", elapsed_ms, lat, lon, address[:60])
+            elif resp.status == 429:
+                # Rate-limited: resolve this request with the coordinate fallback immediately,
+                # then pause the entire geocode worker for 60 s before accepting new requests.
+                log.warning("Nominatim rate-limited (429) — resolving with fallback and backing off 60 s")
+                if not fut.done():
+                    fut.set_result(address)
+                _last_nominatim = time.monotonic()
+                await asyncio.sleep(60)
+                continue
             else:
                 log.warning("Nominatim HTTP %s for (%.4f, %.4f)", resp.status, lat, lon)
         except Exception as exc:

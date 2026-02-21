@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import useTraccarStore from '../store/useTraccarStore.js'
 import { parseTraccarArea, areaCenter } from '../utils/parseTraccarArea.js'
@@ -26,9 +26,24 @@ function PlaceAvatar({ name, occupied }) {
 
 export default function PlacesList({ mapRef }) {
   const geofences = useTraccarStore((s) => s.geofences)
-  const presence = useTraccarStore((s) => s.getGeofencePresence())
   const devices = useTraccarStore((s) => s.devices)
   const positions = useTraccarStore((s) => s.positions)
+
+  // Compute geofence presence via useMemo so it only recalculates when the
+  // underlying data changes — avoids allocating a new object on every render.
+  const presence = useMemo(() => {
+    const result = {}
+    for (const gf of geofences) result[gf.id] = []
+    for (const device of devices) {
+      const pos = positions[device.id]
+      if (pos?.geofenceIds) {
+        for (const gfId of pos.geofenceIds) {
+          if (result[gfId] !== undefined) result[gfId].push(device.name)
+        }
+      }
+    }
+    return result
+  }, [geofences, devices, positions])
 
   const [selectedGfId, setSelectedGfId] = useState(null)
 
