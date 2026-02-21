@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { Polyline, Marker } from 'react-leaflet'
-import { format, subDays } from 'date-fns'
+import { format, subDays, isToday, isYesterday } from 'date-fns'
 import useTraccarStore from '../store/useTraccarStore.js'
 import { createAnimation } from '../utils/tripAnimation.js'
 import { routeDistanceKm } from '../utils/haversine.js'
@@ -8,6 +7,26 @@ import { routeDistanceKm } from '../utils/haversine.js'
 const KNOTS_TO_KMH = 1.852
 const SPEED_MULTIPLIERS = [1, 5, 10, 30]
 const MAX_POINTS = 10000
+
+function dayLabel(date) {
+  if (isToday(date)) return 'Today'
+  if (isYesterday(date)) return 'Yesterday'
+  return format(date, 'EEE d MMM')
+}
+
+// Groups an already-sorted (newest-first) trips array into [{label, trips}]
+function groupByDay(trips) {
+  const groups = []
+  for (const trip of trips) {
+    const label = dayLabel(new Date(trip.startTime))
+    if (groups.length === 0 || groups[groups.length - 1].label !== label) {
+      groups.push({ label, trips: [trip] })
+    } else {
+      groups[groups.length - 1].trips.push(trip)
+    }
+  }
+  return groups
+}
 
 function formatMs(ms) {
   const totalSec = Math.floor(ms / 1000)
@@ -155,7 +174,8 @@ export default function DeviceTripsView({ device, onBack, mapRef }) {
       animRef.current = anim
       setHasRoute(true)
       if (mapRef?.current) mapRef.current.flyTo([data[0].latitude, data[0].longitude], 13)
-      setPlaybackStatus('paused')
+      anim.play(speed)
+      setPlaybackStatus('playing')
     } catch (err) {
       if (err.name === 'AbortError') return
       setRouteError(err.message)
@@ -241,61 +261,72 @@ export default function DeviceTripsView({ device, onBack, mapRef }) {
         </p>
       )}
 
-      {/* Trip list */}
+      {/* Trip list — grouped by day with sticky headers */}
       <div className="overflow-y-auto flex-1">
-        {trips.map((trip, i) => {
-          const start = new Date(trip.startTime)
-          const end = new Date(trip.endTime)
-          const distM = trip.distance ?? 0
-          const durMs = trip.duration ?? 0
-          const maxKmh = Math.round((trip.maxSpeed ?? 0) * KNOTS_TO_KMH)
-          const isSelected = selectedTripStart === trip.startTime
+        {groupByDay(trips).map(({ label, trips: dayTrips }) => (
+          <React.Fragment key={label}>
+            {/* Day header */}
+            <div className="sticky top-0 z-10 px-3 py-1 bg-gray-50 dark:bg-gray-700/80 border-b border-gray-200 dark:border-gray-600 backdrop-blur-sm">
+              <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                {label}
+              </span>
+            </div>
 
-          return (
-            <button
-              key={i}
-              onClick={() => handleSelectTrip(trip)}
-              className={`w-full text-left px-3 py-2.5 border-b border-gray-100 dark:border-gray-700 transition-colors ${
-                isSelected
-                  ? 'bg-blue-50 dark:bg-blue-900/40 border-l-2 border-l-blue-500'
-                  : 'hover:bg-gray-50 dark:hover:bg-gray-700'
-              }`}
-            >
-              {/* Date + distance */}
-              <div className="flex items-center justify-between mb-0.5">
-                <span className="text-xs font-semibold dark:text-white">
-                  {format(start, 'EEE d MMM')}
-                </span>
-                <span className="text-xs text-blue-500 font-semibold">{formatDist(distM)}</span>
-              </div>
+            {dayTrips.map((trip) => {
+              const start = new Date(trip.startTime)
+              const end = new Date(trip.endTime)
+              const distM = trip.distance ?? 0
+              const durMs = trip.duration ?? 0
+              const maxKmh = Math.round((trip.maxSpeed ?? 0) * KNOTS_TO_KMH)
+              const isSelected = selectedTripStart === trip.startTime
 
-              {/* Departure → Arrival + duration + max speed */}
-              <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-                <span className="text-green-500 text-[10px]">▲</span>
-                <span>{format(start, 'HH:mm')}</span>
-                <span>→</span>
-                <span className="text-red-500 text-[10px]">▼</span>
-                <span>{format(end, 'HH:mm')}</span>
-                <span className="mx-0.5">·</span>
-                <span>{formatDuration(durMs)}</span>
-                {maxKmh > 0 && (
-                  <>
+              return (
+                <button
+                  key={trip.startTime}
+                  onClick={() => handleSelectTrip(trip)}
+                  className={`w-full text-left px-3 py-2.5 border-b border-gray-100 dark:border-gray-700 transition-colors ${
+                    isSelected
+                      ? 'bg-blue-50 dark:bg-blue-900/40 border-l-2 border-l-blue-500'
+                      : 'hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  {/* Distance on the right, nothing redundant on the left (day shown in header) */}
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-xs font-semibold dark:text-white">
+                      {format(start, 'HH:mm')}
+                    </span>
+                    <span className="text-xs text-blue-500 font-semibold">{formatDist(distM)}</span>
+                  </div>
+
+                  {/* Departure → Arrival + duration + max speed */}
+                  <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                    <span className="text-green-500 text-[10px]">▲</span>
+                    <span>{format(start, 'HH:mm')}</span>
+                    <span>→</span>
+                    <span className="text-red-500 text-[10px]">▼</span>
+                    <span>{format(end, 'HH:mm')}</span>
                     <span className="mx-0.5">·</span>
-                    <span>Max {maxKmh} km/h</span>
-                  </>
-                )}
-              </div>
+                    <span>{formatDuration(durMs)}</span>
+                    {maxKmh > 0 && (
+                      <>
+                        <span className="mx-0.5">·</span>
+                        <span>Max {maxKmh} km/h</span>
+                      </>
+                    )}
+                  </div>
 
-              {/* Addresses */}
-              {(trip.startAddress || trip.endAddress) && (
-                <p className="text-xs text-gray-400 dark:text-gray-500 truncate mt-0.5">
-                  {trip.startAddress ?? ''}
-                  {trip.endAddress ? ` → ${trip.endAddress}` : ''}
-                </p>
-              )}
-            </button>
-          )
-        })}
+                  {/* Addresses */}
+                  {(trip.startAddress || trip.endAddress) && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 truncate mt-0.5">
+                      {trip.startAddress ?? ''}
+                      {trip.endAddress ? ` → ${trip.endAddress}` : ''}
+                    </p>
+                  )}
+                </button>
+              )
+            })}
+          </React.Fragment>
+        ))}
       </div>
 
       {/* Route loading / error */}

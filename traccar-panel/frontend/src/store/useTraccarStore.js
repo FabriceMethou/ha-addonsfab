@@ -11,6 +11,7 @@ const useTraccarStore = create((set, get) => ({
 
   // UI state
   selectedDeviceId: null,
+  profileDevice: null,   // device object shown in the Life360-style profile view (null = list)
   activeTab: 'live', // 'live' | 'places' | 'history'
   darkMode: localStorage.getItem('darkMode') === 'true',
   mapTile: localStorage.getItem('mapTile') || 'osm', // 'osm' | 'satellite'
@@ -117,6 +118,13 @@ const useTraccarStore = create((set, get) => ({
   setTrips: (trips) => set({ trips }),
 
   setSelectedDevice: (id) => set({ selectedDeviceId: id }),
+
+  setProfileDevice: (device) => set({ profileDevice: device }),
+
+  // Open the Life360-style profile view for a device (from sidebar card or map marker).
+  // Always switches to the Live tab so the profile is visible.
+  openDeviceProfile: (device) =>
+    set({ profileDevice: device, selectedDeviceId: device?.id ?? null, activeTab: 'live' }),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 

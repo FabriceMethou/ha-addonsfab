@@ -62,6 +62,7 @@ export default function EventLog() {
               )
                 .then((r) => (r.ok ? r.json() : []))
                 .then((evs) => (Array.isArray(evs) ? evs : []))
+                .catch(() => []) // network error for one device must not fail all
             )
           )
           data = results.flat()
@@ -88,7 +89,7 @@ export default function EventLog() {
 
     load()
     return () => { cancelled = true }
-  }, [deviceId, days, devices.length]) // eslint-disable-line
+  }, [deviceId, days, devices]) // eslint-disable-line
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -136,14 +137,14 @@ export default function EventLog() {
       )}
 
       <div className="overflow-y-auto flex-1">
-        {events.map((ev, i) => {
+        {events.map((ev) => {
           const gf = ev.geofenceId ? geofences.find((g) => g.id === ev.geofenceId) : null
           const label = EVENT_LABELS[ev.type] ?? ev.type
           const colorClass = EVENT_COLORS[ev.type] ?? 'text-gray-500 dark:text-gray-400'
           const deviceName = devices.find((d) => d.id === ev.deviceId)?.name ?? null
           return (
             <div
-              key={i}
+              key={`${ev.deviceId}-${ev.eventTime}-${ev.type}`}
               className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 flex items-start gap-2"
             >
               <div className="flex-1 min-w-0">
