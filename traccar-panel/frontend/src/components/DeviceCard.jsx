@@ -52,6 +52,8 @@ export default function DeviceCard({ device, isSelected, onClick }) {
   const position = useTraccarStore((s) => s.positions[device.id])
   const geofences = useTraccarStore((s) => s.geofences)
   const geofenceArrivals = useTraccarStore((s) => s.geofenceArrivals)
+  const deviceOfflineSince = useTraccarStore((s) => s.deviceOfflineSince)
+  const deviceStillSince = useTraccarStore((s) => s.deviceStillSince)
 
   const color = colorForDevice(device.id)
   const initial = device.name[0]?.toUpperCase() ?? '?'
@@ -62,6 +64,8 @@ export default function DeviceCard({ device, isSelected, onClick }) {
   const ignition = position?.attributes?.ignition ?? null
   const address = position?.address ?? null
   const accuracy = position?.accuracy ?? null  // metres
+  const satellites = position?.attributes?.sat ?? null
+  const hdop = position?.attributes?.hdop ?? null
 
   // Staleness: minutes since last GPS fix
   const fixAge = position?.fixTime
@@ -78,6 +82,8 @@ export default function DeviceCard({ device, isSelected, onClick }) {
 
   // Low accuracy: cell-tower-level positioning (>150m) shown as approximate
   const isApproximate = accuracy !== null && accuracy > 150
+  // Weak GPS signal: fewer than 4 satellites or HDOP > 5
+  const isWeakSignal = isOnline && ((satellites !== null && satellites < 4) || (hdop !== null && hdop > 5))
 
   const isOnline = device.status === 'online'
   const isDriving = speedKmh > 5
@@ -128,7 +134,16 @@ export default function DeviceCard({ device, isSelected, onClick }) {
   let statusIcon, statusText, statusColor
   if (!isOnline) {
     statusIcon = '○'
-    statusText = 'Offline'
+    const offlineTs = deviceOfflineSince[device.id] ?? null
+    if (offlineTs) {
+      const ms = Date.now() - offlineTs
+      const totalMin = Math.floor(ms / 60000)
+      const h = Math.floor(totalMin / 60)
+      const m = totalMin % 60
+      statusText = `Offline · ${h > 0 ? `${h}h ${m}m` : `${m}m`}`
+    } else {
+      statusText = 'Offline'
+    }
     statusColor = 'text-gray-400 dark:text-gray-500'
   } else if (isDriving) {
     statusIcon = '🚗'
@@ -156,11 +171,22 @@ export default function DeviceCard({ device, isSelected, onClick }) {
       const m = totalMin % 60
       dwellText = ` · ${h > 0 ? `${h}h ${m}m` : `${m}m`}`
     }
-    statusText = `At ${placeName}${dwellText}`
+    statusText = `At ${placeName}${dwellText}${charging ? ' · ⚡' : ''}`
     statusColor = 'text-green-600 dark:text-green-400'
   } else {
     statusIcon = '💤'
-    statusText = 'Still'
+    // Show idle duration when stationary for >30 min outside any geofence
+    const stillTs = deviceStillSince[device.id] ?? null
+    const stillMs = stillTs ? Date.now() - stillTs : 0
+    if (stillMs > 30 * 60000) {
+      const totalMin = Math.floor(stillMs / 60000)
+      const h = Math.floor(totalMin / 60)
+      const m = totalMin % 60
+      const durText = h > 0 ? `${h}h ${m}m` : `${m}m`
+      statusText = `Idle · ${durText}${charging ? ' · ⚡' : ''}`
+    } else {
+      statusText = charging ? 'Still · ⚡' : 'Still'
+    }
     statusColor = 'text-gray-500 dark:text-gray-400'
   }
 
@@ -174,13 +200,16 @@ export default function DeviceCard({ device, isSelected, onClick }) {
       }`}
     >
       <div className="flex items-start gap-2.5">
-        {/* Avatar circle — fades when GPS data is stale (>15 min) or accuracy is poor (>150m) */}
+        {/* Avatar: orange ring = stale GPS (>15 min), yellow ring = poor accuracy, gray = offline */}
         <div
-          style={{
-            background: isOnline ? color : '#9CA3AF',
-            opacity: isOnline && (fixAge > 15 || isApproximate) ? 0.5 : 1,
-          }}
-          className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm mt-0.5 transition-opacity"
+          style={{ background: isOnline ? color : '#9CA3AF' }}
+          className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm mt-0.5 transition-all ${
+            isOnline && fixAge > 15
+              ? 'ring-2 ring-orange-400 dark:ring-orange-500 ring-offset-1'
+              : isOnline && isApproximate
+              ? 'ring-2 ring-yellow-400 dark:ring-yellow-500 ring-offset-1'
+              : ''
+          }`}
         >
           <span className="text-white font-bold text-base select-none">{initial}</span>
         </div>
@@ -201,11 +230,18 @@ export default function DeviceCard({ device, isSelected, onClick }) {
           {address && (
             <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
               {isApproximate && (
-                <span className="text-orange-400 dark:text-orange-500 mr-1" title={`GPS accuracy ±${Math.round(accuracy)}m`}>
-                  ~
+                <span className="text-orange-400 dark:text-orange-500 mr-1">
+                  ±{Math.round(accuracy)}m
                 </span>
               )}
               {address}
+            </p>
+          )}
+
+          {/* Row 3b: Weak GPS signal indicator */}
+          {isWeakSignal && (
+            <p className="text-xs text-orange-400 dark:text-orange-500 mt-0.5">
+              📡 {satellites !== null ? `${satellites} sat` : `HDOP ${hdop?.toFixed(1)}`} · weak signal
             </p>
           )}
 

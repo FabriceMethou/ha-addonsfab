@@ -22,6 +22,12 @@ const useTraccarStore = create((set, get) => ({
   // Geofence arrival times from live WS events: { [deviceId]: { [geofenceId]: timestamp_ms } }
   geofenceArrivals: {},
 
+  // Tracks when each device went offline: { [deviceId]: timestamp_ms }
+  deviceOfflineSince: {},
+
+  // Tracks when each device became stationary (speed < 1 km/h): { [deviceId]: timestamp_ms }
+  deviceStillSince: {},
+
   // Trip replay state (written by HistoryControls, read by HistoryOverlay inside MapContainer)
   animatedRoute: [],          // GPS points array currently loaded
   animatedMarker: null,       // {lat, lon} current animation position
@@ -40,6 +46,29 @@ const useTraccarStore = create((set, get) => ({
   // Actions
   setDevices: (devices) => set({ devices }),
 
+  // Patch device list from a WS update; tracks offline/online timestamps
+  patchDevices: (incomingDevices) =>
+    set((s) => {
+      const patchMap = {}
+      for (const d of incomingDevices) {
+        if (d.id !== undefined) patchMap[d.id] = d
+      }
+      const updatedDevices = s.devices.map((d) =>
+        patchMap[d.id] ? { ...d, ...patchMap[d.id] } : d
+      )
+      const offlineSince = { ...s.deviceOfflineSince }
+      for (const incoming of incomingDevices) {
+        if (incoming.id === undefined) continue
+        const prev = s.devices.find((d) => d.id === incoming.id)
+        if (incoming.status === 'offline' && prev?.status !== 'offline' && !offlineSince[incoming.id]) {
+          offlineSince[incoming.id] = Date.now()
+        } else if (incoming.status === 'online') {
+          delete offlineSince[incoming.id]
+        }
+      }
+      return { devices: updatedDevices, deviceOfflineSince: offlineSince }
+    }),
+
   // Merge backfilled arrival timestamps; WS-derived arrivals win if newer
   seedGeofenceArrivals: (arrivals) =>
     set((s) => {
@@ -57,14 +86,31 @@ const useTraccarStore = create((set, get) => ({
 
   setPositions: (positionsArray) => {
     const map = {}
-    for (const p of positionsArray) map[p.deviceId] = p
-    set({ positions: map })
+    const stillSince = {}
+    for (const p of positionsArray) {
+      map[p.deviceId] = p
+      // Seed still-since from fixTime for devices already stationary on initial load
+      if ((p.speed ?? 0) * 1.852 < 1 && p.fixTime) {
+        stillSince[p.deviceId] = new Date(p.fixTime).getTime()
+      }
+    }
+    set((s) => ({ positions: map, deviceStillSince: { ...s.deviceStillSince, ...stillSince } }))
   },
 
   updatePosition: (position) =>
-    set((state) => ({
-      positions: { ...state.positions, [position.deviceId]: position },
-    })),
+    set((state) => {
+      const speedKmh = (position.speed ?? 0) * 1.852
+      const stillSince = { ...state.deviceStillSince }
+      if (speedKmh < 1) {
+        if (!stillSince[position.deviceId]) stillSince[position.deviceId] = Date.now()
+      } else {
+        delete stillSince[position.deviceId]
+      }
+      return {
+        positions: { ...state.positions, [position.deviceId]: position },
+        deviceStillSince: stillSince,
+      }
+    }),
 
   setGeofences: (geofences) => set({ geofences }),
 
@@ -108,25 +154,29 @@ const useTraccarStore = create((set, get) => ({
   setAnimatedMarker: (pos) => set({ animatedMarker: pos }),
   clearAnimation: () => set({ animatedRoute: [], animatedMarker: null }),
 
-  // Check if a position update should trigger a low-battery alert
+  // Check if a position update should trigger a low-battery alert.
+  // Uses a single atomic set(s=>) to prevent duplicate alerts from rapid WS updates.
   checkBatteryAlert: (position) => {
-    const { batteryAlerted, devices } = get()
     const battery = position?.attributes?.batteryLevel ?? null
     if (battery === null) return
     const deviceId = position.deviceId
-    if (battery <= 20 && !batteryAlerted.has(deviceId)) {
-      const device = devices.find((d) => d.id === deviceId)
-      if (device) {
-        get().pushAlert({ type: 'lowBattery', deviceName: device.name, battery, ts: Date.now() })
-        const next = new Set(batteryAlerted)
+    if (battery <= 20) {
+      set((s) => {
+        if (s.batteryAlerted.has(deviceId)) return {} // already alerted — no-op
+        const device = s.devices.find((d) => d.id === deviceId)
+        if (!device) return {}
+        const next = new Set(s.batteryAlerted)
         next.add(deviceId)
-        set({ batteryAlerted: next })
-      }
-    } else if (battery > 20 && batteryAlerted.has(deviceId)) {
-      // Reset so it will alert again when battery drops next time
-      const next = new Set(batteryAlerted)
-      next.delete(deviceId)
-      set({ batteryAlerted: next })
+        const newAlert = { id: Date.now() + Math.random(), type: 'lowBattery', deviceName: device.name, battery, ts: Date.now() }
+        return { batteryAlerted: next, alerts: [newAlert, ...s.alerts].slice(0, MAX_ALERTS) }
+      })
+    } else if (battery > 20) {
+      set((s) => {
+        if (!s.batteryAlerted.has(deviceId)) return {}
+        const next = new Set(s.batteryAlerted)
+        next.delete(deviceId)
+        return { batteryAlerted: next }
+      })
     }
   },
 

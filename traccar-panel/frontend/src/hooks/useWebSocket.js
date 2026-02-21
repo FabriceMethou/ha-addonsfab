@@ -15,15 +15,7 @@ const WATCHDOG_TIMEOUT_MS = 75_000 // force-reconnect if no message for 75 s
  *   data.type=pong  → heartbeat acknowledgement (resets watchdog)
  */
 export function useWebSocket() {
-  const { updatePosition, setConnected, handleWsEvent, checkBatteryAlert } = useTraccarStore()
-  const devicesRef = useRef(useTraccarStore.getState().devices)
-
-  // Keep a ref to current devices so WS handler doesn't stale-close over them
-  useEffect(() => {
-    return useTraccarStore.subscribe(
-      (state) => { devicesRef.current = state.devices }
-    )
-  }, [])
+  const { updatePosition, setConnected, handleWsEvent, checkBatteryAlert, patchDevices } = useTraccarStore()
 
   const wsRef = useRef(null)
   const reconnectTimer = useRef(null)
@@ -82,14 +74,8 @@ export function useWebSocket() {
           }
 
           // Patch online/offline status into existing device list
-          if (data.devices) {
-            const current = devicesRef.current
-            const patchMap = {}
-            for (const d of data.devices) patchMap[d.id] = d
-            const patched = current.map((d) =>
-              patchMap[d.id] ? { ...d, ...patchMap[d.id] } : d
-            )
-            useTraccarStore.setState({ devices: patched })
+          if (Array.isArray(data.devices)) {
+            patchDevices(data.devices)
           }
 
           if (data.events) {
@@ -122,5 +108,5 @@ export function useWebSocket() {
       clearTimeout(watchdogTimer.current)
       wsRef.current?.close()
     }
-  }, [updatePosition, setConnected, handleWsEvent, checkBatteryAlert])
+  }, [updatePosition, setConnected, handleWsEvent, checkBatteryAlert, patchDevices])
 }

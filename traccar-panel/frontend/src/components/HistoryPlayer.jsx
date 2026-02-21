@@ -164,14 +164,22 @@ export function HistoryControls({ mapRef }) {
         { signal: controller.signal }
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
+      const rawData = await res.json()
 
-      if (!Array.isArray(data) || data.length === 0) {
+      if (!Array.isArray(rawData) || rawData.length === 0) {
         setError('No GPS data for this period.')
         setPlaybackStatus('idle')
         return
       }
-      if (data.length > 10000) console.warn(`Large route: ${data.length} points`)
+
+      // Downsample very large routes to keep rendering smooth (max 10k segments)
+      const MAX_POINTS = 10000
+      let data = rawData
+      if (rawData.length > MAX_POINTS) {
+        const step = Math.ceil(rawData.length / MAX_POINTS)
+        data = rawData.filter((_, i) => i % step === 0)
+        if (data[data.length - 1] !== rawData[rawData.length - 1]) data.push(rawData[rawData.length - 1])
+      }
 
       setAnimatedRoute(data)
 
@@ -181,7 +189,7 @@ export function HistoryControls({ mapRef }) {
         new Date(data[data.length - 1].fixTime).getTime() -
         new Date(data[0].fixTime).getTime()
       const maxSpd = Math.max(...data.map((p) => (p.speed ?? 0) * KNOTS_TO_KMH))
-      const avgSpd = durMs > 0 ? dist / (durMs / 3_600_000) : 0
+      const avgSpd = isFinite(dist) && durMs > 0 ? dist / (durMs / 3_600_000) : 0
       setStats({ dist, durMs, maxSpd, avgSpd })
 
       const anim = createAnimation(data, onUpdate)
@@ -213,7 +221,13 @@ export function HistoryControls({ mapRef }) {
 
   function handleManualLoad() {
     if (!from || !to) return
-    loadRoute(new Date(from).toISOString(), new Date(to).toISOString())
+    const fromDate = new Date(from)
+    const toDate = new Date(to)
+    if (fromDate >= toDate) {
+      setError('Start time must be before end time.')
+      return
+    }
+    loadRoute(fromDate.toISOString(), toDate.toISOString())
   }
 
   function handlePlay() {
