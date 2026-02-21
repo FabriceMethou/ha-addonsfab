@@ -36,19 +36,14 @@ export default function EventLog() {
   const devices = useTraccarStore((s) => s.devices)
   const geofences = useTraccarStore((s) => s.geofences)
 
-  const [deviceId, setDeviceId] = useState('')
+  const [deviceId, setDeviceId] = useState('all')
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [days, setDays] = useState(7)
 
-  // Default to first device
   useEffect(() => {
-    if (devices.length > 0 && !deviceId) setDeviceId(String(devices[0].id))
-  }, [devices]) // eslint-disable-line
-
-  useEffect(() => {
-    if (!deviceId) return
+    if (devices.length === 0) return
     let cancelled = false
 
     async function load() {
@@ -57,13 +52,28 @@ export default function EventLog() {
       try {
         const from = subDays(new Date(), days).toISOString()
         const to = new Date().toISOString()
-        const res = await fetch(
-          `./api/reports/events?deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-        )
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
+
+        let data
+        if (deviceId === 'all') {
+          const results = await Promise.all(
+            devices.map((d) =>
+              fetch(
+                `./api/reports/events?deviceId=${d.id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+              )
+                .then((r) => (r.ok ? r.json() : []))
+                .then((evs) => (Array.isArray(evs) ? evs : []))
+            )
+          )
+          data = results.flat()
+        } else {
+          const res = await fetch(
+            `./api/reports/events?deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+          )
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          data = await res.json()
+        }
+
         if (!cancelled) {
-          // Sort newest first
           const sorted = Array.isArray(data)
             ? [...data].sort((a, b) => new Date(b.eventTime) - new Date(a.eventTime))
             : []
@@ -78,7 +88,7 @@ export default function EventLog() {
 
     load()
     return () => { cancelled = true }
-  }, [deviceId, days])
+  }, [deviceId, days, devices.length]) // eslint-disable-line
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -89,6 +99,7 @@ export default function EventLog() {
           onChange={(e) => setDeviceId(e.target.value)}
           className="w-full text-sm rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1"
         >
+          <option value="all">All devices</option>
           {devices.map((d) => (
             <option key={d.id} value={String(d.id)}>{d.name}</option>
           ))}
@@ -129,6 +140,7 @@ export default function EventLog() {
           const gf = ev.geofenceId ? geofences.find((g) => g.id === ev.geofenceId) : null
           const label = EVENT_LABELS[ev.type] ?? ev.type
           const colorClass = EVENT_COLORS[ev.type] ?? 'text-gray-500 dark:text-gray-400'
+          const deviceName = devices.find((d) => d.id === ev.deviceId)?.name ?? null
           return (
             <div
               key={i}
@@ -136,13 +148,18 @@ export default function EventLog() {
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-1">
-                  <span className={`text-xs font-medium ${colorClass}`}>{label}</span>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className={`text-xs font-medium flex-shrink-0 ${colorClass}`}>{label}</span>
+                    {gf && (
+                      <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{gf.name}</span>
+                    )}
+                  </div>
                   <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">
                     {format(new Date(ev.eventTime), 'EEE d MMM, HH:mm')}
                   </span>
                 </div>
-                {gf && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{gf.name}</p>
+                {deviceName && deviceId === 'all' && (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{deviceName}</p>
                 )}
               </div>
             </div>

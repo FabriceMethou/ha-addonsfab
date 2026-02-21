@@ -19,6 +19,9 @@ const useTraccarStore = create((set, get) => ({
   alerts: [], // [{id, type, deviceName, geofenceName?, battery?, ts}]
   batteryAlerted: new Set(), // deviceIds that have had a low-battery alert sent
 
+  // Geofence arrival times from live WS events: { [deviceId]: { [geofenceId]: timestamp_ms } }
+  geofenceArrivals: {},
+
   // Trip replay state (written by HistoryControls, read by HistoryOverlay inside MapContainer)
   animatedRoute: [],          // GPS points array currently loaded
   animatedMarker: null,       // {lat, lon} current animation position
@@ -122,6 +125,20 @@ const useTraccarStore = create((set, get) => ({
       const geofence = geofences.find((g) => g.id === geofenceId)
       if (!device || !geofence) return
       get().pushAlert({ type, deviceName: device.name, geofenceName: geofence.name, ts: Date.now() })
+      if (type === 'geofenceEnter') {
+        set((s) => ({
+          geofenceArrivals: {
+            ...s.geofenceArrivals,
+            [deviceId]: { ...(s.geofenceArrivals[deviceId] ?? {}), [geofenceId]: Date.now() },
+          },
+        }))
+      } else {
+        set((s) => {
+          const next = { ...(s.geofenceArrivals[deviceId] ?? {}) }
+          delete next[geofenceId]
+          return { geofenceArrivals: { ...s.geofenceArrivals, [deviceId]: next } }
+        })
+      }
     } else if (type === 'deviceOverspeed') {
       if (!device) return
       const speedKmh = Math.round((attributes?.speed ?? 0) * 1.852)
