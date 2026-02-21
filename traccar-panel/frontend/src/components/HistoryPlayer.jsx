@@ -6,6 +6,7 @@ import useTraccarStore from '../store/useTraccarStore.js'
 import { createAnimation } from '../utils/tripAnimation.js'
 import { routeDistanceKm } from '../utils/haversine.js'
 import TripsList from './TripsList.jsx'
+import StopsList from './StopsList.jsx'
 
 const KNOTS_TO_KMH = 1.852
 const SPEED_MULTIPLIERS = [1, 5, 10, 30]
@@ -38,7 +39,7 @@ export function HistoryControls({ mapRef }) {
   const { setAnimatedRoute, setAnimatedMarker, clearAnimation } = useTraccarStore()
 
   const [deviceId, setDeviceId] = useState('')
-  const [mode, setMode] = useState('trips') // 'trips' | 'custom'
+  const [mode, setMode] = useState('trips') // 'trips' | 'stops' | 'custom'
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [playbackStatus, setPlaybackStatus] = useState('idle')
@@ -265,10 +266,16 @@ export function HistoryControls({ mapRef }) {
           Trips
         </button>
         <button
+          onClick={() => setMode('stops')}
+          className={`flex-1 py-1 text-xs ${mode === 'stops' ? 'bg-blue-500 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+        >
+          Stops
+        </button>
+        <button
           onClick={() => setMode('custom')}
           className={`flex-1 py-1 text-xs ${mode === 'custom' ? 'bg-blue-500 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
         >
-          Custom range
+          Custom
         </button>
       </div>
 
@@ -279,6 +286,11 @@ export function HistoryControls({ mapRef }) {
           onSelectTrip={handleSelectTrip}
           selectedStartTime={selectedTripStart}
         />
+      )}
+
+      {/* Stops list */}
+      {mode === 'stops' && (
+        <StopsList deviceId={deviceId} />
       )}
 
       {/* Custom date range */}

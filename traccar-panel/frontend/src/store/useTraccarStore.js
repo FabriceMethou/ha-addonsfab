@@ -15,8 +15,9 @@ const useTraccarStore = create((set, get) => ({
   darkMode: localStorage.getItem('darkMode') === 'true',
   mapTile: localStorage.getItem('mapTile') || 'osm', // 'osm' | 'satellite'
 
-  // Alerts (geofence enter/exit from WS events)
-  alerts: [], // [{id, type, deviceName, geofenceName, ts}]
+  // Alerts (geofence enter/exit, battery low from WS events)
+  alerts: [], // [{id, type, deviceName, geofenceName?, battery?, ts}]
+  batteryAlerted: new Set(), // deviceIds that have had a low-battery alert sent
 
   // Trip replay state (written by HistoryControls, read by HistoryOverlay inside MapContainer)
   animatedRoute: [],          // GPS points array currently loaded
@@ -78,6 +79,28 @@ const useTraccarStore = create((set, get) => ({
   setAnimatedRoute: (points) => set({ animatedRoute: points }),
   setAnimatedMarker: (pos) => set({ animatedMarker: pos }),
   clearAnimation: () => set({ animatedRoute: [], animatedMarker: null }),
+
+  // Check if a position update should trigger a low-battery alert
+  checkBatteryAlert: (position) => {
+    const { batteryAlerted, devices } = get()
+    const battery = position?.attributes?.batteryLevel ?? null
+    if (battery === null) return
+    const deviceId = position.deviceId
+    if (battery <= 20 && !batteryAlerted.has(deviceId)) {
+      const device = devices.find((d) => d.id === deviceId)
+      if (device) {
+        get().pushAlert({ type: 'lowBattery', deviceName: device.name, battery, ts: Date.now() })
+        const next = new Set(batteryAlerted)
+        next.add(deviceId)
+        set({ batteryAlerted: next })
+      }
+    } else if (battery > 20 && batteryAlerted.has(deviceId)) {
+      // Reset so it will alert again when battery drops next time
+      const next = new Set(batteryAlerted)
+      next.delete(deviceId)
+      set({ batteryAlerted: next })
+    }
+  },
 
   // Handle incoming WS events (geofenceEnter, geofenceExit, etc.)
   handleWsEvent: (event) => {

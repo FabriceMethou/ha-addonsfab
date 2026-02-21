@@ -4,11 +4,13 @@ import useTraccarStore from '../store/useTraccarStore.js'
 const ICONS = {
   geofenceEnter: '📍',
   geofenceExit: '🚪',
+  lowBattery: '🔋',
 }
 
 const COLORS = {
   geofenceEnter: 'border-green-400 bg-green-50 dark:bg-green-900/40',
   geofenceExit: 'border-orange-400 bg-orange-50 dark:bg-orange-900/40',
+  lowBattery: 'border-red-400 bg-red-50 dark:bg-red-900/40',
 }
 
 function Toast({ alert, onDismiss }) {
@@ -17,7 +19,11 @@ function Toast({ alert, onDismiss }) {
     return () => clearTimeout(timer)
   }, [alert.id, onDismiss])
 
-  const label = alert.type === 'geofenceEnter' ? 'arrived at' : 'left'
+  let body
+  if (alert.type === 'geofenceEnter') body = <>arrived at <strong>{alert.geofenceName}</strong></>
+  else if (alert.type === 'geofenceExit') body = <>left <strong>{alert.geofenceName}</strong></>
+  else if (alert.type === 'lowBattery') body = <>battery low ({alert.battery}%)</>
+  else body = alert.type
 
   return (
     <div
@@ -26,9 +32,7 @@ function Toast({ alert, onDismiss }) {
       <span className="text-base flex-shrink-0">{ICONS[alert.type] ?? '●'}</span>
       <div className="flex-1 min-w-0">
         <p className="font-medium dark:text-white truncate">{alert.deviceName}</p>
-        <p className="text-xs text-gray-600 dark:text-gray-300 truncate">
-          {label} <strong>{alert.geofenceName}</strong>
-        </p>
+        <p className="text-xs text-gray-600 dark:text-gray-300 truncate">{body}</p>
       </div>
       <button
         onClick={() => onDismiss(alert.id)}

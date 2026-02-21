@@ -3,11 +3,13 @@ import useTraccarStore from '../store/useTraccarStore.js'
 import DeviceCard from './DeviceCard.jsx'
 import PlacesList from './PlacesList.jsx'
 import { HistoryControls } from './HistoryPlayer.jsx'
+import EventLog from './EventLog.jsx'
 
 const TABS = [
   { id: 'live', label: 'Live' },
   { id: 'places', label: 'Places' },
   { id: 'history', label: 'History' },
+  { id: 'events', label: 'Events' },
 ]
 
 export default function Sidebar({ mapRef }) {
@@ -96,6 +98,8 @@ export default function Sidebar({ mapRef }) {
         {activeTab === 'places' && <PlacesList mapRef={mapRef} />}
 
         {activeTab === 'history' && <HistoryControls mapRef={mapRef} />}
+
+        {activeTab === 'events' && <EventLog />}
       </div>
     </div>
   )

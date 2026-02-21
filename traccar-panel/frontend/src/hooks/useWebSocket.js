@@ -11,7 +11,7 @@ import useTraccarStore from '../store/useTraccarStore.js'
  *   data.events     → geofenceEnter / geofenceExit → push alert
  */
 export function useWebSocket() {
-  const { updatePosition, setConnected, handleWsEvent } = useTraccarStore()
+  const { updatePosition, setConnected, handleWsEvent, checkBatteryAlert } = useTraccarStore()
   const setDevices = useTraccarStore((s) => s.setDevices)
   const devicesRef = useRef(useTraccarStore.getState().devices)
 
@@ -50,6 +50,7 @@ export function useWebSocket() {
           if (data.positions) {
             for (const pos of data.positions) {
               updatePosition(pos)
+              checkBatteryAlert(pos)
             }
           }
 
@@ -91,5 +92,5 @@ export function useWebSocket() {
       clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
     }
-  }, [updatePosition, setConnected, handleWsEvent])
+  }, [updatePosition, setConnected, handleWsEvent, checkBatteryAlert])
 }

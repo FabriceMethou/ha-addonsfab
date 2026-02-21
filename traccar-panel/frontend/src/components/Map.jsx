@@ -24,6 +24,44 @@ function MapRefCapture({ mapRef }) {
   return null
 }
 
+// Fit all visible device markers into the viewport
+function FitAllControl({ positions, devices }) {
+  const map = useMap()
+
+  function handleFitAll() {
+    const pts = devices
+      .map((d) => positions[d.id])
+      .filter(Boolean)
+      .map((p) => [p.latitude, p.longitude])
+    if (pts.length === 0) return
+    map.fitBounds(pts, { padding: [40, 40], maxZoom: 15 })
+  }
+
+  return (
+    <div className="leaflet-top leaflet-left" style={{ marginTop: '80px' }}>
+      <div className="leaflet-control leaflet-bar">
+        <button
+          onClick={handleFitAll}
+          title="Fit all devices"
+          style={{
+            width: '30px',
+            height: '30px',
+            lineHeight: '30px',
+            fontSize: '14px',
+            cursor: 'pointer',
+            background: 'white',
+            border: 'none',
+            display: 'block',
+            textAlign: 'center',
+          }}
+        >
+          ⊞
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Map({ mapRef }) {
   const devices = useTraccarStore((s) => s.devices)
   const positions = useTraccarStore((s) => s.positions)
@@ -50,6 +88,7 @@ export default function Map({ mapRef }) {
           />
         ))}
         <HistoryOverlay />
+        <FitAllControl positions={positions} devices={devices} />
       </MapContainer>
 
       {/* Tile switcher overlay */}
