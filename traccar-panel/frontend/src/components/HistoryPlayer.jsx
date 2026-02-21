@@ -57,11 +57,11 @@ export function HistoryControls({ mapRef }) {
   const abortRef = useRef(null) // AbortController for in-flight fetches
   const autoLoadAbortRef = useRef(null) // separate controller for auto-load fetch
 
-  // Default device
+  // Default device; initialise Custom mode date range to last 24 h
   useEffect(() => {
     if (devices.length > 0 && !deviceId) setDeviceId(String(devices[0].id))
     const now = new Date()
-    setFrom(format(new Date(now - 24 * 3600 * 1000), "yyyy-MM-dd'T'HH:mm"))
+    setFrom(format(subDays(now, 1), "yyyy-MM-dd'T'HH:mm"))
     setTo(format(now, "yyyy-MM-dd'T'HH:mm"))
   }, [devices]) // eslint-disable-line
 
