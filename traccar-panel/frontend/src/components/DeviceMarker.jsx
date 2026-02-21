@@ -11,13 +11,15 @@ function colorForDevice(deviceId) {
   return COLORS[Math.abs(deviceId) % COLORS.length]
 }
 
-function makeDotIcon(color, initials, course, speedKmh) {
+function makeDotIcon(color, initials, course, speedKmh, isOnline) {
   const showArrow = speedKmh > 2
   const arrow = showArrow
     ? `<g transform="rotate(${course}, 20, 20)"><polygon points="20,2 16,10 24,10" fill="${color}" stroke="white" stroke-width="1.5"/></g>`
     : ''
+  // Offline devices get 50% opacity so they stand out as inactive
+  const opacity = isOnline ? 1 : 0.45
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="52" viewBox="0 0 40 52">
+    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="52" viewBox="0 0 40 52" opacity="${opacity}">
       ${arrow}
       <circle cx="20" cy="20" r="16" fill="${color}" stroke="white" stroke-width="2"/>
       <text x="20" y="25" text-anchor="middle" fill="white" font-size="11" font-family="sans-serif" font-weight="bold">${initials}</text>
@@ -46,14 +48,23 @@ export default function DeviceMarker({ device, position, onClick }) {
     .map((w) => w[0]?.toUpperCase() ?? '')
     .join('')
 
-  const speedKmh = Math.round((speed ?? 0) * 1.852) // knots → km/h
-  const icon = makeDotIcon(color, initials, course ?? 0, speedKmh)
+  const isOnline = device.status === 'online'
+  const speedKmh = Math.round((speed ?? 0) * 1.852)
+  const icon = makeDotIcon(color, initials, course ?? 0, speedKmh, isOnline)
 
   const battery = attributes?.batteryLevel ?? null
+  const ignition = attributes?.ignition ?? null
+  const satellites = attributes?.sat ?? null
   const lastSeen = fixTime ? formatDistanceToNow(new Date(fixTime), { addSuffix: true }) : 'unknown'
   const currentPlaces = (geofenceIds ?? [])
     .map((id) => geofences.find((g) => g.id === id)?.name)
     .filter(Boolean)
+
+  // Compass bearing label
+  function courseLabel(deg) {
+    const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+    return dirs[Math.round(deg / 45) % 8]
+  }
 
   return (
     <Marker
@@ -62,15 +73,32 @@ export default function DeviceMarker({ device, position, onClick }) {
       eventHandlers={{ click: () => onClick?.(device.id) }}
     >
       <Popup>
-        <div className="min-w-[160px]">
-          <p className="font-bold text-base mb-1">{device.name}</p>
+        <div className="min-w-[170px] space-y-0.5">
+          <p className="font-bold text-base">{device.name}</p>
+
+          {/* Status row */}
+          <p className={`text-xs font-medium ${isOnline ? 'text-green-600' : 'text-gray-400'}`}>
+            {isOnline ? (ignition === true ? 'Ignition on' : 'Online') : 'Offline'}
+          </p>
+
           {currentPlaces.length > 0 && (
-            <p className="text-xs text-blue-600 font-medium mb-1">At {currentPlaces.join(', ')}</p>
+            <p className="text-xs text-blue-600 font-medium">At {currentPlaces.join(', ')}</p>
           )}
-          {address && <p className="text-xs text-gray-500 mb-1">{address}</p>}
-          <p className="text-sm">Speed: {speedKmh} km/h</p>
-          {battery !== null && <p className="text-sm">Battery: {battery}%</p>}
-          <p className="text-xs text-gray-400 mt-1">Last seen {lastSeen}</p>
+          {address && <p className="text-xs text-gray-500">{address}</p>}
+
+          <div className="pt-1 space-y-0.5 text-sm">
+            <p>Speed: {speedKmh} km/h</p>
+            {speedKmh > 2 && course != null && (
+              <p className="text-xs text-gray-500">
+                Heading {Math.round(course)}° ({courseLabel(course)})
+              </p>
+            )}
+            {battery !== null && <p>Battery: {battery}%</p>}
+            {satellites !== null && (
+              <p className="text-xs text-gray-500">{satellites} satellites</p>
+            )}
+          </div>
+          <p className="text-xs text-gray-400 pt-1">Last seen {lastSeen}</p>
         </div>
       </Popup>
     </Marker>

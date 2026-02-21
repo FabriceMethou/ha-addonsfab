@@ -91,8 +91,8 @@ export default function DeviceCard({ device, isSelected, onClick }) {
         </span>
       </div>
 
-      {/* Row 2: address or current places */}
-      {address && (
+      {/* Row 2: address — hidden when at a geofence (status badge already shows that) */}
+      {address && currentPlaces.length === 0 && (
         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{address}</p>
       )}
 

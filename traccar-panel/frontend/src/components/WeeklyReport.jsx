@@ -34,6 +34,7 @@ export default function WeeklyReport() {
   const [period, setPeriod] = useState(7)
   const [summary, setSummary] = useState(null)
   const [tripCount, setTripCount] = useState(null)
+  const [idleMs, setIdleMs] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -51,26 +52,35 @@ export default function WeeklyReport() {
       setError(null)
       setSummary(null)
       setTripCount(null)
+      setIdleMs(null)
       try {
         const from = subDays(new Date(), period).toISOString()
         const to = new Date().toISOString()
         const qs = `deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
 
-        const [sumRes, tripsRes] = await Promise.all([
+        const [sumRes, tripsRes, stopsRes] = await Promise.all([
           fetch(`./api/reports/summary?${qs}`),
           fetch(`./api/reports/trips?${qs}`),
+          fetch(`./api/reports/stops?${qs}`),
         ])
 
         if (!sumRes.ok) throw new Error(`Summary: HTTP ${sumRes.status}`)
         if (!tripsRes.ok) throw new Error(`Trips: HTTP ${tripsRes.status}`)
 
-        const [sumData, tripsData] = await Promise.all([sumRes.json(), tripsRes.json()])
+        const [sumData, tripsData, stopsData] = await Promise.all([
+          sumRes.json(),
+          tripsRes.json(),
+          stopsRes.ok ? stopsRes.json() : Promise.resolve([]),
+        ])
 
         if (!cancelled) {
-          // Traccar returns an array; take first element
           const s = Array.isArray(sumData) ? sumData[0] : sumData
           setSummary(s ?? null)
           setTripCount(Array.isArray(tripsData) ? tripsData.length : 0)
+          const totalIdle = Array.isArray(stopsData)
+            ? stopsData.reduce((acc, stop) => acc + (stop.duration ?? 0), 0)
+            : 0
+          setIdleMs(totalIdle)
         }
       } catch (err) {
         if (!cancelled) setError(err.message)
@@ -134,15 +144,15 @@ export default function WeeklyReport() {
             <StatCard label="Trips" value={tripCount ?? '—'} />
             <StatCard label="Drive time" value={driveTime} />
             <StatCard label="Max speed" value={maxKmh !== '—' ? `${maxKmh} km/h` : '—'} />
+            {idleMs !== null && idleMs > 0 && (
+              <StatCard label="Idle time" value={formatDuration(idleMs)} />
+            )}
+            {summary && avgKmh !== '—' && avgKmh > 0 && (
+              <StatCard label="Avg speed" value={`${avgKmh} km/h`} />
+            )}
           </div>
-          {summary && avgKmh !== '—' && avgKmh > 0 && (
-            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg px-3 py-2">
-              <p className="text-xs text-gray-500 dark:text-gray-400">Average speed</p>
-              <p className="text-lg font-bold dark:text-white">{avgKmh} km/h</p>
-            </div>
-          )}
           {!summary && !loading && (
-            <p className="text-xs text-gray-400 dark:text-gray-500">No data for this period.</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">No data for this period.</p>
           )}
         </div>
       )}

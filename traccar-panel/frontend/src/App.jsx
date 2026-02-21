@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react'
+import React, { useRef, useEffect, useState } from 'react'
 import useTraccarStore from './store/useTraccarStore.js'
 import { useTraccar } from './hooks/useTraccar.js'
 import { useWebSocket } from './hooks/useWebSocket.js'
@@ -10,7 +10,14 @@ export default function App() {
   const loading = useTraccarStore((s) => s.loading)
   const error = useTraccarStore((s) => s.error)
   const darkMode = useTraccarStore((s) => s.darkMode)
+  const mapTile = useTraccarStore((s) => s.mapTile)
+  const setMapTile = useTraccarStore((s) => s.setMapTile)
   const mapRef = useRef(null)
+
+  // Sidebar hidden by default on mobile, visible on desktop
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  )
 
   // Apply dark mode class on root element
   useEffect(() => {
@@ -19,10 +26,16 @@ export default function App() {
     else root.classList.remove('dark')
   }, [darkMode])
 
-  // Load initial data
-  useTraccar()
+  // Auto-switch map tiles with dark mode (only for light/dark pairs, not satellite)
+  useEffect(() => {
+    if (darkMode && (mapTile === 'osm' || mapTile === 'cartoLight')) {
+      setMapTile('cartoDark')
+    } else if (!darkMode && mapTile === 'cartoDark') {
+      setMapTile('osm')
+    }
+  }, [darkMode]) // eslint-disable-line
 
-  // Connect WebSocket
+  useTraccar()
   useWebSocket()
 
   if (loading) {
@@ -60,12 +73,36 @@ export default function App() {
         <Map mapRef={mapRef} />
       </div>
 
-      {/* Sidebar — fixed width, visible on sm+ screens */}
-      <div className="w-72 flex-shrink-0 flex flex-col">
-        <Sidebar mapRef={mapRef} />
+      {/* Mobile backdrop — close sidebar when tapping outside */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/30 z-[499] md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar — slides in from right on mobile, always visible on md+ */}
+      <div
+        className={`
+          flex-shrink-0 flex flex-col
+          fixed right-0 top-0 bottom-0 w-72 z-[500]
+          transition-transform duration-300 ease-in-out
+          ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}
+          md:relative md:translate-x-0
+        `}
+      >
+        <Sidebar mapRef={mapRef} onClose={() => setSidebarOpen(false)} />
       </div>
 
-      {/* Geofence enter/exit toasts */}
+      {/* Mobile FAB — toggle sidebar */}
+      <button
+        onClick={() => setSidebarOpen((v) => !v)}
+        className="fixed bottom-6 right-4 z-[501] md:hidden w-12 h-12 rounded-full bg-blue-500 text-white shadow-lg flex items-center justify-center text-xl font-bold"
+        aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
+      >
+        {sidebarOpen ? '✕' : '☰'}
+      </button>
+
       <ToastAlerts />
     </div>
   )

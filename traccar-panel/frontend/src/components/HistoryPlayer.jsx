@@ -80,9 +80,11 @@ export function HistoryControls({ mapRef }) {
     setSelectedTripStart(null)
   }, [deviceId]) // eslint-disable-line
 
-  // Auto-load the most recent trip whenever the device is (re)selected
+  // Auto-load the most recent trip whenever the device is (re)selected.
+  // Skip when mode==='trips' to avoid a duplicate /api/reports/trips fetch
+  // while TripsList is already loading its own list.
   useEffect(() => {
-    if (!deviceId) return
+    if (!deviceId || mode === 'trips') return
     let cancelled = false
     const controller = new AbortController()
     autoLoadAbortRef.current = controller
@@ -343,6 +345,20 @@ export function HistoryControls({ mapRef }) {
               className="px-3 py-1 text-sm bg-gray-500 hover:bg-gray-600 text-white rounded"
             >
               ⏹
+            </button>
+            <button
+              onClick={() => {
+                animRef.current?.stop()
+                setProgress(0)
+                setElapsed(0)
+                setAnimatedMarker(null)
+                animRef.current?.play(speed)
+                setPlaybackStatus('playing')
+              }}
+              title="Replay from start"
+              className="px-3 py-1 text-sm bg-gray-500 hover:bg-gray-600 text-white rounded"
+            >
+              ↺
             </button>
             <div className="flex gap-1 ml-auto">
               {SPEED_MULTIPLIERS.map((s) => (
