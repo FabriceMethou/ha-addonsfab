@@ -1,6 +1,6 @@
 import React from 'react'
 import useTraccarStore from '../store/useTraccarStore.js'
-import { parseTraccarArea } from '../utils/parseTraccarArea.js'
+import { parseTraccarArea, areaCenter } from '../utils/parseTraccarArea.js'
 
 export default function PlacesList({ mapRef }) {
   const geofences = useTraccarStore((s) => s.geofences)
@@ -8,19 +8,9 @@ export default function PlacesList({ mapRef }) {
 
   function flyToGeofence(gf) {
     const parsed = parseTraccarArea(gf.area)
-    if (!parsed || !mapRef?.current) return
-
-    if (parsed.type === 'circle') {
-      mapRef.current.flyTo([parsed.lat, parsed.lon], 15)
-    } else if (parsed.type === 'polygon' && parsed.coords.length > 0) {
-      const lats = parsed.coords.map((c) => c[0])
-      const lons = parsed.coords.map((c) => c[1])
-      const center = [
-        (Math.min(...lats) + Math.max(...lats)) / 2,
-        (Math.min(...lons) + Math.max(...lons)) / 2,
-      ]
-      mapRef.current.flyTo(center, 15)
-    }
+    const center = areaCenter(parsed)
+    if (!center || !mapRef?.current) return
+    mapRef.current.flyTo(center, 15)
   }
 
   if (geofences.length === 0) {
@@ -31,9 +21,17 @@ export default function PlacesList({ mapRef }) {
     )
   }
 
+  // Sort: occupied first, then alphabetically
+  const sorted = [...geofences].sort((a, b) => {
+    const aOcc = (presence[a.id]?.length ?? 0) > 0
+    const bOcc = (presence[b.id]?.length ?? 0) > 0
+    if (aOcc !== bOcc) return aOcc ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+
   return (
-    <div className="overflow-y-auto flex-1">
-      {geofences.map((gf) => {
+    <div className="overflow-y-auto flex-1 p-2">
+      {sorted.map((gf) => {
         const names = presence[gf.id] ?? []
         const occupied = names.length > 0
         return (
@@ -45,7 +43,9 @@ export default function PlacesList({ mapRef }) {
             <div className="flex items-center justify-between">
               <span className="font-medium text-sm dark:text-white">{gf.name}</span>
               <span
-                className={`w-2.5 h-2.5 rounded-full ${occupied ? 'bg-green-500' : 'bg-gray-300'}`}
+                className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                  occupied ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
+                }`}
               />
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">

@@ -1,15 +1,22 @@
 import { create } from 'zustand'
 
+const MAX_ALERTS = 20
+
 const useTraccarStore = create((set, get) => ({
   // Data
   devices: [],       // [{id, name, status, lastUpdate, ...}]
   positions: {},     // deviceId -> {latitude, longitude, speed, course, address, geofenceIds, ...}
   geofences: [],     // [{id, name, area, ...}]
+  trips: [],         // auto-detected trips from /api/reports/trips
 
   // UI state
   selectedDeviceId: null,
   activeTab: 'live', // 'live' | 'places' | 'history'
   darkMode: localStorage.getItem('darkMode') === 'true',
+  mapTile: localStorage.getItem('mapTile') || 'osm', // 'osm' | 'satellite'
+
+  // Alerts (geofence enter/exit from WS events)
+  alerts: [], // [{id, type, deviceName, geofenceName, ts}]
 
   // Connection state
   connected: false,
@@ -32,6 +39,8 @@ const useTraccarStore = create((set, get) => ({
 
   setGeofences: (geofences) => set({ geofences }),
 
+  setTrips: (trips) => set({ trips }),
+
   setSelectedDevice: (id) => set({ selectedDeviceId: id }),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
@@ -49,6 +58,35 @@ const useTraccarStore = create((set, get) => ({
       return { darkMode: next }
     }),
 
+  setMapTile: (tile) => {
+    localStorage.setItem('mapTile', tile)
+    set({ mapTile: tile })
+  },
+
+  pushAlert: (alert) =>
+    set((state) => ({
+      alerts: [{ ...alert, id: Date.now() + Math.random() }, ...state.alerts].slice(0, MAX_ALERTS),
+    })),
+
+  dismissAlert: (id) =>
+    set((state) => ({ alerts: state.alerts.filter((a) => a.id !== id) })),
+
+  // Handle incoming WS events (geofenceEnter, geofenceExit, etc.)
+  handleWsEvent: (event) => {
+    const { type, deviceId, geofenceId } = event
+    if (type !== 'geofenceEnter' && type !== 'geofenceExit') return
+    const { devices, geofences } = get()
+    const device = devices.find((d) => d.id === deviceId)
+    const geofence = geofences.find((g) => g.id === geofenceId)
+    if (!device || !geofence) return
+    get().pushAlert({
+      type,
+      deviceName: device.name,
+      geofenceName: geofence.name,
+      ts: Date.now(),
+    })
+  },
+
   // Derived helpers
   getDevicePosition: (deviceId) => get().positions[deviceId] ?? null,
 
@@ -60,16 +98,12 @@ const useTraccarStore = create((set, get) => ({
   getGeofencePresence: () => {
     const { devices, positions, geofences } = get()
     const presence = {}
-    for (const gf of geofences) {
-      presence[gf.id] = []
-    }
+    for (const gf of geofences) presence[gf.id] = []
     for (const device of devices) {
       const pos = positions[device.id]
       if (pos?.geofenceIds) {
         for (const gfId of pos.geofenceIds) {
-          if (presence[gfId] !== undefined) {
-            presence[gfId].push(device.name)
-          }
+          if (presence[gfId] !== undefined) presence[gfId].push(device.name)
         }
       }
     }
