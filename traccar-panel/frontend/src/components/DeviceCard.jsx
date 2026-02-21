@@ -10,6 +10,16 @@ function colorForDevice(id) {
   return COLORS[Math.abs(id) % COLORS.length]
 }
 
+// Smart place icon based on common geofence name keywords
+function placeIcon(name) {
+  if (/home|huis|maison|casa|thuis/i.test(name)) return '🏠'
+  if (/work|bureau|kantoor|office|job|werk/i.test(name)) return '💼'
+  if (/school|college|university|universit|klas/i.test(name)) return '🎓'
+  if (/gym|sport|fitness|pool|zwembad/i.test(name)) return '🏋️'
+  if (/shop|market|store|winkel|supermark|grocery/i.test(name)) return '🛒'
+  return '📍'
+}
+
 function formatDistance(metres) {
   if (metres < 1000) return `${Math.round(metres)} m`
   return `${(metres / 1000).toFixed(1)} km`
@@ -40,6 +50,7 @@ function BatteryBar({ level }) {
 export default function DeviceCard({ device, isSelected, onClick }) {
   const position = useTraccarStore((s) => s.positions[device.id])
   const geofences = useTraccarStore((s) => s.geofences)
+  const geofenceArrivals = useTraccarStore((s) => s.geofenceArrivals)
 
   const color = colorForDevice(device.id)
   const initial = device.name[0]?.toUpperCase() ?? '?'
@@ -89,9 +100,15 @@ export default function DeviceCard({ device, isSelected, onClick }) {
     statusText = 'Walking'
     statusColor = 'text-teal-600 dark:text-teal-400'
   } else if (currentPlaces.length > 0) {
-    const isHome = /home/i.test(currentPlaces[0])
-    statusIcon = isHome ? '🏠' : '📍'
-    statusText = `At ${currentPlaces[0]}`
+    const placeName = currentPlaces[0]
+    statusIcon = placeIcon(placeName)
+    // Show "since X" if we captured a live geofenceEnter event for this place
+    const placeGf = geofences.find((g) => g.name === placeName)
+    const arrivalTs = placeGf ? (geofenceArrivals[device.id]?.[placeGf.id] ?? null) : null
+    const sinceText = arrivalTs
+      ? ` · since ${formatDistanceToNow(new Date(arrivalTs), { addSuffix: false })}`
+      : ''
+    statusText = `At ${placeName}${sinceText}`
     statusColor = 'text-green-600 dark:text-green-400'
   } else {
     statusIcon = '💤'
@@ -129,10 +146,10 @@ export default function DeviceCard({ device, isSelected, onClick }) {
             {statusIcon} {statusText}
           </p>
 
-          {/* Row 3: Address (shown only when not at a named place) */}
-          {address && currentPlaces.length === 0 && (
+          {/* Row 3: Address — always shown so user sees exact location */}
+          {address && (
             <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
-              📍 {address}
+              {address}
             </p>
           )}
 
