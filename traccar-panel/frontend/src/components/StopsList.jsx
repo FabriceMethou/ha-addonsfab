@@ -130,7 +130,8 @@ export default function StopsList({ deviceId, mapRef }) {
           const durMs = stop.duration ?? 0
           const isSelected =
             selectedStop?.startTime === stop.startTime &&
-            selectedStop?.latitude === stop.latitude
+            selectedStop?.latitude === stop.latitude &&
+            selectedStop?.longitude === stop.longitude
 
           return (
             <button

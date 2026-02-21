@@ -437,8 +437,8 @@ export function HistoryControls({ mapRef }) {
           {stats && (
             <div className="text-xs text-gray-500 dark:text-gray-400 flex gap-3 flex-wrap">
               <span>{stats.dist.toFixed(1)} km</span>
-              <span>Max {Math.round(stats.maxSpd)} km/h</span>
-              <span>Avg {Math.round(stats.avgSpd)} km/h</span>
+              <span>Max {isFinite(stats.maxSpd) ? Math.round(stats.maxSpd) : 0} km/h</span>
+              <span>Avg {isFinite(stats.avgSpd) ? Math.round(stats.avgSpd) : 0} km/h</span>
             </div>
           )}
         </div>
