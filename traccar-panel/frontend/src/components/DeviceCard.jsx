@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import useTraccarStore from '../store/useTraccarStore.js'
 import { parseTraccarArea, areaCenter } from '../utils/parseTraccarArea.js'
@@ -61,6 +61,7 @@ export default function DeviceCard({ device, isSelected, onClick }) {
   const charging = position?.attributes?.charge ?? false
   const ignition = position?.attributes?.ignition ?? null
   const address = position?.address ?? null
+  const accuracy = position?.accuracy ?? null  // metres
 
   // Staleness: minutes since last GPS fix
   const fixAge = position?.fixTime
@@ -75,29 +76,53 @@ export default function DeviceCard({ device, isSelected, onClick }) {
     fixAge > 5  ? 'text-yellow-500 dark:text-yellow-400' :
     'text-gray-400 dark:text-gray-500'
 
+  // Low accuracy: cell-tower-level positioning (>150m) shown as approximate
+  const isApproximate = accuracy !== null && accuracy > 150
+
   const isOnline = device.status === 'online'
   const isDriving = speedKmh > 5
   const isIgnitionIdle = ignition === true && !isDriving  // engine on but not moving
   const isWalking = !isDriving && !isIgnitionIdle && speedKmh >= 0.5
 
-  // Geofences the device is currently inside
+  // Geofences the device is currently inside — sorted smallest-first so the most
+  // specific place (e.g. "Home" inside "Neighborhood") is always shown first.
   const geofenceIds = position?.geofenceIds ?? []
-  const currentPlaces = geofenceIds
-    .map((id) => geofences.find((g) => g.id === id)?.name)
-    .filter(Boolean)
+  const currentPlaces = useMemo(() => {
+    return geofenceIds
+      .map((id) => geofences.find((g) => g.id === id))
+      .filter(Boolean)
+      .sort((a, b) => {
+        const sizeOf = (gf) => {
+          const p = parseTraccarArea(gf.area)
+          if (!p) return Infinity
+          if (p.type === 'circle') return p.radius
+          if (p.coords?.length > 0) {
+            const lats = p.coords.map(([lat]) => lat)
+            const lons = p.coords.map(([, lon]) => lon)
+            return ((Math.max(...lats) - Math.min(...lats)) +
+                    (Math.max(...lons) - Math.min(...lons))) * 55500
+          }
+          return Infinity
+        }
+        return sizeOf(a) - sizeOf(b)
+      })
+      .map((g) => g.name)
+  }, [geofenceIds, geofences]) // eslint-disable-line
+
+  // Memoize home geofence center — geofences don't change at runtime so this
+  // avoids re-parsing the WKT area string on every WebSocket position update.
+  const { homeGfId, homeGfCenter } = useMemo(() => {
+    const homeGf = geofences.find((g) => /home/i.test(g.name)) ?? null
+    if (!homeGf) return { homeGfId: null, homeGfCenter: null }
+    const parsed = parseTraccarArea(homeGf.area)
+    return { homeGfId: homeGf.id, homeGfCenter: areaCenter(parsed) }
+  }, [geofences])
 
   // Distance from the "Home" geofence when not currently at home
-  let distFromHome = null
-  if (position && geofences.length > 0) {
-    const homeGf = geofences.find((g) => /home/i.test(g.name)) ?? null
-    if (homeGf && !geofenceIds.includes(homeGf.id)) {
-      const parsed = parseTraccarArea(homeGf.area)
-      const center = areaCenter(parsed)
-      if (center) {
-        distFromHome = haversineMetres(position.latitude, position.longitude, center[0], center[1])
-      }
-    }
-  }
+  const distFromHome = useMemo(() => {
+    if (!position || !homeGfCenter || geofenceIds.includes(homeGfId)) return null
+    return haversineMetres(position.latitude, position.longitude, homeGfCenter[0], homeGfCenter[1])
+  }, [position, homeGfCenter, homeGfId, geofenceIds]) // eslint-disable-line
 
   // Life360-style: icon + descriptive status text
   let statusIcon, statusText, statusColor
@@ -120,13 +145,18 @@ export default function DeviceCard({ device, isSelected, onClick }) {
   } else if (currentPlaces.length > 0) {
     const placeName = currentPlaces[0]
     statusIcon = placeIcon(placeName)
-    // Show "since X" if we captured a live geofenceEnter event for this place
+    // Show dwell time "At Home · 2h 15m" when we have an arrival timestamp
     const placeGf = geofences.find((g) => g.name === placeName)
     const arrivalTs = placeGf ? (geofenceArrivals[device.id]?.[placeGf.id] ?? null) : null
-    const sinceText = arrivalTs
-      ? ` · since ${formatDistanceToNow(new Date(arrivalTs), { addSuffix: false })}`
-      : ''
-    statusText = `At ${placeName}${sinceText}`
+    let dwellText = ''
+    if (arrivalTs) {
+      const ms = Date.now() - arrivalTs
+      const totalMin = Math.floor(ms / 60000)
+      const h = Math.floor(totalMin / 60)
+      const m = totalMin % 60
+      dwellText = ` · ${h > 0 ? `${h}h ${m}m` : `${m}m`}`
+    }
+    statusText = `At ${placeName}${dwellText}`
     statusColor = 'text-green-600 dark:text-green-400'
   } else {
     statusIcon = '💤'
@@ -144,11 +174,11 @@ export default function DeviceCard({ device, isSelected, onClick }) {
       }`}
     >
       <div className="flex items-start gap-2.5">
-        {/* Avatar circle — fades when GPS data is stale (>15 min) */}
+        {/* Avatar circle — fades when GPS data is stale (>15 min) or accuracy is poor (>150m) */}
         <div
           style={{
             background: isOnline ? color : '#9CA3AF',
-            opacity: isOnline && fixAge !== null && fixAge > 15 ? 0.5 : 1,
+            opacity: isOnline && (fixAge > 15 || isApproximate) ? 0.5 : 1,
           }}
           className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm mt-0.5 transition-opacity"
         >
@@ -167,9 +197,14 @@ export default function DeviceCard({ device, isSelected, onClick }) {
             {statusIcon} {statusText}
           </p>
 
-          {/* Row 3: Address — always shown so user sees exact location */}
+          {/* Row 3: Address — always shown; "approx." flag when GPS accuracy is poor */}
           {address && (
             <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
+              {isApproximate && (
+                <span className="text-orange-400 dark:text-orange-500 mr-1" title={`GPS accuracy ±${Math.round(accuracy)}m`}>
+                  ~
+                </span>
+              )}
               {address}
             </p>
           )}

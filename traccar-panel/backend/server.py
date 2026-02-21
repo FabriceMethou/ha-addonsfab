@@ -105,6 +105,7 @@ async def invalidate_session():
 
 async def session_renewal_task(http: aiohttp.ClientSession):
     """Renew Traccar session every 25 minutes to avoid 30-min idle timeout."""
+    global jsessionid
     while True:
         await asyncio.sleep(25 * 60)
         log.info("Renewing Traccar session...")
