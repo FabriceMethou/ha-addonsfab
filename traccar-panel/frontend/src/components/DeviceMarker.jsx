@@ -14,23 +14,22 @@ function colorForDevice(deviceId) {
 function makeDotIcon(color, initials, course, speedKmh, isOnline) {
   const showArrow = speedKmh > 2
   const arrow = showArrow
-    ? `<g transform="rotate(${course}, 20, 20)"><polygon points="20,2 16,10 24,10" fill="${color}" stroke="white" stroke-width="1.5"/></g>`
+    ? `<g transform="rotate(${course}, 24, 24)"><polygon points="24,2 19,12 29,12" fill="${color}" stroke="white" stroke-width="1.5"/></g>`
     : ''
-  // Offline devices get 50% opacity so they stand out as inactive
   const opacity = isOnline ? 1 : 0.45
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="52" viewBox="0 0 40 52" opacity="${opacity}">
+    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="62" viewBox="0 0 48 62" opacity="${opacity}">
       ${arrow}
-      <circle cx="20" cy="20" r="16" fill="${color}" stroke="white" stroke-width="2"/>
-      <text x="20" y="25" text-anchor="middle" fill="white" font-size="11" font-family="sans-serif" font-weight="bold">${initials}</text>
-      <polygon points="14,34 26,34 20,50" fill="${color}"/>
+      <circle cx="24" cy="24" r="20" fill="${color}" stroke="white" stroke-width="2.5"/>
+      <text x="24" y="30" text-anchor="middle" fill="white" font-size="13" font-family="sans-serif" font-weight="bold">${initials}</text>
+      <polygon points="17,42 31,42 24,60" fill="${color}"/>
     </svg>
   `
   return L.divIcon({
     html: svg,
-    iconSize: [40, 52],
-    iconAnchor: [20, 50],
-    popupAnchor: [0, -52],
+    iconSize: [48, 62],
+    iconAnchor: [24, 60],
+    popupAnchor: [0, -62],
     className: '',
   })
 }
@@ -75,7 +74,7 @@ export default function DeviceMarker({ device, position, onClick }) {
       eventHandlers={{ click: () => onClick?.(device.id) }}
     >
       {/* Name label: always visible for selected device, hover-only for others */}
-      <Tooltip permanent={isSelected} direction="top" offset={[0, -52]}>
+      <Tooltip permanent={isSelected} direction="top" offset={[0, -62]}>
         <span style={{ fontWeight: isSelected ? 700 : 500, fontSize: '12px' }}>{device.name}</span>
       </Tooltip>
       <Popup>
