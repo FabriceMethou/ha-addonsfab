@@ -141,13 +141,20 @@ async def proxy_api(request: web.Request) -> web.Response:
 
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse(heartbeat=30)  # built-in TCP keepalive
     await ws.prepare(request)
     ws_clients.add(ws)
     log.info("Frontend WS connected (total: %d)", len(ws_clients))
     try:
         async for msg in ws:
-            if msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+            if msg.type == WSMsgType.TEXT:
+                try:
+                    data = json.loads(msg.data)
+                    if data.get("type") == "ping":
+                        await ws.send_str(json.dumps({"type": "pong"}))
+                except Exception:
+                    pass
+            elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
                 break
     finally:
         ws_clients.discard(ws)

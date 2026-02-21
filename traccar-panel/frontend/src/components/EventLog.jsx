@@ -3,7 +3,7 @@ import { format, subDays } from 'date-fns'
 import useTraccarStore from '../store/useTraccarStore.js'
 
 const EVENT_LABELS = {
-  geofenceEnter: 'Entered',
+  geofenceEnter: 'Arrived at',
   geofenceExit: 'Left',
   deviceOnline: 'Online',
   deviceOffline: 'Offline',
@@ -11,6 +11,12 @@ const EVENT_LABELS = {
   deviceStopped: 'Stopped',
   deviceOverspeed: 'Overspeed',
   alarm: 'Alarm',
+  ignitionOn: 'Ignition on',
+  ignitionOff: 'Ignition off',
+  powerOn: 'Power on',
+  powerOff: 'Power off',
+  maintenance: 'Maintenance',
+  commandResult: 'Command result',
 }
 
 const EVENT_COLORS = {
@@ -20,6 +26,10 @@ const EVENT_COLORS = {
   deviceOffline: 'text-gray-400',
   deviceOverspeed: 'text-red-500 dark:text-red-400',
   alarm: 'text-red-600 dark:text-red-400',
+  ignitionOn: 'text-emerald-600 dark:text-emerald-400',
+  ignitionOff: 'text-gray-500 dark:text-gray-400',
+  powerOff: 'text-red-500 dark:text-red-400',
+  maintenance: 'text-purple-600 dark:text-purple-400',
 }
 
 export default function EventLog() {
