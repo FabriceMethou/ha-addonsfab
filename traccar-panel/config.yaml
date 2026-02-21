@@ -1,5 +1,5 @@
 name: "Traccar Panel"
-version: "0.8.1"
+version: "0.8.2"
 slug: "traccar-panel"
 description: "Modern Life360-style frontend for Traccar GPS tracking"
 init: false
