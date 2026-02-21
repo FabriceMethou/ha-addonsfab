@@ -131,7 +131,12 @@ async def proxy_api(request: web.Request) -> web.Response:
     url = f"{TRACCAR_URL}/api/{path}"
     params = dict(request.rel_url.query)
 
-    headers = {"Cookie": f"JSESSIONID={cookie}"}
+    # Force JSON — Traccar report endpoints return Excel (ZIP) by default
+    # if the Accept header is absent or set to */*
+    headers = {
+        "Cookie": f"JSESSIONID={cookie}",
+        "Accept": "application/json",
+    }
 
     t0 = time.monotonic()
     try:
