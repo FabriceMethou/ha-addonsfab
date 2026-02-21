@@ -14,6 +14,14 @@ function formatDist(metres) {
   return `${Math.round(metres)} m`
 }
 
+// Format a local date string (YYYY-MM-DD) into ISO range for that full day
+function dayToRange(dateStr) {
+  const d = new Date(dateStr)
+  const from = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0).toISOString()
+  const to = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).toISOString()
+  return { from, to }
+}
+
 /**
  * Shows auto-detected trips from Traccar's /api/reports/trips.
  * Calling onSelectTrip({startTime, endTime}) loads that trip in the replay player.
@@ -23,6 +31,8 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [days, setDays] = useState(7)
+  // pickedDate: 'YYYY-MM-DD' string or '' ('' = use days-based range)
+  const [pickedDate, setPickedDate] = useState('')
 
   useEffect(() => {
     if (!deviceId) return
@@ -32,8 +42,13 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
       setLoading(true)
       setError(null)
       try {
-        const from = subDays(new Date(), days).toISOString()
-        const to = new Date().toISOString()
+        let from, to
+        if (pickedDate) {
+          ;({ from, to } = dayToRange(pickedDate))
+        } else {
+          from = subDays(new Date(), days).toISOString()
+          to = new Date().toISOString()
+        }
         const res = await fetch(
           `./api/reports/trips?deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
         )
@@ -49,22 +64,24 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
 
     load()
     return () => { cancelled = true }
-  }, [deviceId, days])
+  }, [deviceId, days, pickedDate])
 
   if (!deviceId) {
     return <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">Select a device above.</p>
   }
 
+  const todayStr = format(new Date(), 'yyyy-MM-dd')
+
   return (
     <div className="flex flex-col">
       {/* Range selector */}
-      <div className="flex gap-1 px-3 pb-2">
+      <div className="flex gap-1 px-3 pb-1">
         {[1, 7, 14, 30].map((d) => (
           <button
             key={d}
-            onClick={() => setDays(d)}
+            onClick={() => { setDays(d); setPickedDate('') }}
             className={`flex-1 py-0.5 text-xs rounded ${
-              days === d
+              !pickedDate && days === d
                 ? 'bg-blue-500 text-white'
                 : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
             }`}
@@ -72,6 +89,31 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
             {d === 1 ? 'Today' : `${d}d`}
           </button>
         ))}
+      </div>
+
+      {/* Date picker */}
+      <div className="flex items-center gap-1 px-3 pb-2">
+        <label className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">Day:</label>
+        <input
+          type="date"
+          max={todayStr}
+          value={pickedDate}
+          onChange={(e) => setPickedDate(e.target.value)}
+          className={`flex-1 text-xs rounded border px-1.5 py-0.5 dark:bg-gray-800 dark:text-white ${
+            pickedDate
+              ? 'border-blue-400 dark:border-blue-500'
+              : 'border-gray-300 dark:border-gray-600'
+          }`}
+        />
+        {pickedDate && (
+          <button
+            onClick={() => setPickedDate('')}
+            className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 px-1"
+            title="Clear date filter"
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {loading && (
@@ -82,7 +124,7 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
       )}
       {!loading && !error && trips.length === 0 && (
         <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">
-          No trips in the last {days} day{days > 1 ? 's' : ''}.
+          {pickedDate ? `No trips on ${pickedDate}.` : `No trips in the last ${days} day${days > 1 ? 's' : ''}.`}
         </p>
       )}
 
