@@ -15,7 +15,9 @@ options:
   traccar_url: "http://192.168.1.100:8082"
   traccar_username: "admin"
   traccar_password: "admin"
+  log_level: "info"
 schema:
   traccar_url: str
   traccar_username: str
   traccar_password: password
+  log_level: "list(debug|info|warning|error)"

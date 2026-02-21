@@ -13,8 +13,22 @@ from collections import OrderedDict
 import aiohttp
 from aiohttp import web, WSMsgType
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [bff] %(levelname)s %(message)s")
+# ─── Logging setup ────────────────────────────────────────────────────────────
+
+_log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+_log_level = getattr(logging, _log_level_name, logging.INFO)
+
+logging.basicConfig(
+    level=_log_level,
+    format="%(asctime)s [bff] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 log = logging.getLogger("bff")
+
+# aiohttp access log — one line per HTTP request to the BFF
+access_log = logging.getLogger("bff.access")
+
+# ─── Config ───────────────────────────────────────────────────────────────────
 
 TRACCAR_URL = os.environ["TRACCAR_URL"].rstrip("/")
 TRACCAR_USERNAME = os.environ["TRACCAR_USERNAME"]
@@ -43,27 +57,33 @@ ws_clients: set[web.WebSocketResponse] = set()
 
 async def _do_auth(http: aiohttp.ClientSession) -> str | None:
     """POST to Traccar /api/session and return the JSESSIONID value, or None."""
+    log.debug("Auth: POST %s/api/session (user=%s)", TRACCAR_URL, TRACCAR_USERNAME)
     try:
         resp = await http.post(
             f"{TRACCAR_URL}/api/session",
             data={"email": TRACCAR_USERNAME, "password": TRACCAR_PASSWORD},
             allow_redirects=False,
         )
+        log.debug("Auth: response HTTP %s", resp.status)
         if resp.status in (200, 201):
             for cookie in resp.cookies.values():
                 if cookie.key == "JSESSIONID":
-                    log.info("Traccar session established")
+                    log.info("Traccar session established (cookie: %s...)", cookie.value[:8])
                     return cookie.value
             # Some versions put it in Set-Cookie header directly
             raw = resp.headers.get("Set-Cookie", "")
             for part in raw.split(";"):
                 if part.strip().startswith("JSESSIONID="):
-                    return part.strip().split("=", 1)[1]
-            log.warning("Auth succeeded but no JSESSIONID cookie found")
+                    val = part.strip().split("=", 1)[1]
+                    log.info("Traccar session established via header (cookie: %s...)", val[:8])
+                    return val
+            log.warning("Auth succeeded but no JSESSIONID cookie found in response")
+            log.debug("Auth response headers: %s", dict(resp.headers))
         else:
-            log.error("Auth failed: HTTP %s", resp.status)
+            body = await resp.text()
+            log.error("Auth failed: HTTP %s — %s", resp.status, body[:200])
     except Exception as exc:
-        log.error("Auth error: %s", exc)
+        log.error("Auth error: %s", exc, exc_info=True)
     return None
 
 
@@ -94,7 +114,7 @@ async def session_renewal_task(http: aiohttp.ClientSession):
                 jsessionid = cookie
             else:
                 jsessionid = None
-                log.warning("Session renewal failed")
+                log.warning("Session renewal failed — will retry on next request")
 
 
 # ─── REST proxy ──────────────────────────────────────────────────────────────
@@ -104,15 +124,16 @@ async def proxy_api(request: web.Request) -> web.Response:
     http: aiohttp.ClientSession = request.app["http"]
     cookie = await ensure_session(http)
     if not cookie:
+        log.warning("Proxy: no session available for %s %s", request.method, request.path)
         return web.Response(status=503, text="Cannot authenticate with Traccar")
 
-    # Strip the leading /api from the path so we can forward correctly
     path = request.match_info["path"]
     url = f"{TRACCAR_URL}/api/{path}"
     params = dict(request.rel_url.query)
 
     headers = {"Cookie": f"JSESSIONID={cookie}"}
 
+    t0 = time.monotonic()
     try:
         body = await request.read()
         resp = await http.request(
@@ -124,16 +145,25 @@ async def proxy_api(request: web.Request) -> web.Response:
             allow_redirects=False,
         )
 
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        data = await resp.read()
+
+        log.debug(
+            "PROXY %s /api/%s → HTTP %s (%d bytes, %.0f ms)",
+            request.method, path, resp.status, len(data), elapsed_ms,
+        )
+
         if resp.status in (401, 403):
+            log.warning("Proxy: Traccar returned %s for %s — invalidating session", resp.status, url)
             await invalidate_session()
             return web.Response(status=401, text="Session expired — please reload")
 
         content_type = resp.headers.get("Content-Type", "application/json")
-        data = await resp.read()
         return web.Response(status=resp.status, body=data, content_type=content_type.split(";")[0])
 
     except aiohttp.ClientError as exc:
-        log.error("Proxy error for %s: %s", url, exc)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        log.error("Proxy error for %s %s (%.0f ms): %s", request.method, url, elapsed_ms, exc)
         return web.Response(status=502, text=f"Traccar proxy error: {exc}")
 
 
@@ -144,21 +174,24 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse(heartbeat=30)  # built-in TCP keepalive
     await ws.prepare(request)
     ws_clients.add(ws)
-    log.info("Frontend WS connected (total: %d)", len(ws_clients))
+    peer = request.remote or "unknown"
+    log.info("Frontend WS connected from %s (total clients: %d)", peer, len(ws_clients))
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
                     if data.get("type") == "ping":
+                        log.debug("Frontend WS ping from %s → pong", peer)
                         await ws.send_str(json.dumps({"type": "pong"}))
                 except Exception:
                     pass
             elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                log.debug("Frontend WS %s from %s: %s", msg.type.name, peer, msg.data)
                 break
     finally:
         ws_clients.discard(ws)
-        log.info("Frontend WS disconnected (total: %d)", len(ws_clients))
+        log.info("Frontend WS disconnected from %s (total clients: %d)", peer, len(ws_clients))
     return ws
 
 
@@ -168,7 +201,7 @@ async def traccar_ws_task(app: web.Application):
     while True:
         cookie = await ensure_session(http)
         if not cookie:
-            log.warning("WS relay: no session, retrying in 10s")
+            log.warning("WS relay: no session available, retrying in 10s")
             await asyncio.sleep(10)
             continue
 
@@ -180,25 +213,53 @@ async def traccar_ws_task(app: web.Application):
                 headers={"Cookie": f"JSESSIONID={cookie}"},
                 heartbeat=30,
             ) as traccar_ws:
-                log.info("Traccar WS connected")
+                log.info("Traccar WS connected — fan-out to %d client(s)", len(ws_clients))
+                msg_count = 0
                 async for msg in traccar_ws:
                     if msg.type == WSMsgType.TEXT:
+                        msg_count += 1
+                        # Log message summary at DEBUG
+                        try:
+                            parsed = json.loads(msg.data)
+                            parts = []
+                            if "positions" in parsed:
+                                parts.append(f"{len(parsed['positions'])} position(s)")
+                            if "devices" in parsed:
+                                parts.append(f"{len(parsed['devices'])} device(s)")
+                            if "events" in parsed:
+                                parts.append(f"{len(parsed['events'])} event(s)")
+                                for ev in parsed["events"]:
+                                    log.debug("  event: type=%s deviceId=%s", ev.get("type"), ev.get("deviceId"))
+                            summary = ", ".join(parts) if parts else "empty"
+                            log.debug("Traccar WS msg #%d: %s → %d client(s)", msg_count, summary, len(ws_clients))
+                        except Exception:
+                            log.debug("Traccar WS msg #%d: (unparseable)", msg_count)
+
                         dead = set()
                         for client in ws_clients:
                             try:
                                 await client.send_str(msg.data)
-                            except Exception:
+                            except Exception as exc:
+                                log.debug("Dead WS client detected: %s", exc)
                                 dead.add(client)
-                        ws_clients.difference_update(dead)
+                        if dead:
+                            ws_clients.difference_update(dead)
+                            log.info("Pruned %d dead WS client(s) (%d remaining)", len(dead), len(ws_clients))
+
                     elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
-                        log.warning("Traccar WS closed: %s", msg)
+                        log.warning("Traccar WS closed: type=%s data=%s", msg.type.name, msg.data)
                         break
+
+                log.info("Traccar WS session ended after %d messages", msg_count)
+
         except aiohttp.ClientResponseError as exc:
             if exc.status in (401, 403):
-                log.warning("Traccar WS auth error, invalidating session")
+                log.warning("Traccar WS auth error (HTTP %s) — invalidating session", exc.status)
                 await invalidate_session()
+            else:
+                log.error("Traccar WS HTTP error: %s", exc)
         except Exception as exc:
-            log.error("Traccar WS error: %s", exc)
+            log.error("Traccar WS unexpected error: %s", exc, exc_info=True)
 
         log.info("Traccar WS disconnected — reconnecting in 5s")
         await asyncio.sleep(5)
@@ -221,14 +282,17 @@ async def geocode_handler(request: web.Request) -> web.Response:
     key = _geo_cache_key(lat, lon)
     if key in geo_cache:
         geo_cache.move_to_end(key)
+        log.debug("Geocode cache HIT  (%.3f, %.3f) → cache size: %d", lat, lon, len(geo_cache))
         return web.json_response({"address": geo_cache[key]})
 
+    log.debug("Geocode cache MISS (%.3f, %.3f) — queuing Nominatim request (queue depth: %d)", lat, lon, geo_queue.qsize())
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
     await geo_queue.put((lat, lon, fut))
     try:
         address = await asyncio.wait_for(fut, timeout=15)
         return web.json_response({"address": address})
     except asyncio.TimeoutError:
+        log.warning("Geocode timeout for (%.4f, %.4f)", lat, lon)
         return web.json_response({"address": f"{lat:.4f}, {lon:.4f}"})
 
 
@@ -252,9 +316,11 @@ async def geocode_worker(app: web.Application):
         now = time.monotonic()
         wait = 1.1 - (now - _last_nominatim)
         if wait > 0:
+            log.debug("Geocode rate-limit: sleeping %.2fs before Nominatim request", wait)
             await asyncio.sleep(wait)
 
         address = f"{lat:.4f}, {lon:.4f}"  # fallback
+        t0 = time.monotonic()
         try:
             resp = await http.get(
                 "https://nominatim.openstreetmap.org/reverse",
@@ -262,11 +328,15 @@ async def geocode_worker(app: web.Application):
                 headers={"User-Agent": "traccar-panel-ha-addon/1.0"},
                 timeout=aiohttp.ClientTimeout(total=8),
             )
+            elapsed_ms = (time.monotonic() - t0) * 1000
             if resp.status == 200:
                 data = await resp.json()
                 address = data.get("display_name", address)
+                log.debug("Nominatim OK (%.0f ms): %.4f,%.4f → %s", elapsed_ms, lat, lon, address[:60])
+            else:
+                log.warning("Nominatim HTTP %s for (%.4f, %.4f)", resp.status, lat, lon)
         except Exception as exc:
-            log.warning("Nominatim error for (%s,%s): %s", lat, lon, exc)
+            log.warning("Nominatim error for (%.4f, %.4f): %s", lat, lon, exc)
 
         _last_nominatim = time.monotonic()
 
@@ -284,6 +354,13 @@ async def geocode_worker(app: web.Application):
 
 
 async def on_startup(app: web.Application):
+    log.info("=" * 60)
+    log.info("Traccar Panel BFF starting up")
+    log.info("  Traccar URL  : %s", TRACCAR_URL)
+    log.info("  Traccar user : %s", TRACCAR_USERNAME)
+    log.info("  Log level    : %s", _log_level_name)
+    log.info("=" * 60)
+
     connector = aiohttp.TCPConnector(ssl=False)
     http = aiohttp.ClientSession(connector=connector)
     app["http"] = http
@@ -292,6 +369,8 @@ async def on_startup(app: web.Application):
     cookie = await ensure_session(http)
     if not cookie:
         log.warning("Initial Traccar auth failed — will retry on first request")
+    else:
+        log.info("Initial auth successful — ready to proxy requests")
 
     # Background tasks
     asyncio.create_task(session_renewal_task(http))
@@ -300,6 +379,7 @@ async def on_startup(app: web.Application):
 
 
 async def on_cleanup(app: web.Application):
+    log.info("BFF shutting down — closing HTTP session")
     await app["http"].close()
 
 
@@ -318,4 +398,14 @@ def make_app() -> web.Application:
 
 
 if __name__ == "__main__":
-    web.run_app(make_app(), host="127.0.0.1", port=3001, access_log=None)
+    # Enable aiohttp's built-in access log at the configured level
+    aiohttp_access_log = logging.getLogger("aiohttp.access")
+    aiohttp_access_log.setLevel(_log_level)
+
+    web.run_app(
+        make_app(),
+        host="127.0.0.1",
+        port=3001,
+        access_log=aiohttp_access_log,
+        access_log_format='%r %s %b %Tms',
+    )
