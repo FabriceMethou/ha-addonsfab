@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 import useTraccarStore from '../store/useTraccarStore.js'
 
 const ICONS = {
@@ -6,6 +6,7 @@ const ICONS = {
   geofenceExit: '🚪',
   lowBattery: '🔋',
   deviceOverspeed: '⚡',
+  alarm: '🚨',
 }
 
 const COLORS = {
@@ -13,6 +14,26 @@ const COLORS = {
   geofenceExit: 'border-orange-400 bg-orange-50 dark:bg-orange-900/40',
   lowBattery: 'border-red-400 bg-red-50 dark:bg-red-900/40',
   deviceOverspeed: 'border-yellow-400 bg-yellow-50 dark:bg-yellow-900/40',
+  alarm: 'border-red-600 bg-red-100 dark:bg-red-900/60',
+}
+
+const ALARM_LABELS = {
+  sos: 'SOS alert',
+  crash: 'Crash detected',
+  hardBraking: 'Hard braking',
+  hardAcceleration: 'Rapid acceleration',
+  overSpeed: 'Overspeed',
+  lowBattery: 'Low battery',
+  general: 'Alert triggered',
+}
+
+function getAlertBody(alert) {
+  if (alert.type === 'geofenceEnter') return `arrived at ${alert.geofenceName}`
+  if (alert.type === 'geofenceExit') return `left ${alert.geofenceName}`
+  if (alert.type === 'lowBattery') return `battery low (${alert.battery}%)`
+  if (alert.type === 'deviceOverspeed') return `speeding${alert.speedKmh ? ` — ${alert.speedKmh} km/h` : ''}`
+  if (alert.type === 'alarm') return ALARM_LABELS[alert.alarmType] ?? `Alarm: ${alert.alarmType}`
+  return alert.type
 }
 
 function Toast({ alert, onDismiss }) {
@@ -21,12 +42,7 @@ function Toast({ alert, onDismiss }) {
     return () => clearTimeout(timer)
   }, [alert.id, onDismiss])
 
-  let body
-  if (alert.type === 'geofenceEnter') body = <>arrived at <strong>{alert.geofenceName}</strong></>
-  else if (alert.type === 'geofenceExit') body = <>left <strong>{alert.geofenceName}</strong></>
-  else if (alert.type === 'lowBattery') body = <>battery low ({alert.battery}%)</>
-  else if (alert.type === 'deviceOverspeed') body = <>speeding{alert.speedKmh ? ` — ${alert.speedKmh} km/h` : ''}</>
-  else body = alert.type
+  const body = getAlertBody(alert)
 
   return (
     <div
@@ -50,6 +66,33 @@ function Toast({ alert, onDismiss }) {
 export default function ToastAlerts() {
   const alerts = useTraccarStore((s) => s.alerts)
   const dismissAlert = useTraccarStore((s) => s.dismissAlert)
+  const seenIds = useRef(new Set())
+
+  // Request browser notification permission once
+  useEffect(() => {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission()
+    }
+  }, [])
+
+  // Fire a browser notification for each new alert
+  useEffect(() => {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    for (const alert of alerts) {
+      if (!seenIds.current.has(alert.id)) {
+        seenIds.current.add(alert.id)
+        try {
+          new Notification(alert.deviceName, {
+            body: getAlertBody(alert),
+            icon: './favicon.ico',
+            tag: String(alert.id),
+          })
+        } catch {
+          // Notifications may be blocked by the browser in some contexts
+        }
+      }
+    }
+  }, [alerts])
 
   if (alerts.length === 0) return null
 

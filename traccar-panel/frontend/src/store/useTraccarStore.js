@@ -116,6 +116,10 @@ const useTraccarStore = create((set, get) => ({
       if (!device) return
       const speedKmh = Math.round((attributes?.speed ?? 0) * 1.852)
       get().pushAlert({ type, deviceName: device.name, speedKmh, ts: Date.now() })
+    } else if (type === 'alarm') {
+      if (!device) return
+      const alarmType = attributes?.alarm ?? 'general'
+      get().pushAlert({ type: 'alarm', deviceName: device.name, alarmType, ts: Date.now() })
     }
   },
 

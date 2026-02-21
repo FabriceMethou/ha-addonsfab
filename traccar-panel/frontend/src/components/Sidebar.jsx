@@ -18,6 +18,7 @@ const SORT_OPTIONS = [
   { value: 'lastSeen', label: 'Last seen' },
   { value: 'driving', label: 'Driving first' },
   { value: 'name', label: 'Name A–Z' },
+  { value: 'battery', label: 'Battery low' },
 ]
 
 function sortDevices(devices, positions, sortBy) {
@@ -31,6 +32,13 @@ function sortDevices(devices, positions, sortBy) {
       const bDriving = bKmh > 5
       if (aDriving !== bDriving) return aDriving ? -1 : 1
       return bKmh - aKmh
+    }
+
+    if (sortBy === 'battery') {
+      // Lowest battery first (most needs charging); devices with no battery data go last
+      const aBatt = positions[a.id]?.attributes?.batteryLevel ?? 101
+      const bBatt = positions[b.id]?.attributes?.batteryLevel ?? 101
+      return aBatt - bBatt
     }
 
     // lastSeen — most recent fixTime first, offline devices last
