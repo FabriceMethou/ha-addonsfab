@@ -7,6 +7,7 @@ import { createAnimation } from '../utils/tripAnimation.js'
 import { routeDistanceKm } from '../utils/haversine.js'
 import TripsList from './TripsList.jsx'
 import StopsList from './StopsList.jsx'
+import DayTimeline from './DayTimeline.jsx'
 
 const KNOTS_TO_KMH = 1.852
 const SPEED_MULTIPLIERS = [1, 5, 10, 30]
@@ -39,7 +40,7 @@ export function HistoryControls({ mapRef }) {
   const { setAnimatedRoute, setAnimatedMarker, clearAnimation } = useTraccarStore()
 
   const [deviceId, setDeviceId] = useState('')
-  const [mode, setMode] = useState('trips') // 'trips' | 'stops' | 'custom'
+  const [mode, setMode] = useState('timeline') // 'timeline' | 'trips' | 'stops' | 'custom'
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [playbackStatus, setPlaybackStatus] = useState('idle')
@@ -82,10 +83,9 @@ export function HistoryControls({ mapRef }) {
   }, [deviceId]) // eslint-disable-line
 
   // Auto-load the most recent trip whenever the device is (re)selected.
-  // Skip when mode==='trips' to avoid a duplicate /api/reports/trips fetch
-  // while TripsList is already loading its own list.
+  // Skip when mode==='trips'/'timeline' to avoid duplicate /api/reports/trips fetches.
   useEffect(() => {
-    if (!deviceId || mode === 'trips') return
+    if (!deviceId || mode === 'trips' || mode === 'timeline') return
     let cancelled = false
     const controller = new AbortController()
     autoLoadAbortRef.current = controller
@@ -266,25 +266,34 @@ export function HistoryControls({ mapRef }) {
 
       {/* Mode toggle */}
       <div className="flex mx-3 mb-2 rounded overflow-hidden border border-gray-200 dark:border-gray-600">
-        <button
-          onClick={() => setMode('trips')}
-          className={`flex-1 py-1 text-xs ${mode === 'trips' ? 'bg-blue-500 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
-        >
-          Trips
-        </button>
-        <button
-          onClick={() => setMode('stops')}
-          className={`flex-1 py-1 text-xs ${mode === 'stops' ? 'bg-blue-500 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
-        >
-          Stops
-        </button>
-        <button
-          onClick={() => setMode('custom')}
-          className={`flex-1 py-1 text-xs ${mode === 'custom' ? 'bg-blue-500 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
-        >
-          Custom
-        </button>
+        {[
+          { key: 'timeline', label: 'Day' },
+          { key: 'trips',    label: 'Trips' },
+          { key: 'stops',    label: 'Stops' },
+          { key: 'custom',   label: 'Custom' },
+        ].map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setMode(key)}
+            className={`flex-1 py-1 text-xs ${
+              mode === key
+                ? 'bg-blue-500 text-white'
+                : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
+
+      {/* Day timeline (default mode) */}
+      {mode === 'timeline' && (
+        <DayTimeline
+          deviceId={deviceId}
+          onSelectTrip={handleSelectTrip}
+          selectedStartTime={selectedTripStart}
+        />
+      )}
 
       {/* Trips list */}
       {mode === 'trips' && (
