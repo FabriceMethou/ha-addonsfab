@@ -97,7 +97,7 @@ export default function TripsList({ deviceId, onSelectTrip }) {
           return (
             <button
               key={i}
-              onClick={() => onSelectTrip({ startTime: trip.startTime, endTime: trip.endTime })}
+              onClick={() => onSelectTrip(trip)}
               className="w-full text-left px-3 py-2 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
             >
               <div className="flex items-center justify-between mb-0.5">

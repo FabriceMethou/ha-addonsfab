@@ -24,7 +24,7 @@ function MapRefCapture({ mapRef }) {
   return null
 }
 
-export default function Map({ mapRef, historyOverlayRef }) {
+export default function Map({ mapRef }) {
   const devices = useTraccarStore((s) => s.devices)
   const positions = useTraccarStore((s) => s.positions)
   const geofences = useTraccarStore((s) => s.geofences)
@@ -49,7 +49,7 @@ export default function Map({ mapRef, historyOverlayRef }) {
             onClick={setSelectedDevice}
           />
         ))}
-        <HistoryOverlay overlayRef={historyOverlayRef} />
+        <HistoryOverlay />
       </MapContainer>
 
       {/* Tile switcher overlay */}

@@ -7,6 +7,7 @@ import { createAnimation } from '../utils/tripAnimation.js'
 import { routeDistanceKm } from '../utils/haversine.js'
 import TripsList from './TripsList.jsx'
 
+const KNOTS_TO_KMH = 1.852
 const SPEED_MULTIPLIERS = [1, 5, 10, 30]
 
 function speedColor(kmh) {
@@ -31,53 +32,87 @@ const pinIcon = (color) =>
     className: '',
   })
 
-// ── Controls (rendered in sidebar) ───────────────────────────────────────────
-// overlayRef is provided by App and shared with HistoryOverlay inside MapContainer
-export function HistoryControls({ mapRef, overlayRef }) {
+// ── Controls (sidebar) ────────────────────────────────────────────────────────
+export function HistoryControls({ mapRef }) {
   const devices = useTraccarStore((s) => s.devices)
+  const { setAnimatedRoute, setAnimatedMarker, clearAnimation } = useTraccarStore()
+
   const [deviceId, setDeviceId] = useState('')
   const [mode, setMode] = useState('trips') // 'trips' | 'custom'
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
-  const [playbackStatus, setPlaybackStatus] = useState('idle') // idle | loading | playing | paused
+  const [playbackStatus, setPlaybackStatus] = useState('idle')
   const [speed, setSpeed] = useState(1)
   const [progress, setProgress] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [stats, setStats] = useState(null)
   const [error, setError] = useState(null)
-  const [points, setPoints] = useState([])
-  const animRef = useRef(null)
+  const [hasRoute, setHasRoute] = useState(false)
 
-  // Default device + date range
+  const animRef = useRef(null)
+  const abortRef = useRef(null) // AbortController for in-flight fetches
+
+  // Default device
   useEffect(() => {
     if (devices.length > 0 && !deviceId) setDeviceId(String(devices[0].id))
     const now = new Date()
-    const yesterday = new Date(now.getTime() - 24 * 3600 * 1000)
-    setFrom(format(yesterday, "yyyy-MM-dd'T'HH:mm"))
+    setFrom(format(new Date(now - 24 * 3600 * 1000), "yyyy-MM-dd'T'HH:mm"))
     setTo(format(now, "yyyy-MM-dd'T'HH:mm"))
   }, [devices]) // eslint-disable-line
 
-  const onUpdate = useCallback(({ lat, lon, speed: spd, progress: prog }) => {
-    if (overlayRef) overlayRef.current.markerPos = [lat, lon]
-    setProgress(prog)
-    if (animRef.current) setElapsed(Math.round(prog * animRef.current.totalDurationMs))
-  }, [overlayRef])
-
-  async function loadRoute(fromISO, toISO) {
+  // Clean up when device changes
+  useEffect(() => {
     if (!deviceId) return
+    abortRef.current?.abort()
     animRef.current?.destroy()
     animRef.current = null
-    setPoints([])
-    if (overlayRef) overlayRef.current = { points: [], markerPos: null }
+    clearAnimation()
+    setHasRoute(false)
+    setPlaybackStatus('idle')
+    setProgress(0)
+    setElapsed(0)
+    setStats(null)
+    setError(null)
+  }, [deviceId]) // eslint-disable-line
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort()
+      animRef.current?.destroy()
+      clearAnimation()
+    }
+  }, []) // eslint-disable-line
+
+  const onUpdate = useCallback(({ lat, lon, progress: prog }) => {
+    setAnimatedMarker({ lat, lon })
+    setProgress(prog)
+    if (animRef.current) setElapsed(Math.round(prog * animRef.current.totalDurationMs))
+  }, [setAnimatedMarker])
+
+  async function loadRoute(fromISO, toISO, prefetchedStats = null) {
+    if (!deviceId) return
+
+    // Cancel any previous in-flight request
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    // Tear down old animation
+    animRef.current?.destroy()
+    animRef.current = null
+    clearAnimation()
+    setHasRoute(false)
     setPlaybackStatus('loading')
     setError(null)
     setProgress(0)
     setElapsed(0)
-    setStats(null)
+    setStats(prefetchedStats) // show Traccar's pre-calculated stats immediately
 
     try {
       const res = await fetch(
-        `./api/reports/route?deviceId=${deviceId}&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`
+        `./api/reports/route?deviceId=${deviceId}&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`,
+        { signal: controller.signal }
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
@@ -89,36 +124,40 @@ export function HistoryControls({ mapRef, overlayRef }) {
       }
       if (data.length > 10000) console.warn(`Large route: ${data.length} points`)
 
-      setPoints(data)
-      if (overlayRef) {
-        overlayRef.current.points = data
-        overlayRef.current.markerPos = [data[0].latitude, data[0].longitude]
-      }
+      setAnimatedRoute(data)
 
+      // Recalculate stats from actual GPS points (more accurate than trip summary)
       const dist = routeDistanceKm(data)
       const durMs =
-        new Date(data[data.length - 1].fixTime).getTime() - new Date(data[0].fixTime).getTime()
-      const maxSpd = Math.max(...data.map((p) => (p.speed ?? 0) * 1.852))
-      const avgSpd = durMs > 0 ? dist / (durMs / 3600000) : 0
+        new Date(data[data.length - 1].fixTime).getTime() -
+        new Date(data[0].fixTime).getTime()
+      const maxSpd = Math.max(...data.map((p) => (p.speed ?? 0) * KNOTS_TO_KMH))
+      const avgSpd = durMs > 0 ? dist / (durMs / 3_600_000) : 0
       setStats({ dist, durMs, maxSpd, avgSpd })
 
       const anim = createAnimation(data, onUpdate)
       animRef.current = anim
+      setHasRoute(true)
 
       if (mapRef?.current) mapRef.current.flyTo([data[0].latitude, data[0].longitude], 13)
       setPlaybackStatus('paused')
     } catch (err) {
+      if (err.name === 'AbortError') return // superseded by newer request — silent
       setError(err.message)
       setPlaybackStatus('idle')
     }
   }
 
-  // Called when user clicks a trip in TripsList
-  function handleSelectTrip({ startTime, endTime }) {
-    loadRoute(startTime, endTime)
+  function handleSelectTrip(trip) {
+    // Pass Traccar's pre-calculated stats so UI shows them while route loads
+    loadRoute(trip.startTime, trip.endTime, {
+      dist: (trip.distance ?? 0) / 1000,
+      durMs: trip.duration ?? 0,
+      maxSpd: (trip.maxSpeed ?? 0) * KNOTS_TO_KMH,
+      avgSpd: (trip.averageSpeed ?? 0) * KNOTS_TO_KMH,
+    })
   }
 
-  // Called when user clicks Load in manual mode
   function handleManualLoad() {
     if (!from || !to) return
     loadRoute(new Date(from).toISOString(), new Date(to).toISOString())
@@ -139,6 +178,7 @@ export function HistoryControls({ mapRef, overlayRef }) {
     setPlaybackStatus('paused')
     setProgress(0)
     setElapsed(0)
+    setAnimatedMarker(null)
   }
 
   function handleSpeedChange(s) {
@@ -162,7 +202,7 @@ export function HistoryControls({ mapRef, overlayRef }) {
       <div className="px-3 pt-2 pb-1">
         <select
           value={deviceId}
-          onChange={(e) => { setDeviceId(e.target.value); setPoints([]) }}
+          onChange={(e) => setDeviceId(e.target.value)}
           className="w-full text-sm rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1"
         >
           {devices.map((d) => (
@@ -189,10 +229,7 @@ export function HistoryControls({ mapRef, overlayRef }) {
 
       {/* Trips list */}
       {mode === 'trips' && (
-        <TripsList
-          deviceId={deviceId}
-          onSelectTrip={handleSelectTrip}
-        />
+        <TripsList deviceId={deviceId} onSelectTrip={handleSelectTrip} />
       )}
 
       {/* Custom date range */}
@@ -217,26 +254,26 @@ export function HistoryControls({ mapRef, overlayRef }) {
           >
             {playbackStatus === 'loading' ? 'Loading...' : 'Load Route'}
           </button>
-          {error && <p className="text-xs text-red-500">{error}</p>}
         </div>
       )}
 
-      {/* Playback controls (shown once a route is loaded) */}
-      {points.length > 0 && (
+      {/* Error (always visible when set) */}
+      {error && (
+        <p className="text-xs text-red-500 px-3 py-1">{error}</p>
+      )}
+
+      {/* Loading indicator */}
+      {playbackStatus === 'loading' && (
+        <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-1">Loading route...</p>
+      )}
+
+      {/* Playback controls */}
+      {hasRoute && (
         <div className="px-3 py-2 space-y-2 border-t border-gray-200 dark:border-gray-700 mt-2">
-          {mode === 'trips' && error && (
-            <p className="text-xs text-red-500">{error}</p>
-          )}
-
-          {playbackStatus === 'loading' && (
-            <p className="text-xs text-gray-400 dark:text-gray-500">Loading route...</p>
-          )}
-
           <div className="flex gap-1 items-center">
             <button
               onClick={playbackStatus === 'playing' ? handlePause : handlePlay}
-              disabled={!animRef.current}
-              className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded disabled:opacity-50"
+              className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded"
             >
               {playbackStatus === 'playing' ? '⏸' : '▶'}
             </button>
@@ -287,38 +324,25 @@ export function HistoryControls({ mapRef, overlayRef }) {
           )}
         </div>
       )}
-
-      {/* Show loading/error for trips mode when no points yet */}
-      {points.length === 0 && mode === 'trips' && error && (
-        <p className="text-xs text-red-500 px-3 py-1">{error}</p>
-      )}
-      {points.length === 0 && playbackStatus === 'loading' && (
-        <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-1">Loading route...</p>
-      )}
     </div>
   )
 }
 
-// ── Map overlay (inside MapContainer) ────────────────────────────────────────
-export function HistoryOverlay({ overlayRef }) {
-  const [, rerender] = useState(0)
+// ── Map overlay (inside MapContainer) — reads Zustand, no polling ─────────────
+export function HistoryOverlay() {
+  const route = useTraccarStore((s) => s.animatedRoute)
+  const marker = useTraccarStore((s) => s.animatedMarker)
 
-  useEffect(() => {
-    const id = setInterval(() => rerender((n) => n + 1), 50)
-    return () => clearInterval(id)
-  }, [])
-
-  const { points, markerPos } = overlayRef?.current ?? {}
-  if (!points || points.length < 2) return null
+  if (!route || route.length < 2) return null
 
   // Speed-coloured segments
   const segments = []
-  for (let i = 1; i < points.length; i++) {
-    const kmh = (points[i - 1].speed ?? 0) * 1.852
+  for (let i = 1; i < route.length; i++) {
+    const kmh = (route[i - 1].speed ?? 0) * KNOTS_TO_KMH
     segments.push({
       positions: [
-        [points[i - 1].latitude, points[i - 1].longitude],
-        [points[i].latitude, points[i].longitude],
+        [route[i - 1].latitude, route[i - 1].longitude],
+        [route[i].latitude, route[i].longitude],
       ],
       color: speedColor(kmh),
     })
@@ -329,12 +353,12 @@ export function HistoryOverlay({ overlayRef }) {
       {segments.map((seg, i) => (
         <Polyline key={i} positions={seg.positions} pathOptions={{ color: seg.color, weight: 3 }} />
       ))}
-      <Marker position={[points[0].latitude, points[0].longitude]} icon={pinIcon('#22C55E')} />
+      <Marker position={[route[0].latitude, route[0].longitude]} icon={pinIcon('#22C55E')} />
       <Marker
-        position={[points[points.length - 1].latitude, points[points.length - 1].longitude]}
+        position={[route[route.length - 1].latitude, route[route.length - 1].longitude]}
         icon={pinIcon('#EF4444')}
       />
-      {markerPos && <Marker position={markerPos} icon={pinIcon('#3B82F6')} />}
+      {marker && <Marker position={[marker.lat, marker.lon]} icon={pinIcon('#3B82F6')} />}
     </>
   )
 }

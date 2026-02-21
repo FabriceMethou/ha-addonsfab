@@ -10,7 +10,7 @@ const TABS = [
   { id: 'history', label: 'History' },
 ]
 
-export default function Sidebar({ mapRef, historyOverlayRef }) {
+export default function Sidebar({ mapRef }) {
   const devices = useTraccarStore((s) => s.devices)
   const selectedDeviceId = useTraccarStore((s) => s.selectedDeviceId)
   const activeTab = useTraccarStore((s) => s.activeTab)
@@ -95,7 +95,7 @@ export default function Sidebar({ mapRef, historyOverlayRef }) {
 
         {activeTab === 'places' && <PlacesList mapRef={mapRef} />}
 
-        {activeTab === 'history' && <HistoryControls mapRef={mapRef} overlayRef={historyOverlayRef} />}
+        {activeTab === 'history' && <HistoryControls mapRef={mapRef} />}
       </div>
     </div>
   )

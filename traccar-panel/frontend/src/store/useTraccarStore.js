@@ -18,6 +18,10 @@ const useTraccarStore = create((set, get) => ({
   // Alerts (geofence enter/exit from WS events)
   alerts: [], // [{id, type, deviceName, geofenceName, ts}]
 
+  // Trip replay state (written by HistoryControls, read by HistoryOverlay inside MapContainer)
+  animatedRoute: [],          // GPS points array currently loaded
+  animatedMarker: null,       // {lat, lon} current animation position
+
   // Connection state
   connected: false,
   loading: true,
@@ -70,6 +74,10 @@ const useTraccarStore = create((set, get) => ({
 
   dismissAlert: (id) =>
     set((state) => ({ alerts: state.alerts.filter((a) => a.id !== id) })),
+
+  setAnimatedRoute: (points) => set({ animatedRoute: points }),
+  setAnimatedMarker: (pos) => set({ animatedMarker: pos }),
+  clearAnimation: () => set({ animatedRoute: [], animatedMarker: null }),
 
   // Handle incoming WS events (geofenceEnter, geofenceExit, etc.)
   handleWsEvent: (event) => {

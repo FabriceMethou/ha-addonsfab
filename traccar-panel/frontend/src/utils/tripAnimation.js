@@ -16,13 +16,15 @@
 export function createAnimation(rawPoints, onUpdate) {
   if (!rawPoints || rawPoints.length === 0) return null
 
-  // Normalise points to ms timestamps
-  const points = rawPoints.map((p) => ({
+  // Normalise points to ms timestamps, deduplicate identical timestamps
+  // (duplicate ts would cause divide-by-zero in interpolation)
+  const allPoints = rawPoints.map((p) => ({
     lat: p.latitude,
     lon: p.longitude,
     speed: p.speed ?? 0,
     ts: new Date(p.fixTime ?? p.deviceTime).getTime(),
   }))
+  const points = allPoints.filter((p, i) => i === 0 || p.ts !== allPoints[i - 1].ts)
 
   const totalDuration = points[points.length - 1].ts - points[0].ts // ms
 

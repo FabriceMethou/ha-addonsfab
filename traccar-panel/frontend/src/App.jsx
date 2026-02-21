@@ -11,8 +11,6 @@ export default function App() {
   const error = useTraccarStore((s) => s.error)
   const darkMode = useTraccarStore((s) => s.darkMode)
   const mapRef = useRef(null)
-  // Shared ref: HistoryControls writes here, HistoryOverlay (inside MapContainer) reads it
-  const historyOverlayRef = useRef({ points: [], markerPos: null })
 
   // Apply dark mode class on root element
   useEffect(() => {
@@ -59,12 +57,12 @@ export default function App() {
     <div className={`h-screen flex overflow-hidden ${darkMode ? 'dark' : ''}`}>
       {/* Map — takes remaining space */}
       <div className="flex-1 relative">
-        <Map mapRef={mapRef} historyOverlayRef={historyOverlayRef} />
+        <Map mapRef={mapRef} />
       </div>
 
       {/* Sidebar — fixed width, visible on sm+ screens */}
       <div className="w-72 flex-shrink-0 flex flex-col">
-        <Sidebar mapRef={mapRef} historyOverlayRef={historyOverlayRef} />
+        <Sidebar mapRef={mapRef} />
       </div>
 
       {/* Geofence enter/exit toasts */}
