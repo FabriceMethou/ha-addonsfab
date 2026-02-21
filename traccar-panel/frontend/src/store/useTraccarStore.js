@@ -40,6 +40,21 @@ const useTraccarStore = create((set, get) => ({
   // Actions
   setDevices: (devices) => set({ devices }),
 
+  // Merge backfilled arrival timestamps; WS-derived arrivals win if newer
+  seedGeofenceArrivals: (arrivals) =>
+    set((s) => {
+      const merged = { ...s.geofenceArrivals }
+      for (const [deviceId, gfMap] of Object.entries(arrivals)) {
+        merged[deviceId] = { ...(merged[deviceId] ?? {}) }
+        for (const [gfId, ts] of Object.entries(gfMap)) {
+          if (!merged[deviceId][gfId] || ts > merged[deviceId][gfId]) {
+            merged[deviceId][gfId] = ts
+          }
+        }
+      }
+      return { geofenceArrivals: merged }
+    }),
+
   setPositions: (positionsArray) => {
     const map = {}
     for (const p of positionsArray) map[p.deviceId] = p
