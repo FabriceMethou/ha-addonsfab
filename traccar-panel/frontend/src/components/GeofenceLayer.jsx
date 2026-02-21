@@ -15,11 +15,13 @@ export default function GeofenceLayer({ geofences, presence }) {
         const fillOpacity = occupied ? 0.2 : 0.1
         const weight = occupied ? 2.5 : 1.5
 
+        // Occupied geofences get a permanent label visible on the map;
+        // empty geofences just show a hover tooltip to avoid clutter.
         const tooltip = (
-          <Tooltip sticky>
+          <Tooltip permanent={occupied} sticky={!occupied} direction="center">
             <strong>{gf.name}</strong>
             {occupied && (
-              <div className="text-green-600 text-xs">{presence[gf.id].join(', ')}</div>
+              <div style={{ color: '#16a34a', fontSize: '11px' }}>{presence[gf.id].join(', ')}</div>
             )}
           </Tooltip>
         )

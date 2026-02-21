@@ -55,9 +55,14 @@ export default function Sidebar({ mapRef }) {
   const activeTab = useTraccarStore((s) => s.activeTab)
   const connected = useTraccarStore((s) => s.connected)
   const darkMode = useTraccarStore((s) => s.darkMode)
-  const { setSelectedDevice, setActiveTab, toggleDarkMode } = useTraccarStore()
+  const loading = useTraccarStore((s) => s.loading)
+  const { setSelectedDevice, setActiveTab, toggleDarkMode, refresh } = useTraccarStore()
 
   const [sortBy, setSortBy] = useState('lastSeen')
+  const [filterText, setFilterText] = useState('')
+  const [notifDismissed, setNotifDismissed] = useState(
+    () => localStorage.getItem('notifBannerDismissed') === 'true'
+  )
 
   function handleDeviceClick(id) {
     setSelectedDevice(id)
@@ -67,7 +72,30 @@ export default function Sidebar({ mapRef }) {
     }
   }
 
+  function handleRefresh() {
+    refresh()
+  }
+
+  function handleEnableNotifications() {
+    Notification.requestPermission()
+    setNotifDismissed(true)
+    localStorage.setItem('notifBannerDismissed', 'true')
+  }
+
+  function handleDismissNotifBanner() {
+    setNotifDismissed(true)
+    localStorage.setItem('notifBannerDismissed', 'true')
+  }
+
   const sortedDevices = sortDevices(devices, positions, sortBy)
+  const filteredDevices = filterText
+    ? sortedDevices.filter((d) => d.name.toLowerCase().includes(filterText.toLowerCase()))
+    : sortedDevices
+
+  const showNotifBanner =
+    typeof Notification !== 'undefined' &&
+    Notification.permission === 'default' &&
+    !notifDismissed
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700">
@@ -80,6 +108,14 @@ export default function Sidebar({ mapRef }) {
             className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`}
           />
           <button
+            onClick={handleRefresh}
+            disabled={loading}
+            className={`text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-sm ${loading ? 'animate-spin' : ''}`}
+            title="Refresh data"
+          >
+            ↺
+          </button>
+          <button
             onClick={toggleDarkMode}
             className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-sm"
             title="Toggle dark mode"
@@ -88,6 +124,27 @@ export default function Sidebar({ mapRef }) {
           </button>
         </div>
       </div>
+
+      {/* Notification permission banner */}
+      {showNotifBanner && (
+        <div className="bg-blue-50 dark:bg-blue-900/40 border-b border-blue-200 dark:border-blue-700 px-3 py-1.5 flex items-center gap-2">
+          <p className="text-xs text-blue-700 dark:text-blue-300 flex-1">
+            Enable notifications for arrival/departure alerts.
+          </p>
+          <button
+            onClick={handleEnableNotifications}
+            className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline flex-shrink-0"
+          >
+            Enable
+          </button>
+          <button
+            onClick={handleDismissNotifBanner}
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-sm leading-none flex-shrink-0"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Disconnected banner */}
       {!connected && (
@@ -119,25 +176,37 @@ export default function Sidebar({ mapRef }) {
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'live' && (
           <div className="flex flex-col h-full">
-            {/* Sort control */}
+            {/* Sort + Search controls */}
             <div className="flex items-center gap-2 px-3 pt-2 pb-1">
               <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">Sort:</span>
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value)}
-                className="flex-1 text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-1.5 py-0.5"
+                className="text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-1.5 py-0.5"
               >
                 {SORT_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
             </div>
+            {/* Search filter */}
+            <div className="px-3 pb-1">
+              <input
+                type="search"
+                placeholder="Search by name..."
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                className="w-full text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1 placeholder-gray-400"
+              />
+            </div>
 
             <div className="flex-1 overflow-y-auto px-2 pb-2">
               {devices.length === 0 ? (
                 <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">No devices found.</p>
+              ) : filteredDevices.length === 0 ? (
+                <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">No match for "{filterText}".</p>
               ) : (
-                sortedDevices.map((device) => (
+                filteredDevices.map((device) => (
                   <DeviceCard
                     key={device.id}
                     device={device}

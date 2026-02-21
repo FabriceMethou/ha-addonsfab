@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { format, subDays } from 'date-fns'
+import useTraccarStore from '../store/useTraccarStore.js'
 
 function formatDuration(ms) {
   const totalMin = Math.floor(ms / 60000)
@@ -38,9 +39,12 @@ function GeoAddress({ lat, lon }) {
 
 /**
  * Shows auto-detected stops from Traccar's /api/reports/stops.
- * Falls back to BFF geocoding when Traccar has no address for a stop.
+ * Clicking a stop flies the map to that location.
  */
-export default function StopsList({ deviceId }) {
+export default function StopsList({ deviceId, mapRef }) {
+  const setSelectedStop = useTraccarStore((s) => s.setSelectedStop)
+  const selectedStop = useTraccarStore((s) => s.selectedStop)
+
   const [stops, setStops] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -72,6 +76,18 @@ export default function StopsList({ deviceId }) {
     load()
     return () => { cancelled = true }
   }, [deviceId, days])
+
+  // Clear selected stop when component unmounts or device changes
+  useEffect(() => {
+    return () => setSelectedStop(null)
+  }, [deviceId]) // eslint-disable-line
+
+  function handleStopClick(stop) {
+    setSelectedStop(stop)
+    if (stop.latitude != null && stop.longitude != null && mapRef?.current) {
+      mapRef.current.flyTo([stop.latitude, stop.longitude], 16)
+    }
+  }
 
   if (!deviceId) {
     return <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">Select a device above.</p>
@@ -112,8 +128,20 @@ export default function StopsList({ deviceId }) {
         {stops.map((stop, i) => {
           const start = new Date(stop.startTime)
           const durMs = stop.duration ?? 0
+          const isSelected =
+            selectedStop?.startTime === stop.startTime &&
+            selectedStop?.latitude === stop.latitude
+
           return (
-            <div key={i} className="px-3 py-2 border-b border-gray-100 dark:border-gray-700">
+            <button
+              key={i}
+              onClick={() => handleStopClick(stop)}
+              className={`w-full text-left px-3 py-2 border-b border-gray-100 dark:border-gray-700 transition-colors ${
+                isSelected
+                  ? 'bg-blue-50 dark:bg-blue-900/40 border-l-2 border-l-blue-500'
+                  : 'hover:bg-gray-50 dark:hover:bg-gray-700'
+              }`}
+            >
               <div className="flex items-center justify-between mb-0.5">
                 <span className="text-xs font-medium dark:text-white">
                   {format(start, 'EEE d MMM, HH:mm')}
@@ -124,7 +152,7 @@ export default function StopsList({ deviceId }) {
                 ? <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{stop.address}</p>
                 : <GeoAddress lat={stop.latitude} lon={stop.longitude} />
               }
-            </div>
+            </button>
           )
         })}
       </div>

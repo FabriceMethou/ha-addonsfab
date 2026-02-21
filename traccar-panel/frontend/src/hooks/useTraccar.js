@@ -3,10 +3,12 @@ import useTraccarStore from '../store/useTraccarStore.js'
 
 /**
  * Fetches initial Traccar data on mount: devices, positions, geofences.
+ * Re-fetches whenever `refreshToken` changes (manual refresh button).
  * All fetch calls use relative paths so they work at any ingress prefix.
  */
 export function useTraccar() {
   const { setDevices, setPositions, setGeofences, setLoading, setError } = useTraccarStore()
+  const refreshToken = useTraccarStore((s) => s.refreshToken)
 
   useEffect(() => {
     let cancelled = false
@@ -45,5 +47,5 @@ export function useTraccar() {
 
     load()
     return () => { cancelled = true }
-  }, [setDevices, setPositions, setGeofences, setLoading, setError])
+  }, [setDevices, setPositions, setGeofences, setLoading, setError, refreshToken])
 }

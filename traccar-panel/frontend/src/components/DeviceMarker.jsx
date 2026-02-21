@@ -1,5 +1,5 @@
 import React from 'react'
-import { Marker, Popup } from 'react-leaflet'
+import { Marker, Popup, Tooltip } from 'react-leaflet'
 import L from 'leaflet'
 import { formatDistanceToNow } from 'date-fns'
 import useTraccarStore from '../store/useTraccarStore.js'
@@ -37,6 +37,8 @@ function makeDotIcon(color, initials, course, speedKmh, isOnline) {
 
 export default function DeviceMarker({ device, position, onClick }) {
   const geofences = useTraccarStore((s) => s.geofences)
+  const selectedDeviceId = useTraccarStore((s) => s.selectedDeviceId)
+  const isSelected = selectedDeviceId === device.id
 
   if (!position) return null
 
@@ -72,6 +74,10 @@ export default function DeviceMarker({ device, position, onClick }) {
       icon={icon}
       eventHandlers={{ click: () => onClick?.(device.id) }}
     >
+      {/* Name label: always visible for selected device, hover-only for others */}
+      <Tooltip permanent={isSelected} direction="top" offset={[0, -52]}>
+        <span style={{ fontWeight: isSelected ? 700 : 500, fontSize: '12px' }}>{device.name}</span>
+      </Tooltip>
       <Popup>
         <div className="min-w-[170px] space-y-0.5">
           <p className="font-bold text-base">{device.name}</p>

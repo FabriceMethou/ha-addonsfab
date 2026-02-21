@@ -34,4 +34,4 @@ LABEL \
     io.hass.description="Modern Life360-style frontend for Traccar GPS tracking" \
     io.hass.arch="aarch64|amd64" \
     io.hass.type="addon" \
-    io.hass.version="0.7.0"
+    io.hass.version="0.8.0"
