@@ -4,6 +4,7 @@ import { useTraccar } from './hooks/useTraccar.js'
 import { useWebSocket } from './hooks/useWebSocket.js'
 import Map from './components/Map.jsx'
 import Sidebar from './components/Sidebar.jsx'
+import ToastAlerts from './components/ToastAlerts.jsx'
 
 export default function App() {
   const loading = useTraccarStore((s) => s.loading)
@@ -65,6 +66,9 @@ export default function App() {
       <div className="w-72 flex-shrink-0 flex flex-col">
         <Sidebar mapRef={mapRef} historyOverlayRef={historyOverlayRef} />
       </div>
+
+      {/* Geofence enter/exit toasts */}
+      <ToastAlerts />
     </div>
   )
 }

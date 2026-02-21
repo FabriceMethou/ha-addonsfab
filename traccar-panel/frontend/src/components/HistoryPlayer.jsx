@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Polyline, Marker } from 'react-leaflet'
 import L from 'leaflet'
-import { format, parseISO } from 'date-fns'
+import { format } from 'date-fns'
 import useTraccarStore from '../store/useTraccarStore.js'
 import { createAnimation } from '../utils/tripAnimation.js'
 import { routeDistanceKm } from '../utils/haversine.js'
+import TripsList from './TripsList.jsx'
 
 const SPEED_MULTIPLIERS = [1, 5, 10, 30]
 
@@ -30,14 +31,15 @@ const pinIcon = (color) =>
     className: '',
   })
 
-// Controls panel (always visible in sidebar)
+// ── Controls (rendered in sidebar) ───────────────────────────────────────────
 // overlayRef is provided by App and shared with HistoryOverlay inside MapContainer
 export function HistoryControls({ mapRef, overlayRef }) {
   const devices = useTraccarStore((s) => s.devices)
   const [deviceId, setDeviceId] = useState('')
+  const [mode, setMode] = useState('trips') // 'trips' | 'custom'
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
-  const [status, setStatus] = useState('idle') // idle | loading | playing | paused
+  const [playbackStatus, setPlaybackStatus] = useState('idle') // idle | loading | playing | paused
   const [speed, setSpeed] = useState(1)
   const [progress, setProgress] = useState(0)
   const [elapsed, setElapsed] = useState(0)
@@ -46,40 +48,34 @@ export function HistoryControls({ mapRef, overlayRef }) {
   const [points, setPoints] = useState([])
   const animRef = useRef(null)
 
-  // Default date range: last 24 h
+  // Default device + date range
   useEffect(() => {
+    if (devices.length > 0 && !deviceId) setDeviceId(String(devices[0].id))
     const now = new Date()
     const yesterday = new Date(now.getTime() - 24 * 3600 * 1000)
     setFrom(format(yesterday, "yyyy-MM-dd'T'HH:mm"))
     setTo(format(now, "yyyy-MM-dd'T'HH:mm"))
-    if (devices.length > 0) setDeviceId(String(devices[0].id))
-  }, [devices])
+  }, [devices]) // eslint-disable-line
 
-  const onUpdate = useCallback(
-    ({ lat, lon, speed: spd, progress: prog }) => {
-      overlayRef.current.markerPos = [lat, lon]
-      setProgress(prog)
-      if (animRef.current) {
-        setElapsed(Math.round(prog * animRef.current.totalDurationMs))
-      }
-    },
-    []
-  )
+  const onUpdate = useCallback(({ lat, lon, speed: spd, progress: prog }) => {
+    if (overlayRef) overlayRef.current.markerPos = [lat, lon]
+    setProgress(prog)
+    if (animRef.current) setElapsed(Math.round(prog * animRef.current.totalDurationMs))
+  }, [overlayRef])
 
-  async function handleLoad() {
-    if (!deviceId || !from || !to) return
+  async function loadRoute(fromISO, toISO) {
+    if (!deviceId) return
     animRef.current?.destroy()
     animRef.current = null
     setPoints([])
-    setStatus('loading')
+    if (overlayRef) overlayRef.current = { points: [], markerPos: null }
+    setPlaybackStatus('loading')
     setError(null)
     setProgress(0)
     setElapsed(0)
     setStats(null)
 
     try {
-      const fromISO = new Date(from).toISOString()
-      const toISO = new Date(to).toISOString()
       const res = await fetch(
         `./api/reports/route?deviceId=${deviceId}&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`
       )
@@ -87,20 +83,21 @@ export function HistoryControls({ mapRef, overlayRef }) {
       const data = await res.json()
 
       if (!data || data.length === 0) {
-        setError('No data for selected range.')
-        setStatus('idle')
+        setError('No GPS data for this period.')
+        setPlaybackStatus('idle')
         return
       }
-      if (data.length > 10000) {
-        console.warn(`Large route: ${data.length} points`)
-      }
+      if (data.length > 10000) console.warn(`Large route: ${data.length} points`)
 
       setPoints(data)
-      overlayRef.current.points = data
-      overlayRef.current.markerPos = [data[0].latitude, data[0].longitude]
+      if (overlayRef) {
+        overlayRef.current.points = data
+        overlayRef.current.markerPos = [data[0].latitude, data[0].longitude]
+      }
 
       const dist = routeDistanceKm(data)
-      const durMs = new Date(data[data.length - 1].fixTime).getTime() - new Date(data[0].fixTime).getTime()
+      const durMs =
+        new Date(data[data.length - 1].fixTime).getTime() - new Date(data[0].fixTime).getTime()
       const maxSpd = Math.max(...data.map((p) => (p.speed ?? 0) * 1.852))
       const avgSpd = durMs > 0 ? dist / (durMs / 3600000) : 0
       setStats({ dist, durMs, maxSpd, avgSpd })
@@ -108,38 +105,45 @@ export function HistoryControls({ mapRef, overlayRef }) {
       const anim = createAnimation(data, onUpdate)
       animRef.current = anim
 
-      // Fly map to start
-      if (mapRef?.current) {
-        mapRef.current.flyTo([data[0].latitude, data[0].longitude], 13)
-      }
-
-      setStatus('paused')
+      if (mapRef?.current) mapRef.current.flyTo([data[0].latitude, data[0].longitude], 13)
+      setPlaybackStatus('paused')
     } catch (err) {
       setError(err.message)
-      setStatus('idle')
+      setPlaybackStatus('idle')
     }
+  }
+
+  // Called when user clicks a trip in TripsList
+  function handleSelectTrip({ startTime, endTime }) {
+    loadRoute(startTime, endTime)
+  }
+
+  // Called when user clicks Load in manual mode
+  function handleManualLoad() {
+    if (!from || !to) return
+    loadRoute(new Date(from).toISOString(), new Date(to).toISOString())
   }
 
   function handlePlay() {
     animRef.current?.play(speed)
-    setStatus('playing')
+    setPlaybackStatus('playing')
   }
 
   function handlePause() {
     animRef.current?.pause()
-    setStatus('paused')
+    setPlaybackStatus('paused')
   }
 
   function handleStop() {
     animRef.current?.stop()
-    setStatus('paused')
+    setPlaybackStatus('paused')
     setProgress(0)
     setElapsed(0)
   }
 
   function handleSpeedChange(s) {
     setSpeed(s)
-    if (status === 'playing') {
+    if (playbackStatus === 'playing') {
       animRef.current?.pause()
       animRef.current?.play(s)
     }
@@ -153,54 +157,88 @@ export function HistoryControls({ mapRef, overlayRef }) {
   }
 
   return (
-    <>
-      {/* Controls */}
-      <div className="px-3 py-2 space-y-2 border-b border-gray-200 dark:border-gray-700">
+    <div className="flex flex-col h-full overflow-y-auto">
+      {/* Device selector */}
+      <div className="px-3 pt-2 pb-1">
         <select
           value={deviceId}
-          onChange={(e) => setDeviceId(e.target.value)}
+          onChange={(e) => { setDeviceId(e.target.value); setPoints([]) }}
           className="w-full text-sm rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1"
         >
           {devices.map((d) => (
-            <option key={d.id} value={String(d.id)}>
-              {d.name}
-            </option>
+            <option key={d.id} value={String(d.id)}>{d.name}</option>
           ))}
         </select>
-        <div className="flex gap-1">
+      </div>
+
+      {/* Mode toggle */}
+      <div className="flex mx-3 mb-2 rounded overflow-hidden border border-gray-200 dark:border-gray-600">
+        <button
+          onClick={() => setMode('trips')}
+          className={`flex-1 py-1 text-xs ${mode === 'trips' ? 'bg-blue-500 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+        >
+          Trips
+        </button>
+        <button
+          onClick={() => setMode('custom')}
+          className={`flex-1 py-1 text-xs ${mode === 'custom' ? 'bg-blue-500 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+        >
+          Custom range
+        </button>
+      </div>
+
+      {/* Trips list */}
+      {mode === 'trips' && (
+        <TripsList
+          deviceId={deviceId}
+          onSelectTrip={handleSelectTrip}
+        />
+      )}
+
+      {/* Custom date range */}
+      {mode === 'custom' && (
+        <div className="px-3 space-y-2">
           <input
             type="datetime-local"
             value={from}
             onChange={(e) => setFrom(e.target.value)}
-            className="flex-1 text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1"
+            className="w-full text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1"
           />
           <input
             type="datetime-local"
             value={to}
             onChange={(e) => setTo(e.target.value)}
-            className="flex-1 text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1"
+            className="w-full text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1"
           />
+          <button
+            onClick={handleManualLoad}
+            disabled={playbackStatus === 'loading'}
+            className="w-full py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded disabled:opacity-50"
+          >
+            {playbackStatus === 'loading' ? 'Loading...' : 'Load Route'}
+          </button>
+          {error && <p className="text-xs text-red-500">{error}</p>}
         </div>
-        <button
-          onClick={handleLoad}
-          disabled={status === 'loading'}
-          className="w-full py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded disabled:opacity-50"
-        >
-          {status === 'loading' ? 'Loading...' : 'Load Route'}
-        </button>
-        {error && <p className="text-xs text-red-500">{error}</p>}
-      </div>
+      )}
 
-      {/* Playback controls */}
+      {/* Playback controls (shown once a route is loaded) */}
       {points.length > 0 && (
-        <div className="px-3 py-2 space-y-2">
+        <div className="px-3 py-2 space-y-2 border-t border-gray-200 dark:border-gray-700 mt-2">
+          {mode === 'trips' && error && (
+            <p className="text-xs text-red-500">{error}</p>
+          )}
+
+          {playbackStatus === 'loading' && (
+            <p className="text-xs text-gray-400 dark:text-gray-500">Loading route...</p>
+          )}
+
           <div className="flex gap-1 items-center">
             <button
-              onClick={status === 'playing' ? handlePause : handlePlay}
+              onClick={playbackStatus === 'playing' ? handlePause : handlePlay}
               disabled={!animRef.current}
               className="px-3 py-1 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded disabled:opacity-50"
             >
-              {status === 'playing' ? '⏸' : '▶'}
+              {playbackStatus === 'playing' ? '⏸' : '▶'}
             </button>
             <button
               onClick={handleStop}
@@ -242,24 +280,29 @@ export function HistoryControls({ mapRef, overlayRef }) {
 
           {stats && (
             <div className="text-xs text-gray-500 dark:text-gray-400 flex gap-3 flex-wrap">
-              <span>Dist: {stats.dist.toFixed(1)} km</span>
-              <span>Max: {Math.round(stats.maxSpd)} km/h</span>
-              <span>Avg: {Math.round(stats.avgSpd)} km/h</span>
+              <span>{stats.dist.toFixed(1)} km</span>
+              <span>Max {Math.round(stats.maxSpd)} km/h</span>
+              <span>Avg {Math.round(stats.avgSpd)} km/h</span>
             </div>
           )}
         </div>
       )}
 
-    </>
+      {/* Show loading/error for trips mode when no points yet */}
+      {points.length === 0 && mode === 'trips' && error && (
+        <p className="text-xs text-red-500 px-3 py-1">{error}</p>
+      )}
+      {points.length === 0 && playbackStatus === 'loading' && (
+        <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-1">Loading route...</p>
+      )}
+    </div>
   )
 }
 
-// Renders the route polyline and animated marker on the map
-// Must be rendered inside MapContainer
+// ── Map overlay (inside MapContainer) ────────────────────────────────────────
 export function HistoryOverlay({ overlayRef }) {
   const [, rerender] = useState(0)
 
-  // Subscribe to animation updates
   useEffect(() => {
     const id = setInterval(() => rerender((n) => n + 1), 50)
     return () => clearInterval(id)
@@ -268,7 +311,7 @@ export function HistoryOverlay({ overlayRef }) {
   const { points, markerPos } = overlayRef?.current ?? {}
   if (!points || points.length < 2) return null
 
-  // Build speed-colored segments
+  // Speed-coloured segments
   const segments = []
   for (let i = 1; i < points.length; i++) {
     const kmh = (points[i - 1].speed ?? 0) * 1.852
@@ -286,17 +329,12 @@ export function HistoryOverlay({ overlayRef }) {
       {segments.map((seg, i) => (
         <Polyline key={i} positions={seg.positions} pathOptions={{ color: seg.color, weight: 3 }} />
       ))}
-      <Marker
-        position={[points[0].latitude, points[0].longitude]}
-        icon={pinIcon('#22C55E')}
-      />
+      <Marker position={[points[0].latitude, points[0].longitude]} icon={pinIcon('#22C55E')} />
       <Marker
         position={[points[points.length - 1].latitude, points[points.length - 1].longitude]}
         icon={pinIcon('#EF4444')}
       />
-      {markerPos && (
-        <Marker position={markerPos} icon={pinIcon('#3B82F6')} />
-      )}
+      {markerPos && <Marker position={markerPos} icon={pinIcon('#3B82F6')} />}
     </>
   )
 }
