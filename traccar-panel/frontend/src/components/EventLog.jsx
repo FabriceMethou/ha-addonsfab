@@ -58,7 +58,7 @@ export default function EventLog() {
         const from = subDays(new Date(), days).toISOString()
         const to = new Date().toISOString()
         const res = await fetch(
-          `./api/events?deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+          `./api/reports/events?deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
         )
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = await res.json()
