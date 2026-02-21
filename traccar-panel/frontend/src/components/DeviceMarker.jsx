@@ -1,5 +1,5 @@
 import React from 'react'
-import { Marker, Popup, Tooltip } from 'react-leaflet'
+import { Marker, Popup, Tooltip, Circle } from 'react-leaflet'
 import L from 'leaflet'
 import { formatDistanceToNow } from 'date-fns'
 import useTraccarStore from '../store/useTraccarStore.js'
@@ -56,6 +56,7 @@ export default function DeviceMarker({ device, position, onClick }) {
   const battery = attributes?.batteryLevel ?? null
   const ignition = attributes?.ignition ?? null
   const satellites = attributes?.sat ?? null
+  const accuracy = position.accuracy ?? null  // metres, null if not reported
   const lastSeen = fixTime ? formatDistanceToNow(new Date(fixTime), { addSuffix: true }) : 'unknown'
   const currentPlaces = (geofenceIds ?? [])
     .map((id) => geofences.find((g) => g.id === id)?.name)
@@ -68,6 +69,22 @@ export default function DeviceMarker({ device, position, onClick }) {
   }
 
   return (
+    <>
+      {/* GPS accuracy ring — only when accuracy is meaningful (> 5m) */}
+      {accuracy !== null && accuracy > 5 && (
+        <Circle
+          center={[latitude, longitude]}
+          radius={accuracy}
+          pathOptions={{
+            color,
+            fillColor: color,
+            fillOpacity: 0.08,
+            weight: 1,
+            opacity: 0.25,
+            interactive: false,
+          }}
+        />
+      )}
     <Marker
       position={[latitude, longitude]}
       icon={icon}
@@ -107,5 +124,6 @@ export default function DeviceMarker({ device, position, onClick }) {
         </div>
       </Popup>
     </Marker>
+    </>
   )
 }
