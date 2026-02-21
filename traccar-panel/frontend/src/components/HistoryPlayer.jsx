@@ -166,7 +166,7 @@ export function HistoryControls({ mapRef }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
 
-      if (!data || data.length === 0) {
+      if (!Array.isArray(data) || data.length === 0) {
         setError('No GPS data for this period.')
         setPlaybackStatus('idle')
         return

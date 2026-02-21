@@ -14,11 +14,12 @@ function formatDist(metres) {
   return `${Math.round(metres)} m`
 }
 
-// Format a local date string (YYYY-MM-DD) into ISO range for that full day
+// Format a local date string (YYYY-MM-DD) into ISO range for that full day.
+// Appending T00:00:00 (no Z) makes the Date constructor interpret in local time,
+// avoiding the UTC-midnight pitfall that causes wrong-day queries for non-UTC users.
 function dayToRange(dateStr) {
-  const d = new Date(dateStr)
-  const from = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0).toISOString()
-  const to = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).toISOString()
+  const from = new Date(dateStr + 'T00:00:00').toISOString()
+  const to   = new Date(dateStr + 'T23:59:59.999').toISOString()
   return { from, to }
 }
 

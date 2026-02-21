@@ -33,9 +33,9 @@ export default function DayTimeline({ deviceId, onSelectTrip, selectedStartTime 
       setLoading(true)
       setError(null)
       try {
-        const d = new Date(date)
-        const from = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0).toISOString()
-        const to = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).toISOString()
+        // Append T00:00:00 (no Z) so Date is interpreted in local time, not UTC
+        const from = new Date(date + 'T00:00:00').toISOString()
+        const to   = new Date(date + 'T23:59:59.999').toISOString()
         const qs = `deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
 
         const [tripsRes, stopsRes] = await Promise.all([
