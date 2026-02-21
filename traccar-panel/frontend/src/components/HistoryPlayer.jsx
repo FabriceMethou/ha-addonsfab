@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Polyline, Marker } from 'react-leaflet'
 import L from 'leaflet'
-import { format } from 'date-fns'
+import { format, subDays } from 'date-fns'
 import useTraccarStore from '../store/useTraccarStore.js'
 import { createAnimation } from '../utils/tripAnimation.js'
 import { routeDistanceKm } from '../utils/haversine.js'
@@ -48,9 +48,11 @@ export function HistoryControls({ mapRef }) {
   const [stats, setStats] = useState(null)
   const [error, setError] = useState(null)
   const [hasRoute, setHasRoute] = useState(false)
+  const [selectedTripStart, setSelectedTripStart] = useState(null) // highlights active trip in list
 
   const animRef = useRef(null)
   const abortRef = useRef(null) // AbortController for in-flight fetches
+  const autoLoadAbortRef = useRef(null) // separate controller for auto-load fetch
 
   // Default device
   useEffect(() => {
@@ -63,6 +65,7 @@ export function HistoryControls({ mapRef }) {
   // Clean up when device changes
   useEffect(() => {
     if (!deviceId) return
+    autoLoadAbortRef.current?.abort()
     abortRef.current?.abort()
     animRef.current?.destroy()
     animRef.current = null
@@ -73,6 +76,48 @@ export function HistoryControls({ mapRef }) {
     setElapsed(0)
     setStats(null)
     setError(null)
+    setSelectedTripStart(null)
+  }, [deviceId]) // eslint-disable-line
+
+  // Auto-load the most recent trip whenever the device is (re)selected
+  useEffect(() => {
+    if (!deviceId) return
+    let cancelled = false
+    const controller = new AbortController()
+    autoLoadAbortRef.current = controller
+
+    async function autoLoad() {
+      try {
+        const from = subDays(new Date(), 30).toISOString()
+        const to = new Date().toISOString()
+        const res = await fetch(
+          `./api/reports/trips?deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+          { signal: controller.signal }
+        )
+        if (!res.ok || cancelled) return
+        const trips = await res.json()
+        if (cancelled || !trips || trips.length === 0) return
+        // Traccar returns trips in chronological order — take the last one
+        const latest = trips[trips.length - 1]
+        if (!cancelled) {
+          setSelectedTripStart(latest.startTime)
+          loadRoute(latest.startTime, latest.endTime, {
+            dist: (latest.distance ?? 0) / 1000,
+            durMs: latest.duration ?? 0,
+            maxSpd: (latest.maxSpeed ?? 0) * KNOTS_TO_KMH,
+            avgSpd: (latest.averageSpeed ?? 0) * KNOTS_TO_KMH,
+          })
+        }
+      } catch {
+        // AbortError or network issue — silent, user can select manually
+      }
+    }
+
+    autoLoad()
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
   }, [deviceId]) // eslint-disable-line
 
   // Clean up on unmount
@@ -149,7 +194,7 @@ export function HistoryControls({ mapRef }) {
   }
 
   function handleSelectTrip(trip) {
-    // Pass Traccar's pre-calculated stats so UI shows them while route loads
+    setSelectedTripStart(trip.startTime)
     loadRoute(trip.startTime, trip.endTime, {
       dist: (trip.distance ?? 0) / 1000,
       durMs: trip.duration ?? 0,
@@ -229,7 +274,11 @@ export function HistoryControls({ mapRef }) {
 
       {/* Trips list */}
       {mode === 'trips' && (
-        <TripsList deviceId={deviceId} onSelectTrip={handleSelectTrip} />
+        <TripsList
+          deviceId={deviceId}
+          onSelectTrip={handleSelectTrip}
+          selectedStartTime={selectedTripStart}
+        />
       )}
 
       {/* Custom date range */}

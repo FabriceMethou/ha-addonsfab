@@ -18,7 +18,7 @@ function formatDist(metres) {
  * Shows auto-detected trips from Traccar's /api/reports/trips.
  * Calling onSelectTrip({startTime, endTime}) loads that trip in the replay player.
  */
-export default function TripsList({ deviceId, onSelectTrip }) {
+export default function TripsList({ deviceId, onSelectTrip, selectedStartTime }) {
   const [trips, setTrips] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -94,11 +94,16 @@ export default function TripsList({ deviceId, onSelectTrip }) {
           const maxKmh = Math.round((trip.maxSpeed ?? 0) * 1.852)
           const avgKmh = Math.round((trip.averageSpeed ?? 0) * 1.852)
 
+          const isSelected = selectedStartTime === trip.startTime
           return (
             <button
               key={i}
               onClick={() => onSelectTrip(trip)}
-              className="w-full text-left px-3 py-2 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              className={`w-full text-left px-3 py-2 border-b border-gray-100 dark:border-gray-700 transition-colors ${
+                isSelected
+                  ? 'bg-blue-50 dark:bg-blue-900/40 border-l-2 border-l-blue-500'
+                  : 'hover:bg-gray-50 dark:hover:bg-gray-700'
+              }`}
             >
               <div className="flex items-center justify-between mb-0.5">
                 <span className="text-xs font-medium dark:text-white">
