@@ -1,13 +1,18 @@
 /**
  * Parse Traccar geofence `area` strings into Leaflet-friendly objects.
  *
- * Traccar formats:
- *   CIRCLE (lat lon, radius)   — custom, already lat/lon order, radius in metres
- *   POLYGON ((lon lat, ...))   — WKT standard, lon/lat order → swapped for Leaflet
+ * Traccar stores ALL geometry types with latitude first, longitude second —
+ * this applies to both CIRCLE and POLYGON (Traccar does NOT follow WKT standard
+ * coordinate order). No coordinate swap is needed.
+ *
+ *   CIRCLE (lat lon, radius_metres)
+ *   POLYGON ((lat lon, lat lon, ...))
+ *   LINESTRING (lat lon, lat lon, ...)
  *
  * Returns:
- *   { type: 'circle', lat, lon, radius }
- *   { type: 'polygon', coords: [[lat, lon], ...] }
+ *   { type: 'circle',     lat, lon, radius }
+ *   { type: 'polygon',    coords: [[lat, lon], ...] }
+ *   { type: 'linestring', coords: [[lat, lon], ...] }
  *   null on parse failure
  */
 export function parseTraccarArea(area) {
@@ -15,8 +20,7 @@ export function parseTraccarArea(area) {
   const s = area.trim()
 
   // ── CIRCLE ────────────────────────────────────────────────────────────────
-  // Traccar stores: CIRCLE (lat lon, radius)
-  // Tolerant of extra spaces, optional comma, decimal radii.
+  // Format: CIRCLE (lat lon, radius)
   const cm = s.match(
     /^CIRCLE\s*\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*,?\s*(\d+(?:\.\d+)?)\s*\)/i
   )
@@ -30,42 +34,37 @@ export function parseTraccarArea(area) {
   }
 
   // ── POLYGON ───────────────────────────────────────────────────────────────
-  // WKT standard: POLYGON ((lon lat, lon lat, ...))
-  // Traccar follows standard WKT where x=longitude, y=latitude.
-  // Leaflet expects [[lat, lon], ...] so we swap.
+  // Format: POLYGON ((lat lon, lat lon, ...))
+  // Traccar uses lat-first order (not WKT standard), so no swap needed.
   const pm = s.match(/^POLYGON\s*\(\s*\(\s*([\s\S]+?)\s*\)\s*\)/i)
   if (pm) {
-    const pairs = pm[1].split(',')
-    const coords = []
-    for (const pair of pairs) {
-      const parts = pair.trim().split(/\s+/)
-      if (parts.length < 2) continue
-      const x = parseFloat(parts[0]) // WKT x = longitude
-      const y = parseFloat(parts[1]) // WKT y = latitude
-      if (isNaN(x) || isNaN(y)) continue
-      coords.push([y, x]) // Leaflet [lat, lon]
-    }
+    const coords = parsePairs(pm[1])
     if (coords.length >= 3) return { type: 'polygon', coords }
   }
 
-  // ── LINESTRING (track geofences, rare) ────────────────────────────────────
+  // ── LINESTRING ────────────────────────────────────────────────────────────
+  // Format: LINESTRING (lat lon, lat lon, ...)
   const lm = s.match(/^LINESTRING\s*\(\s*([\s\S]+?)\s*\)/i)
   if (lm) {
-    const pairs = lm[1].split(',')
-    const coords = []
-    for (const pair of pairs) {
-      const parts = pair.trim().split(/\s+/)
-      if (parts.length < 2) continue
-      const x = parseFloat(parts[0])
-      const y = parseFloat(parts[1])
-      if (isNaN(x) || isNaN(y)) continue
-      coords.push([y, x])
-    }
+    const coords = parsePairs(lm[1])
     if (coords.length >= 2) return { type: 'linestring', coords }
   }
 
   console.warn('[parseTraccarArea] Unrecognised area format:', s)
   return null
+}
+
+function parsePairs(str) {
+  const coords = []
+  for (const pair of str.split(',')) {
+    const parts = pair.trim().split(/\s+/)
+    if (parts.length < 2) continue
+    const lat = parseFloat(parts[0])
+    const lon = parseFloat(parts[1])
+    if (isNaN(lat) || isNaN(lon)) continue
+    coords.push([lat, lon])
+  }
+  return coords
 }
 
 /**
