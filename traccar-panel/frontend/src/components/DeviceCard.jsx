@@ -54,9 +54,13 @@ export default function DeviceCard({ device, isSelected, onClick }) {
   const geofenceArrivals = useTraccarStore((s) => s.geofenceArrivals)
   const deviceOfflineSince = useTraccarStore((s) => s.deviceOfflineSince)
   const deviceStillSince = useTraccarStore((s) => s.deviceStillSince)
+  const alerts = useTraccarStore((s) => s.alerts)
 
   const color = colorForDevice(device.id)
   const initial = device.name[0]?.toUpperCase() ?? '?'
+  const hasRecentAlert = alerts.some(
+    (a) => a.deviceName === device.name && a.ts > Date.now() - 3600000
+  )
 
   const speedKmh = position ? Math.round((position.speed ?? 0) * 1.852) : 0
   const battery = position?.attributes?.batteryLevel ?? null
@@ -80,12 +84,12 @@ export default function DeviceCard({ device, isSelected, onClick }) {
     fixAge > 5  ? 'text-yellow-500 dark:text-yellow-400' :
     'text-gray-400 dark:text-gray-500'
 
+  const isOnline = device.status === 'online'
+
   // Low accuracy: cell-tower-level positioning (>150m) shown as approximate
   const isApproximate = accuracy !== null && accuracy > 150
   // Weak GPS signal: fewer than 4 satellites or HDOP > 5
   const isWeakSignal = isOnline && ((satellites !== null && satellites < 4) || (hdop !== null && hdop > 5))
-
-  const isOnline = device.status === 'online'
   const isDriving = speedKmh > 5
   const isIgnitionIdle = ignition === true && !isDriving  // engine on but not moving
   const isWalking = !isDriving && !isIgnitionIdle && speedKmh >= 0.5
@@ -201,17 +205,22 @@ export default function DeviceCard({ device, isSelected, onClick }) {
     >
       <div className="flex items-start gap-2.5">
         {/* Avatar: orange ring = stale GPS (>15 min), yellow ring = poor accuracy, gray = offline */}
-        <div
-          style={{ background: isOnline ? color : '#9CA3AF' }}
-          className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm mt-0.5 transition-all ${
-            isOnline && fixAge > 15
-              ? 'ring-2 ring-orange-400 dark:ring-orange-500 ring-offset-1'
-              : isOnline && isApproximate
-              ? 'ring-2 ring-yellow-400 dark:ring-yellow-500 ring-offset-1'
-              : ''
-          }`}
-        >
-          <span className="text-white font-bold text-base select-none">{initial}</span>
+        <div className="relative flex-shrink-0 mt-0.5">
+          <div
+            style={{ background: isOnline ? color : '#9CA3AF' }}
+            className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm transition-all ${
+              isOnline && fixAge > 15
+                ? 'ring-2 ring-orange-400 dark:ring-orange-500 ring-offset-1'
+                : isOnline && isApproximate
+                ? 'ring-2 ring-yellow-400 dark:ring-yellow-500 ring-offset-1'
+                : ''
+            }`}
+          >
+            <span className="text-white font-bold text-base select-none">{initial}</span>
+          </div>
+          {hasRecentAlert && (
+            <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-gray-800" />
+          )}
         </div>
 
         <div className="flex-1 min-w-0">
