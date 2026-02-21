@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useMemo } from 'react'
 import { MapContainer, TileLayer, useMap } from 'react-leaflet'
 import MarkerClusterGroup from 'react-leaflet-cluster'
 import useTraccarStore from '../store/useTraccarStore.js'
@@ -133,7 +133,21 @@ export default function Map({ mapRef }) {
   const devices = useTraccarStore((s) => s.devices)
   const positions = useTraccarStore((s) => s.positions)
   const geofences = useTraccarStore((s) => s.geofences)
-  const presence = useTraccarStore((s) => s.getGeofencePresence())
+
+  // Memoised so a new object is only created when devices/positions/geofences change.
+  const presence = useMemo(() => {
+    const result = {}
+    for (const gf of geofences) result[gf.id] = []
+    for (const device of devices) {
+      const pos = positions[device.id]
+      if (pos?.geofenceIds) {
+        for (const gfId of pos.geofenceIds) {
+          if (result[gfId] !== undefined) result[gfId].push(device.name)
+        }
+      }
+    }
+    return result
+  }, [geofences, devices, positions])
   const mapTile = useTraccarStore((s) => s.mapTile)
   const darkMode = useTraccarStore((s) => s.darkMode)
   const setMapTile = useTraccarStore((s) => s.setMapTile)

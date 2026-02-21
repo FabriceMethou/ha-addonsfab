@@ -66,7 +66,7 @@ export function useWebSocket() {
           // Heartbeat acknowledgement — no further action needed
           if (data.type === 'pong') return
 
-          if (data.positions) {
+          if (Array.isArray(data.positions)) {
             for (const pos of data.positions) {
               updatePosition(pos)
               checkBatteryAlert(pos)
@@ -78,7 +78,7 @@ export function useWebSocket() {
             patchDevices(data.devices)
           }
 
-          if (data.events) {
+          if (Array.isArray(data.events)) {
             for (const ev of data.events) {
               handleWsEvent(ev)
             }

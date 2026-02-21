@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import useTraccarStore from '../store/useTraccarStore.js'
 import DeviceCard from './DeviceCard.jsx'
 import DeviceTripsView from './DeviceTripsView.jsx'
@@ -68,7 +68,9 @@ export default function Sidebar({ mapRef }) {
 
   function handleDeviceClick(device) {
     openDeviceProfile(device) // sets selectedDeviceId + profileDevice + activeTab:'live'
-    const pos = useTraccarStore.getState().positions[device.id]
+    // Use the component-level positions subscription — avoids synchronous getState() call
+    // which could read stale data if a WS update arrives between the click and the read.
+    const pos = positions[device.id]
     if (pos && mapRef?.current) {
       mapRef.current.flyTo([pos.latitude, pos.longitude], 15)
     }
@@ -89,10 +91,19 @@ export default function Sidebar({ mapRef }) {
     localStorage.setItem('notifBannerDismissed', 'true')
   }
 
-  const sortedDevices = sortDevices(devices, positions, sortBy)
-  const filteredDevices = filterText
-    ? sortedDevices.filter((d) => d.name.toLowerCase().includes(filterText.toLowerCase()))
-    : sortedDevices
+  // Memoised so the expensive sort only runs when devices, positions or sortBy change —
+  // not on every render triggered by unrelated state (dark mode, tab, etc.).
+  const sortedDevices = useMemo(
+    () => sortDevices(devices, positions, sortBy),
+    [devices, positions, sortBy]
+  )
+  const filteredDevices = useMemo(
+    () =>
+      filterText
+        ? sortedDevices.filter((d) => d.name.toLowerCase().includes(filterText.toLowerCase()))
+        : sortedDevices,
+    [sortedDevices, filterText]
+  )
 
   const showNotifBanner =
     typeof Notification !== 'undefined' &&
