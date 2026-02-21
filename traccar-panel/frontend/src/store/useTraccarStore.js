@@ -28,6 +28,12 @@ const useTraccarStore = create((set, get) => ({
   loading: true,
   error: null,
 
+  // Manual refresh trigger (increment to force useTraccar to reload)
+  refreshToken: 0,
+
+  // Selected stop in StopsList (for map highlight)
+  selectedStop: null, // {latitude, longitude, duration, address?}
+
   // Actions
   setDevices: (devices) => set({ devices }),
 
@@ -55,6 +61,10 @@ const useTraccarStore = create((set, get) => ({
   setLoading: (loading) => set({ loading }),
 
   setError: (error) => set({ error }),
+
+  refresh: () => set((s) => ({ refreshToken: s.refreshToken + 1 })),
+
+  setSelectedStop: (stop) => set({ selectedStop: stop }),
 
   toggleDarkMode: () =>
     set((state) => {

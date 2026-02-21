@@ -50,6 +50,7 @@ export function HistoryControls({ mapRef }) {
   const [error, setError] = useState(null)
   const [hasRoute, setHasRoute] = useState(false)
   const [selectedTripStart, setSelectedTripStart] = useState(null) // highlights active trip in list
+  const [tripInfo, setTripInfo] = useState(null) // {startAddress, endAddress} from selected trip
 
   const animRef = useRef(null)
   const abortRef = useRef(null) // AbortController for in-flight fetches
@@ -198,6 +199,10 @@ export function HistoryControls({ mapRef }) {
 
   function handleSelectTrip(trip) {
     setSelectedTripStart(trip.startTime)
+    setTripInfo({
+      startAddress: trip.startAddress ?? null,
+      endAddress: trip.endAddress ?? null,
+    })
     loadRoute(trip.startTime, trip.endTime, {
       dist: (trip.distance ?? 0) / 1000,
       durMs: trip.duration ?? 0,
@@ -292,7 +297,7 @@ export function HistoryControls({ mapRef }) {
 
       {/* Stops list */}
       {mode === 'stops' && (
-        <StopsList deviceId={deviceId} />
+        <StopsList deviceId={deviceId} mapRef={mapRef} />
       )}
 
       {/* Custom date range */}
@@ -328,6 +333,20 @@ export function HistoryControls({ mapRef }) {
       {/* Loading indicator */}
       {playbackStatus === 'loading' && (
         <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-1">Loading route...</p>
+      )}
+
+      {/* Trip start → end summary */}
+      {hasRoute && tripInfo && (tripInfo.startAddress || tripInfo.endAddress) && (
+        <div className="px-3 py-1.5 border-t border-gray-200 dark:border-gray-700 mt-1">
+          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+            <span className="text-green-600 dark:text-green-400">▲</span>{' '}
+            {tripInfo.startAddress ?? '—'}
+          </p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+            <span className="text-red-500 dark:text-red-400">▼</span>{' '}
+            {tripInfo.endAddress ?? '—'}
+          </p>
+        </div>
       )}
 
       {/* Playback controls */}
@@ -409,8 +428,18 @@ export function HistoryControls({ mapRef }) {
 export function HistoryOverlay() {
   const route = useTraccarStore((s) => s.animatedRoute)
   const marker = useTraccarStore((s) => s.animatedMarker)
+  const selectedStop = useTraccarStore((s) => s.selectedStop)
 
-  if (!route || route.length < 2) return null
+  // Stop marker: rendered even when no route is loaded
+  const stopMarker =
+    selectedStop?.latitude != null ? (
+      <Marker
+        position={[selectedStop.latitude, selectedStop.longitude]}
+        icon={pinIcon('#F59E0B')}
+      />
+    ) : null
+
+  if (!route || route.length < 2) return <>{stopMarker}</>
 
   // Speed-coloured segments
   const segments = []
@@ -436,6 +465,7 @@ export function HistoryOverlay() {
         icon={pinIcon('#EF4444')}
       />
       {marker && <Marker position={[marker.lat, marker.lon]} icon={pinIcon('#3B82F6')} />}
+      {stopMarker}
     </>
   )
 }
