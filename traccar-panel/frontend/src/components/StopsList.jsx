@@ -8,8 +8,37 @@ function formatDuration(ms) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
+// Module-level cache so geocode results persist across re-renders
+const geocodeCache = {}
+
+function GeoAddress({ lat, lon }) {
+  const [address, setAddress] = useState(null)
+
+  useEffect(() => {
+    if (lat == null || lon == null) return
+    const key = `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`
+    if (geocodeCache[key]) {
+      setAddress(geocodeCache[key])
+      return
+    }
+    fetch(`./geocode?lat=${lat}&lon=${lon}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.address) {
+          geocodeCache[key] = data.address
+          setAddress(data.address)
+        }
+      })
+      .catch(() => {})
+  }, [lat, lon])
+
+  if (!address) return null
+  return <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{address}</p>
+}
+
 /**
  * Shows auto-detected stops from Traccar's /api/reports/stops.
+ * Falls back to BFF geocoding when Traccar has no address for a stop.
  */
 export default function StopsList({ deviceId }) {
   const [stops, setStops] = useState([])
@@ -84,19 +113,17 @@ export default function StopsList({ deviceId }) {
           const start = new Date(stop.startTime)
           const durMs = stop.duration ?? 0
           return (
-            <div
-              key={i}
-              className="px-3 py-2 border-b border-gray-100 dark:border-gray-700"
-            >
+            <div key={i} className="px-3 py-2 border-b border-gray-100 dark:border-gray-700">
               <div className="flex items-center justify-between mb-0.5">
                 <span className="text-xs font-medium dark:text-white">
                   {format(start, 'EEE d MMM, HH:mm')}
                 </span>
                 <span className="text-xs text-gray-500 dark:text-gray-400">{formatDuration(durMs)}</span>
               </div>
-              {(stop.address) && (
-                <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{stop.address}</p>
-              )}
+              {stop.address
+                ? <p className="text-xs text-gray-400 dark:text-gray-500 truncate">{stop.address}</p>
+                : <GeoAddress lat={stop.latitude} lon={stop.longitude} />
+              }
             </div>
           )
         })}
