@@ -1,95 +1,100 @@
-import React, { useState, useEffect } from 'react'
-import { format, subDays } from 'date-fns'
-import useTraccarStore from '../store/useTraccarStore.js'
+import React, { useState, useEffect } from "react";
+import { format, subDays } from "date-fns";
+import useTraccarStore from "../store/useTraccarStore.js";
 
 const EVENT_LABELS = {
-  geofenceEnter: 'Arrived at',
-  geofenceExit: 'Left',
-  deviceOnline: 'Online',
-  deviceOffline: 'Offline',
-  deviceMoving: 'Moving',
-  deviceStopped: 'Stopped',
-  deviceOverspeed: 'Overspeed',
-  alarm: 'Alarm',
-  ignitionOn: 'Ignition on',
-  ignitionOff: 'Ignition off',
-  powerOn: 'Power on',
-  powerOff: 'Power off',
-  maintenance: 'Maintenance',
-  commandResult: 'Command result',
-}
+  geofenceEnter: "Arrived at",
+  geofenceExit: "Left",
+  deviceOnline: "Online",
+  deviceOffline: "Offline",
+  deviceMoving: "Moving",
+  deviceStopped: "Stopped",
+  deviceOverspeed: "Overspeed",
+  alarm: "Alarm",
+  ignitionOn: "Ignition on",
+  ignitionOff: "Ignition off",
+  powerOn: "Power on",
+  powerOff: "Power off",
+  maintenance: "Maintenance",
+  commandResult: "Command result",
+};
 
 const EVENT_COLORS = {
-  geofenceEnter: 'text-green-600 dark:text-green-400',
-  geofenceExit: 'text-orange-500 dark:text-orange-400',
-  deviceOnline: 'text-blue-500 dark:text-blue-400',
-  deviceOffline: 'text-gray-400',
-  deviceOverspeed: 'text-red-500 dark:text-red-400',
-  alarm: 'text-red-600 dark:text-red-400',
-  ignitionOn: 'text-emerald-600 dark:text-emerald-400',
-  ignitionOff: 'text-gray-500 dark:text-gray-400',
-  powerOff: 'text-red-500 dark:text-red-400',
-  maintenance: 'text-purple-600 dark:text-purple-400',
-}
+  geofenceEnter: "text-green-600 dark:text-green-400",
+  geofenceExit: "text-orange-500 dark:text-orange-400",
+  deviceOnline: "text-blue-500 dark:text-blue-400",
+  deviceOffline: "text-gray-400",
+  deviceOverspeed: "text-red-500 dark:text-red-400",
+  alarm: "text-red-600 dark:text-red-400",
+  ignitionOn: "text-emerald-600 dark:text-emerald-400",
+  ignitionOff: "text-gray-500 dark:text-gray-400",
+  powerOff: "text-red-500 dark:text-red-400",
+  maintenance: "text-purple-600 dark:text-purple-400",
+};
 
 export default function EventLog() {
-  const devices = useTraccarStore((s) => s.devices)
-  const geofences = useTraccarStore((s) => s.geofences)
+  const devices = useTraccarStore((s) => s.devices);
+  const geofences = useTraccarStore((s) => s.geofences);
 
-  const [deviceId, setDeviceId] = useState('all')
-  const [events, setEvents] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const [days, setDays] = useState(7)
+  const [deviceId, setDeviceId] = useState("all");
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [days, setDays] = useState(7);
 
   useEffect(() => {
-    if (devices.length === 0) return
-    let cancelled = false
+    if (devices.length === 0) return;
+    let cancelled = false;
 
     async function load() {
-      setLoading(true)
-      setError(null)
+      setLoading(true);
+      setError(null);
       try {
-        const from = subDays(new Date(), days).toISOString()
-        const to = new Date().toISOString()
+        const from = subDays(new Date(), days).toISOString();
+        const to = new Date().toISOString();
 
-        let data
-        if (deviceId === 'all') {
+        let data;
+        if (deviceId === "all") {
           const results = await Promise.all(
-            devices.map((d) =>
-              fetch(
-                `./api/reports/events?deviceId=${d.id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-              )
-                .then((r) => (r.ok ? r.json() : []))
-                .then((evs) => (Array.isArray(evs) ? evs : []))
-                .catch(() => []) // network error for one device must not fail all
-            )
-          )
-          data = results.flat()
+            devices.map(
+              (d) =>
+                fetch(
+                  `./api/reports/events?deviceId=${d.id}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+                )
+                  .then((r) => (r.ok ? r.json() : []))
+                  .then((evs) => (Array.isArray(evs) ? evs : []))
+                  .catch(() => []), // network error for one device must not fail all
+            ),
+          );
+          data = results.flat();
         } else {
           const res = await fetch(
-            `./api/reports/events?deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-          )
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
-          data = await res.json()
+            `./api/reports/events?deviceId=${deviceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+          );
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          data = await res.json();
         }
 
         if (!cancelled) {
           const sorted = Array.isArray(data)
-            ? [...data].sort((a, b) => new Date(b.eventTime) - new Date(a.eventTime))
-            : []
-          setEvents(sorted)
+            ? [...data].sort(
+                (a, b) => new Date(b.eventTime) - new Date(a.eventTime),
+              )
+            : [];
+          setEvents(sorted);
         }
       } catch (err) {
-        if (!cancelled) setError(err.message)
+        if (!cancelled) setError(err.message);
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setLoading(false);
       }
     }
 
-    load()
-    return () => { cancelled = true }
-  }, [deviceId, days, devices]) // eslint-disable-line
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceId, days, devices]); // eslint-disable-line
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -102,7 +107,9 @@ export default function EventLog() {
         >
           <option value="all">All devices</option>
           {devices.map((d) => (
-            <option key={d.id} value={String(d.id)}>{d.name}</option>
+            <option key={d.id} value={String(d.id)}>
+              {d.name}
+            </option>
           ))}
         </select>
       </div>
@@ -115,58 +122,70 @@ export default function EventLog() {
             onClick={() => setDays(d)}
             className={`flex-1 py-0.5 text-xs rounded ${
               days === d
-                ? 'bg-blue-500 text-white'
-                : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+                ? "bg-blue-500 text-white"
+                : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
             }`}
           >
-            {d === 1 ? 'Today' : `${d}d`}
+            {d === 1 ? "Today" : `${d}d`}
           </button>
         ))}
       </div>
 
       {loading && (
-        <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">Loading events...</p>
+        <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">
+          Loading events...
+        </p>
       )}
-      {error && (
-        <p className="text-xs text-red-500 px-3 py-2">{error}</p>
-      )}
+      {error && <p className="text-xs text-red-500 px-3 py-2">{error}</p>}
       {!loading && !error && events.length === 0 && (
         <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">
-          No events in the last {days} day{days > 1 ? 's' : ''}.
+          No events in the last {days} day{days > 1 ? "s" : ""}.
         </p>
       )}
 
       <div className="overflow-y-auto flex-1">
-        {events.map((ev) => {
-          const gf = ev.geofenceId ? geofences.find((g) => g.id === ev.geofenceId) : null
-          const label = EVENT_LABELS[ev.type] ?? ev.type
-          const colorClass = EVENT_COLORS[ev.type] ?? 'text-gray-500 dark:text-gray-400'
-          const deviceName = devices.find((d) => d.id === ev.deviceId)?.name ?? null
+        {events.map((ev, idx) => {
+          const gf = ev.geofenceId
+            ? geofences.find((g) => g.id === ev.geofenceId)
+            : null;
+          const label = EVENT_LABELS[ev.type] ?? ev.type;
+          const colorClass =
+            EVENT_COLORS[ev.type] ?? "text-gray-500 dark:text-gray-400";
+          const deviceName =
+            devices.find((d) => d.id === ev.deviceId)?.name ?? null;
           return (
             <div
-              key={`${ev.deviceId}-${ev.eventTime}-${ev.type}`}
+              key={ev.id ?? `${ev.deviceId}-${ev.eventTime}-${ev.type}-${idx}`}
               className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 flex items-start gap-2"
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-1">
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <span className={`text-xs font-medium flex-shrink-0 ${colorClass}`}>{label}</span>
+                    <span
+                      className={`text-xs font-medium flex-shrink-0 ${colorClass}`}
+                    >
+                      {label}
+                    </span>
                     {gf && (
-                      <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{gf.name}</span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                        {gf.name}
+                      </span>
                     )}
                   </div>
                   <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">
-                    {format(new Date(ev.eventTime), 'EEE d MMM, HH:mm')}
+                    {format(new Date(ev.eventTime), "EEE d MMM, HH:mm")}
                   </span>
                 </div>
-                {deviceName && deviceId === 'all' && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{deviceName}</p>
+                {deviceName && deviceId === "all" && (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                    {deviceName}
+                  </p>
                 )}
               </div>
             </div>
-          )
+          );
         })}
       </div>
     </div>
-  )
+  );
 }

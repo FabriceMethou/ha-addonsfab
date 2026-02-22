@@ -278,7 +278,7 @@ async def traccar_ws_task(app: web.Application):
 
 
 def _geo_cache_key(lat: float, lon: float) -> tuple:
-    return (round(lat, 3), round(lon, 3))
+    return (round(lat, 4), round(lon, 4))
 
 
 async def geocode_handler(request: web.Request) -> web.Response:
@@ -291,10 +291,10 @@ async def geocode_handler(request: web.Request) -> web.Response:
     key = _geo_cache_key(lat, lon)
     if key in geo_cache:
         geo_cache.move_to_end(key)
-        log.debug("Geocode cache HIT  (%.3f, %.3f) → cache size: %d", lat, lon, len(geo_cache))
+        log.debug("Geocode cache HIT  (%.4f, %.4f) → cache size: %d", lat, lon, len(geo_cache))
         return web.json_response({"address": geo_cache[key]})
 
-    log.debug("Geocode cache MISS (%.3f, %.3f) — queuing Nominatim request (queue depth: %d)", lat, lon, geo_queue.qsize())
+    log.debug("Geocode cache MISS (%.4f, %.4f) — queuing Nominatim request (queue depth: %d)", lat, lon, geo_queue.qsize())
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
     await geo_queue.put((lat, lon, fut))
     try:
@@ -368,6 +368,49 @@ async def geocode_worker(app: web.Application):
             fut.set_result(address)
 
 
+# ─── SOS broadcast ────────────────────────────────────────────────────────────
+
+
+async def sos_handler(request: web.Request) -> web.Response:
+    """Receive an SOS alert and broadcast it to all connected WS clients."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    device_name = body.get("deviceName")
+    latitude = body.get("latitude")
+    longitude = body.get("longitude")
+    if not device_name or latitude is None or longitude is None:
+        return web.json_response(
+            {"error": "deviceName, latitude, and longitude are required"}, status=400
+        )
+
+    sos_message = json.dumps({
+        "type": "sos",
+        "deviceName": device_name,
+        "latitude": latitude,
+        "longitude": longitude,
+        "timestamp": body.get("timestamp", int(time.time() * 1000)),
+    })
+
+    log.warning(
+        "SOS alert from %s at (%.5f, %.5f) — broadcasting to %d client(s)",
+        device_name, latitude, longitude, len(ws_clients),
+    )
+
+    dead = set()
+    for client in ws_clients:
+        try:
+            await client.send_str(sos_message)
+        except Exception:
+            dead.add(client)
+    if dead:
+        ws_clients.difference_update(dead)
+
+    return web.json_response({"ok": True, "clients": len(ws_clients) - len(dead)})
+
+
 # ─── App lifecycle ────────────────────────────────────────────────────────────
 
 
@@ -390,13 +433,19 @@ async def on_startup(app: web.Application):
     else:
         log.info("Initial auth successful — ready to proxy requests")
 
-    # Background tasks
-    asyncio.create_task(session_renewal_task(http))
-    asyncio.create_task(traccar_ws_task(app))
-    asyncio.create_task(geocode_worker(app))
+    # Background tasks (store refs for clean shutdown)
+    app["_bg_tasks"] = [
+        asyncio.create_task(session_renewal_task(http)),
+        asyncio.create_task(traccar_ws_task(app)),
+        asyncio.create_task(geocode_worker(app)),
+    ]
 
 
 async def on_cleanup(app: web.Application):
+    log.info("BFF shutting down — cancelling background tasks")
+    for task in app.get("_bg_tasks", []):
+        task.cancel()
+    await asyncio.gather(*app.get("_bg_tasks", []), return_exceptions=True)
     log.info("BFF shutting down — closing HTTP session")
     await app["http"].close()
 
@@ -408,6 +457,7 @@ def make_app() -> web.Application:
 
     app.router.add_route("GET", "/ws", ws_handler)
     app.router.add_route("GET", "/geocode", geocode_handler)
+    app.router.add_route("POST", "/sos", sos_handler)
     # Proxy all /api/* methods
     for method in ("GET", "POST", "PUT", "DELETE"):
         app.router.add_route(method, "/api/{path:.*}", proxy_api)
