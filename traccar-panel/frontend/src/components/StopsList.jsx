@@ -103,7 +103,7 @@ export default function StopsList({ deviceId, mapRef }) {
             onClick={() => setDays(d)}
             className={`flex-1 py-0.5 text-xs rounded ${
               days === d
-                ? 'bg-blue-500 text-white'
+                ? 'bg-brand-500 text-white'
                 : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
             }`}
           >
@@ -139,7 +139,7 @@ export default function StopsList({ deviceId, mapRef }) {
               onClick={() => handleStopClick(stop)}
               className={`w-full text-left px-3 py-2 border-b border-gray-100 dark:border-gray-700 transition-colors ${
                 isSelected
-                  ? 'bg-blue-50 dark:bg-blue-900/40 border-l-2 border-l-blue-500'
+                  ? 'bg-brand-50 dark:bg-brand-900/40 border-l-2 border-l-brand-500'
                   : 'hover:bg-gray-50 dark:hover:bg-gray-700'
               }`}
             >

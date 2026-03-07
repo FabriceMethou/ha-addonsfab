@@ -83,7 +83,7 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
             onClick={() => { setDays(d); setPickedDate('') }}
             className={`flex-1 py-0.5 text-xs rounded ${
               !pickedDate && days === d
-                ? 'bg-blue-500 text-white'
+                ? 'bg-brand-500 text-white'
                 : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
             }`}
           >
@@ -102,7 +102,7 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
           onChange={(e) => setPickedDate(e.target.value)}
           className={`flex-1 text-xs rounded border px-1.5 py-0.5 dark:bg-gray-800 dark:text-white ${
             pickedDate
-              ? 'border-blue-400 dark:border-blue-500'
+              ? 'border-brand-400 dark:border-brand-500'
               : 'border-gray-300 dark:border-gray-600'
           }`}
         />
@@ -144,7 +144,7 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
               onClick={() => onSelectTrip(trip)}
               className={`w-full text-left px-3 py-2 border-b border-gray-100 dark:border-gray-700 transition-colors ${
                 isSelected
-                  ? 'bg-blue-50 dark:bg-blue-900/40 border-l-2 border-l-blue-500'
+                  ? 'bg-brand-50 dark:bg-brand-900/40 border-l-2 border-l-brand-500'
                   : 'hover:bg-gray-50 dark:hover:bg-gray-700'
               }`}
             >
@@ -152,7 +152,7 @@ export default function TripsList({ deviceId, onSelectTrip, selectedStartTime })
                 <span className="text-xs font-medium dark:text-white">
                   {format(start, 'EEE d MMM, HH:mm')}
                 </span>
-                <span className="text-xs text-blue-500 font-medium">{formatDist(distM)}</span>
+                <span className="text-xs text-brand-500 font-medium">{formatDist(distM)}</span>
               </div>
               <div className="flex gap-3 text-xs text-gray-500 dark:text-gray-400">
                 <span>{formatDuration(durMs)}</span>

@@ -9,6 +9,9 @@ const ICONS = {
   alarm: "🚨",
   sos: "🆘",
   noShow: "⏰",
+  crash: "💥",
+  takeoff: "✈️",
+  landing: "🛬",
 };
 
 const COLORS = {
@@ -19,6 +22,9 @@ const COLORS = {
   alarm: "border-red-600 bg-red-100 dark:bg-red-900/60",
   sos: "border-red-600 bg-red-100 dark:bg-red-900/60",
   noShow: "border-amber-400 bg-amber-50 dark:bg-amber-900/40",
+  crash: "border-red-600 bg-red-100 dark:bg-red-900/60",
+  takeoff: "border-brand-400 bg-brand-50 dark:bg-brand-900/40",
+  landing: "border-green-400 bg-green-50 dark:bg-green-900/40",
 };
 
 const ALARM_LABELS = {
@@ -41,6 +47,10 @@ function getAlertBody(alert) {
     return ALARM_LABELS[alert.alarmType] ?? `Alarm: ${alert.alarmType}`;
   if (alert.type === "sos") return "EMERGENCY — needs help!";
   if (alert.type === "noShow") return `hasn't arrived at ${alert.geofenceName}`;
+  if (alert.type === "crash") return "possible crash detected!";
+  if (alert.type === "takeoff") return "has taken off";
+  if (alert.type === "landing")
+    return `has landed${alert.address ? ` at ${alert.address}` : ""}`;
   return alert.type;
 }
 
@@ -112,6 +122,11 @@ export default function ToastAlerts() {
           // Notifications may be blocked by the browser in some contexts
         }
       }
+    }
+    // Prune seenIds to only current alert IDs so the Set doesn't grow unbounded
+    const currentIds = new Set(alerts.map((a) => a.id));
+    for (const id of seenIds.current) {
+      if (!currentIds.has(id)) seenIds.current.delete(id);
     }
   }, [alerts]);
 

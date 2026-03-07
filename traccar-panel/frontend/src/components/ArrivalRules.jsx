@@ -12,7 +12,7 @@ function Toggle({ checked, onChange }) {
       aria-checked={checked}
       onClick={onChange}
       className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full transition-colors ${
-        checked ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'
+        checked ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-600'
       }`}
     >
       <span
@@ -72,7 +72,7 @@ export default function ArrivalRules() {
         </h3>
         <button
           onClick={() => setAdding(!adding)}
-          className="text-xs font-medium text-blue-500 hover:text-blue-700 dark:text-blue-400"
+          className="text-xs font-medium text-brand-500 hover:text-brand-700 dark:text-brand-400"
         >
           {adding ? 'Cancel' : '+ Add rule'}
         </button>
@@ -128,7 +128,7 @@ export default function ArrivalRules() {
                   onClick={() => handleToggleDay(idx)}
                   className={`flex-1 py-1 text-xs rounded ${
                     formDays.includes(idx)
-                      ? 'bg-blue-500 text-white'
+                      ? 'bg-brand-500 text-white'
                       : 'bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
                   }`}
                 >
@@ -141,7 +141,7 @@ export default function ArrivalRules() {
           <button
             onClick={handleAdd}
             disabled={!formDeviceId || !formGeofenceId || formDays.length === 0}
-            className="w-full py-1.5 text-xs font-medium rounded bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+            className="w-full py-1.5 text-xs font-medium rounded bg-brand-500 text-white hover:bg-brand-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
           >
             Add Alert Rule
           </button>
