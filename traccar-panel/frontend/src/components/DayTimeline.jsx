@@ -82,7 +82,7 @@ export default function DayTimeline({ deviceId, onSelectTrip, selectedStartTime 
         {date !== todayStr && (
           <button
             onClick={() => setDate(todayStr)}
-            className="text-xs text-blue-500 hover:text-blue-700 flex-shrink-0"
+            className="text-xs text-brand-500 hover:text-brand-700 flex-shrink-0"
           >
             Today
           </button>
@@ -109,7 +109,7 @@ export default function DayTimeline({ deviceId, onSelectTrip, selectedStartTime 
               <div key={`trip-${item.startTime}`} className="flex gap-2">
                 {/* Vertical timeline rail */}
                 <div className="flex flex-col items-center w-4 flex-shrink-0">
-                  <div className="w-2.5 h-2.5 rounded-full bg-blue-400 mt-2 flex-shrink-0 ring-2 ring-white dark:ring-gray-800" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-brand-400 mt-2 flex-shrink-0 ring-2 ring-white dark:ring-gray-800" />
                   {!isLast && <div className="w-0.5 flex-1 bg-gray-200 dark:bg-gray-700 min-h-[8px]" />}
                 </div>
 
@@ -117,15 +117,15 @@ export default function DayTimeline({ deviceId, onSelectTrip, selectedStartTime 
                   onClick={() => onSelectTrip(item)}
                   className={`flex-1 text-left px-2 py-1.5 mb-1 rounded-lg transition-colors ${
                     isSelected
-                      ? 'bg-blue-50 dark:bg-blue-900/40 ring-1 ring-blue-400'
+                      ? 'bg-brand-50 dark:bg-brand-900/40 ring-1 ring-brand-400'
                       : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
+                    <span className="text-xs font-semibold text-brand-600 dark:text-brand-400">
                       🚗 {format(new Date(item.startTime), 'HH:mm')}
                     </span>
-                    <span className="text-xs text-blue-500 dark:text-blue-400 font-medium">
+                    <span className="text-xs text-brand-500 dark:text-brand-400 font-medium">
                       {formatDist(distM)} · {formatDuration(durMs)}
                     </span>
                   </div>

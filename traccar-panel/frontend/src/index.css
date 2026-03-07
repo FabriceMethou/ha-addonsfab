@@ -18,11 +18,31 @@ html, body, #root {
 .dark .marker-cluster-small,
 .dark .marker-cluster-medium,
 .dark .marker-cluster-large {
-  background-color: rgba(59, 130, 246, 0.5) !important;
+  background-color: rgba(134, 82, 255, 0.5) !important;
 }
 .dark .marker-cluster-small div,
 .dark .marker-cluster-medium div,
 .dark .marker-cluster-large div {
-  background-color: rgba(59, 130, 246, 0.8) !important;
+  background-color: rgba(134, 82, 255, 0.8) !important;
   color: #fff !important;
+}
+
+/* Shimmer animation for skeleton loading */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton-shimmer {
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.08) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Tab view transitions */
+@keyframes tabFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.tab-animate {
+  animation: tabFadeIn 200ms ease-out;
 }

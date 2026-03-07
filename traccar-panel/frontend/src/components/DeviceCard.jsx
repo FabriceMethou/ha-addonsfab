@@ -7,14 +7,14 @@ import { useTick } from "../hooks/useTick.js";
 
 // Must match DeviceMarker's palette so the avatar color is consistent
 const COLORS = [
-  "#3B82F6",
+  "#8652FF",
   "#EF4444",
   "#10B981",
   "#F59E0B",
-  "#8B5CF6",
   "#EC4899",
   "#06B6D4",
   "#84CC16",
+  "#F97316",
 ];
 function colorForDevice(id) {
   return COLORS[Math.abs(id) % COLORS.length];
@@ -94,6 +94,9 @@ export default function DeviceCard({ device, isSelected, onClick }) {
   const deviceOfflineSince = useTraccarStore((s) => s.deviceOfflineSince);
   const deviceStillSince = useTraccarStore((s) => s.deviceStillSince);
   const alerts = useTraccarStore((s) => s.alerts);
+  const photo = useTraccarStore((s) => s.devicePhotos[device.id]);
+  const isPaused = useTraccarStore((s) => s.pausedDevices.has(device.id));
+  const togglePause = useTraccarStore((s) => s.togglePauseDevice);
 
   const color = colorForDevice(device.id);
   const initial = device.name[0]?.toUpperCase() ?? "?";
@@ -189,7 +192,11 @@ export default function DeviceCard({ device, isSelected, onClick }) {
 
   // Life360-style: icon + descriptive status text
   let statusIcon, statusText, statusColor;
-  if (!isOnline) {
+  if (isPaused) {
+    statusIcon = "⏸";
+    statusText = "Location paused";
+    statusColor = "text-orange-500 dark:text-orange-400";
+  } else if (!isOnline) {
     statusIcon = "○";
     const offlineTs = deviceOfflineSince[device.id] ?? null;
     if (offlineTs) {
@@ -205,7 +212,7 @@ export default function DeviceCard({ device, isSelected, onClick }) {
   } else if (isDriving) {
     statusIcon = "🚗";
     statusText = `Driving · ${speedKmh} km/h`;
-    statusColor = "text-blue-600 dark:text-blue-400";
+    statusColor = "text-brand-600 dark:text-brand-400";
   } else if (isIgnitionIdle) {
     statusIcon = "🚗";
     statusText = "In car · idle";
@@ -254,27 +261,43 @@ export default function DeviceCard({ device, isSelected, onClick }) {
       onClick={onClick}
       className={`w-full text-left px-3 py-2.5 rounded-xl mb-1.5 transition-colors ${
         isSelected
-          ? "bg-blue-50 dark:bg-blue-900/40 ring-1 ring-blue-400"
+          ? "bg-brand-50 dark:bg-brand-900/40 ring-1 ring-brand-400"
           : "hover:bg-gray-50 dark:hover:bg-gray-700/50"
       }`}
     >
       <div className="flex items-start gap-2.5">
-        {/* Avatar: orange ring = stale GPS (>15 min), yellow ring = poor accuracy, gray = offline */}
+        {/* Avatar: photo or initials with status rings */}
         <div className="relative flex-shrink-0 mt-0.5">
-          <div
-            style={{ background: isOnline ? color : "#9CA3AF" }}
-            className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm transition-all ${
-              isOnline && fixAge > 15
-                ? "ring-2 ring-orange-400 dark:ring-orange-500 ring-offset-1"
-                : isOnline && isApproximate
-                  ? "ring-2 ring-yellow-400 dark:ring-yellow-500 ring-offset-1"
-                  : ""
-            }`}
-          >
-            <span className="text-white font-bold text-base select-none">
-              {initial}
-            </span>
-          </div>
+          {photo ? (
+            <img
+              src={photo}
+              alt={device.name}
+              className={`w-10 h-10 rounded-full object-cover shadow-sm transition-all ${
+                !isOnline ? "opacity-50 grayscale" : ""
+              } ${
+                isOnline && fixAge > 15
+                  ? "ring-2 ring-orange-400 dark:ring-orange-500 ring-offset-1"
+                  : isOnline && isApproximate
+                    ? "ring-2 ring-yellow-400 dark:ring-yellow-500 ring-offset-1"
+                    : ""
+              }`}
+            />
+          ) : (
+            <div
+              style={{ background: isOnline ? color : "#9CA3AF" }}
+              className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm transition-all ${
+                isOnline && fixAge > 15
+                  ? "ring-2 ring-orange-400 dark:ring-orange-500 ring-offset-1"
+                  : isOnline && isApproximate
+                    ? "ring-2 ring-yellow-400 dark:ring-yellow-500 ring-offset-1"
+                    : ""
+              }`}
+            >
+              <span className="text-white font-bold text-base select-none">
+                {initial}
+              </span>
+            </div>
+          )}
           {hasRecentAlert && (
             <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-gray-800" />
           )}
@@ -330,13 +353,23 @@ export default function DeviceCard({ device, isSelected, onClick }) {
                   {formatDistance(distFromHome)} from home
                 </span>
               )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePause(device.id);
+                }}
+                className={`text-xs font-medium ${isPaused ? "text-orange-500 hover:text-orange-700" : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"}`}
+                title={isPaused ? "Resume sharing" : "Pause sharing"}
+              >
+                {isPaused ? "▶ Resume" : "⏸ Pause"}
+              </button>
               {position && (
                 <a
                   href={`https://www.google.com/maps/dir/?api=1&destination=${position.latitude},${position.longitude}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 ml-auto"
+                  className="text-xs text-brand-500 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300 ml-auto"
                   title="Get directions"
                 >
                   Directions

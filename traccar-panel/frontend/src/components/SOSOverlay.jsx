@@ -25,7 +25,7 @@ export default function SOSOverlay() {
           href={mapsUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="block w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm mb-3"
+          className="block w-full py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg font-medium text-sm mb-3"
         >
           Get Directions
         </a>

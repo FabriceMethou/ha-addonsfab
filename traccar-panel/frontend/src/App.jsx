@@ -4,9 +4,27 @@ import { useTraccar } from "./hooks/useTraccar.js";
 import { useWebSocket } from "./hooks/useWebSocket.js";
 import Map from "./components/Map.jsx";
 import Sidebar from "./components/Sidebar.jsx";
+import { SidebarContent } from "./components/Sidebar.jsx";
+import BottomSheet from "./components/BottomSheet.jsx";
 import ToastAlerts from "./components/ToastAlerts.jsx";
 import SOSOverlay from "./components/SOSOverlay.jsx";
+import CrashOverlay from "./components/CrashOverlay.jsx";
+import SkeletonLoader from "./components/SkeletonLoader.jsx";
 import { useArrivalRuleChecker } from "./hooks/useArrivalRuleChecker.js";
+import OnboardingWizard from "./components/OnboardingWizard.jsx";
+
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(
+    () => typeof window !== "undefined" && window.innerWidth >= 768,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const handler = (e) => setIsDesktop(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return isDesktop;
+}
 
 export default function App() {
   const loading = useTraccarStore((s) => s.loading);
@@ -15,10 +33,9 @@ export default function App() {
   const mapTile = useTraccarStore((s) => s.mapTile);
   const setMapTile = useTraccarStore((s) => s.setMapTile);
   const mapRef = useRef(null);
-
-  // Sidebar hidden by default on mobile, visible on desktop
-  const [sidebarOpen, setSidebarOpen] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth >= 768 : true,
+  const isDesktop = useIsDesktop();
+  const [showOnboarding, setShowOnboarding] = useState(
+    () => localStorage.getItem("onboardingDone") !== "true",
   );
 
   // Apply dark mode class on root element
@@ -41,17 +58,12 @@ export default function App() {
   useWebSocket();
   useArrivalRuleChecker();
 
+  if (showOnboarding) {
+    return <OnboardingWizard onComplete={() => setShowOnboarding(false)} />;
+  }
+
   if (loading) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-white dark:bg-gray-900">
-        <div className="text-center">
-          <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            Connecting to Traccar...
-          </p>
-        </div>
-      </div>
-    );
+    return <SkeletonLoader />;
   }
 
   if (error) {
@@ -62,7 +74,7 @@ export default function App() {
           <p className="text-sm text-gray-500 dark:text-gray-400">{error}</p>
           <button
             onClick={() => window.location.reload()}
-            className="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm"
+            className="mt-4 px-4 py-2 bg-brand-500 text-white rounded hover:bg-brand-600 text-sm"
           >
             Retry
           </button>
@@ -78,38 +90,23 @@ export default function App() {
         <Map mapRef={mapRef} />
       </div>
 
-      {/* Mobile backdrop — close sidebar when tapping outside */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/30 z-[499] md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
+      {/* Desktop: right sidebar */}
+      {isDesktop && (
+        <div className="flex-shrink-0 flex flex-col w-72">
+          <Sidebar mapRef={mapRef} />
+        </div>
       )}
 
-      {/* Sidebar — slides in from right on mobile, always visible on md+ */}
-      <div
-        className={`
-          flex-shrink-0 flex flex-col
-          fixed right-0 top-0 bottom-0 w-72 z-[500]
-          transition-transform duration-300 ease-in-out
-          ${sidebarOpen ? "translate-x-0" : "translate-x-full"}
-          md:relative md:translate-x-0
-        `}
-      >
-        <Sidebar mapRef={mapRef} onClose={() => setSidebarOpen(false)} />
-      </div>
-
-      {/* Mobile FAB — toggle sidebar */}
-      <button
-        onClick={() => setSidebarOpen((v) => !v)}
-        className="fixed bottom-6 right-4 z-[501] md:hidden w-12 h-12 rounded-full bg-blue-500 text-white shadow-lg flex items-center justify-center text-xl font-bold"
-        aria-label={sidebarOpen ? "Close menu" : "Open menu"}
-      >
-        {sidebarOpen ? "✕" : "☰"}
-      </button>
+      {/* Mobile: bottom sheet */}
+      {!isDesktop && (
+        <BottomSheet>
+          <SidebarContent mapRef={mapRef} />
+        </BottomSheet>
+      )}
 
       <ToastAlerts />
       <SOSOverlay />
+      <CrashOverlay />
     </div>
   );
 }

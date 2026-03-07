@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { format, subDays } from "date-fns";
 import useTraccarStore from "../store/useTraccarStore.js";
+import EmptyState from "./EmptyState.jsx";
 
 const EVENT_LABELS = {
   geofenceEnter: "Arrived at",
@@ -22,7 +23,7 @@ const EVENT_LABELS = {
 const EVENT_COLORS = {
   geofenceEnter: "text-green-600 dark:text-green-400",
   geofenceExit: "text-orange-500 dark:text-orange-400",
-  deviceOnline: "text-blue-500 dark:text-blue-400",
+  deviceOnline: "text-brand-500 dark:text-brand-400",
   deviceOffline: "text-gray-400",
   deviceOverspeed: "text-red-500 dark:text-red-400",
   alarm: "text-red-600 dark:text-red-400",
@@ -122,7 +123,7 @@ export default function EventLog() {
             onClick={() => setDays(d)}
             className={`flex-1 py-0.5 text-xs rounded ${
               days === d
-                ? "bg-blue-500 text-white"
+                ? "bg-brand-500 text-white"
                 : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
             }`}
           >
@@ -138,9 +139,7 @@ export default function EventLog() {
       )}
       {error && <p className="text-xs text-red-500 px-3 py-2">{error}</p>}
       {!loading && !error && events.length === 0 && (
-        <p className="text-xs text-gray-400 dark:text-gray-500 px-3 py-2">
-          No events in the last {days} day{days > 1 ? "s" : ""}.
-        </p>
+        <EmptyState type="noEvents" />
       )}
 
       <div className="overflow-y-auto flex-1">

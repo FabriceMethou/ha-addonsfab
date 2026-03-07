@@ -106,24 +106,41 @@ function FitAllControl({ positions, devices }) {
 
   return (
     <div className="leaflet-top leaflet-left" style={{ marginTop: '80px' }}>
-      <div className="leaflet-control leaflet-bar">
+      <div className="leaflet-control">
         <button
           onClick={handleFitAll}
           title="Fit all devices"
-          style={{
-            width: '30px',
-            height: '30px',
-            lineHeight: '30px',
-            fontSize: '14px',
-            cursor: 'pointer',
-            background: 'white',
-            border: 'none',
-            display: 'block',
-            textAlign: 'center',
-          }}
+          className="w-10 h-10 rounded-full shadow-lg bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm
+                     flex items-center justify-center text-gray-600 dark:text-gray-300
+                     hover:bg-white dark:hover:bg-gray-700 transition-colors border border-gray-200/50 dark:border-gray-600/50"
         >
-          ⊞
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+          </svg>
         </button>
+      </div>
+    </div>
+  )
+}
+
+// Pill-style segmented tile switcher
+function TileSwitcher({ mapTile, setMapTile }) {
+  return (
+    <div className="absolute bottom-6 left-3 z-[1000]">
+      <div className="flex bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm rounded-full shadow-lg p-0.5 border border-gray-200/50 dark:border-gray-600/50">
+        {Object.entries(TILES).map(([key, t]) => (
+          <button
+            key={key}
+            onClick={() => setMapTile(key)}
+            className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all duration-200 ${
+              mapTile === key
+                ? 'bg-brand-500 text-white shadow-sm'
+                : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
     </div>
   )
@@ -149,7 +166,6 @@ export default function Map({ mapRef }) {
     return result
   }, [geofences, devices, positions])
   const mapTile = useTraccarStore((s) => s.mapTile)
-  const darkMode = useTraccarStore((s) => s.darkMode)
   const setMapTile = useTraccarStore((s) => s.setMapTile)
   const { openDeviceProfile } = useTraccarStore()
 
@@ -177,19 +193,7 @@ export default function Map({ mapRef }) {
         <FitAllControl positions={positions} devices={devices} />
       </MapContainer>
 
-      {/* Tile switcher */}
-      <div className="absolute bottom-6 left-3 z-[1000]">
-        <select
-          value={mapTile}
-          onChange={(e) => setMapTile(e.target.value)}
-          className="text-xs rounded shadow px-1.5 py-1 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 cursor-pointer"
-          title="Map style"
-        >
-          {Object.entries(TILES).map(([key, t]) => (
-            <option key={key} value={key}>{t.label}</option>
-          ))}
-        </select>
-      </div>
+      <TileSwitcher mapTile={mapTile} setMapTile={setMapTile} />
     </div>
   )
 }

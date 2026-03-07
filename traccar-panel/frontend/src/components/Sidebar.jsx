@@ -9,6 +9,7 @@ import WeeklyReport from "./WeeklyReport.jsx";
 import SOSButton from "./SOSButton.jsx";
 import NotificationSettings from "./NotificationSettings.jsx";
 import ArrivalRules from "./ArrivalRules.jsx";
+import EmptyState from "./EmptyState.jsx";
 
 const TABS = [
   { id: "live", label: "Live" },
@@ -57,7 +58,10 @@ function sortDevices(devices, positions, sortBy) {
   });
 }
 
-export default function Sidebar({ mapRef }) {
+/**
+ * SidebarContent — shared tab UI used by both desktop Sidebar and mobile BottomSheet.
+ */
+export function SidebarContent({ mapRef }) {
   const devices = useTraccarStore((s) => s.devices);
   const positions = useTraccarStore((s) => s.positions);
   const selectedDeviceId = useTraccarStore((s) => s.selectedDeviceId);
@@ -127,7 +131,7 @@ export default function Sidebar({ mapRef }) {
     !notifDismissed;
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700">
+    <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700">
         <span className="font-bold text-sm dark:text-white">Family Map</span>
@@ -156,13 +160,13 @@ export default function Sidebar({ mapRef }) {
 
       {/* Notification permission banner */}
       {showNotifBanner && (
-        <div className="bg-blue-50 dark:bg-blue-900/40 border-b border-blue-200 dark:border-blue-700 px-3 py-1.5 flex items-center gap-2">
-          <p className="text-xs text-blue-700 dark:text-blue-300 flex-1">
+        <div className="bg-brand-50 dark:bg-brand-900/40 border-b border-brand-200 dark:border-brand-700 px-3 py-1.5 flex items-center gap-2">
+          <p className="text-xs text-brand-700 dark:text-brand-300 flex-1">
             Enable notifications for arrival/departure alerts.
           </p>
           <button
             onClick={handleEnableNotifications}
-            className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline flex-shrink-0"
+            className="text-xs font-medium text-brand-600 dark:text-brand-400 hover:underline flex-shrink-0"
           >
             Enable
           </button>
@@ -193,7 +197,7 @@ export default function Sidebar({ mapRef }) {
             onClick={() => setActiveTab(tab.id)}
             className={`flex-1 py-2 text-xs font-medium transition-colors ${
               activeTab === tab.id
-                ? "border-b-2 border-blue-500 text-blue-600 dark:text-blue-400"
+                ? "border-b-2 border-brand-500 text-brand-600 dark:text-brand-400"
                 : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
             }`}
           >
@@ -202,86 +206,97 @@ export default function Sidebar({ mapRef }) {
         ))}
       </div>
 
-      {/* Tab content */}
+      {/* Tab content with transition */}
       <div className="flex-1 overflow-y-auto">
-        {activeTab === "live" &&
-          (profileDevice ? (
-            <DeviceTripsView
-              device={profileDevice}
-              onBack={() => setProfileDevice(null)}
-              mapRef={mapRef}
-            />
-          ) : (
-            <div className="flex flex-col h-full">
-              {/* Sort + Search controls */}
-              <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-                <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">
-                  Sort:
-                </span>
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value)}
-                  className="text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-1.5 py-0.5"
-                >
-                  {SORT_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {/* Search filter */}
-              <div className="px-3 pb-1">
-                <input
-                  type="search"
-                  placeholder="Search by name..."
-                  value={filterText}
-                  onChange={(e) => setFilterText(e.target.value)}
-                  className="w-full text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1 placeholder-gray-400"
-                />
-              </div>
+        <div key={activeTab} className="tab-animate">
+          {activeTab === "live" &&
+            (profileDevice ? (
+              <DeviceTripsView
+                device={profileDevice}
+                onBack={() => setProfileDevice(null)}
+                mapRef={mapRef}
+              />
+            ) : (
+              <div className="flex flex-col h-full">
+                {/* Sort + Search controls */}
+                <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+                  <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">
+                    Sort:
+                  </span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    className="text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-1.5 py-0.5"
+                  >
+                    {SORT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {/* Search filter */}
+                <div className="px-3 pb-1">
+                  <input
+                    type="search"
+                    placeholder="Search by name..."
+                    value={filterText}
+                    onChange={(e) => setFilterText(e.target.value)}
+                    className="w-full text-xs rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-white px-2 py-1 placeholder-gray-400"
+                  />
+                </div>
 
-              <div className="flex-1 overflow-y-auto px-2 pb-2">
-                {devices.length === 0 ? (
-                  <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">
-                    No devices found.
-                  </p>
-                ) : filteredDevices.length === 0 ? (
-                  <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">
-                    No match for "{filterText}".
-                  </p>
-                ) : (
-                  filteredDevices.map((device) => (
-                    <DeviceCard
-                      key={device.id}
-                      device={device}
-                      isSelected={selectedDeviceId === device.id}
-                      onClick={() => handleDeviceClick(device)}
-                    />
-                  ))
-                )}
+                <div className="flex-1 overflow-y-auto px-2 pb-2">
+                  {devices.length === 0 ? (
+                    <EmptyState type="noDevices" />
+                  ) : filteredDevices.length === 0 ? (
+                    <p className="text-sm text-gray-400 dark:text-gray-500 px-1 py-4">
+                      No match for "{filterText}".
+                    </p>
+                  ) : (
+                    filteredDevices.map((device) => (
+                      <DeviceCard
+                        key={device.id}
+                        device={device}
+                        isSelected={selectedDeviceId === device.id}
+                        onClick={() => handleDeviceClick(device)}
+                      />
+                    ))
+                  )}
+                </div>
+                <div className="px-2 pb-2">
+                  <SOSButton />
+                </div>
               </div>
-              <div className="px-2 pb-2">
-                <SOSButton />
-              </div>
+            ))}
+
+          {activeTab === "places" && <PlacesList mapRef={mapRef} />}
+
+          {activeTab === "history" && <HistoryControls mapRef={mapRef} />}
+
+          {activeTab === "events" && <EventLog />}
+
+          {activeTab === "report" && <WeeklyReport />}
+
+          {activeTab === "settings" && (
+            <div className="space-y-4 p-3">
+              <NotificationSettings />
+              <ArrivalRules />
             </div>
-          ))}
-
-        {activeTab === "places" && <PlacesList mapRef={mapRef} />}
-
-        {activeTab === "history" && <HistoryControls mapRef={mapRef} />}
-
-        {activeTab === "events" && <EventLog />}
-
-        {activeTab === "report" && <WeeklyReport />}
-
-        {activeTab === "settings" && (
-          <div className="space-y-4 p-3">
-            <NotificationSettings />
-            <ArrivalRules />
-          </div>
-        )}
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Desktop sidebar wrapper — renders SidebarContent inside a styled container.
+ */
+export default function Sidebar({ mapRef }) {
+  return (
+    <div className="flex flex-col h-full bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700">
+      <SidebarContent mapRef={mapRef} />
     </div>
   );
 }

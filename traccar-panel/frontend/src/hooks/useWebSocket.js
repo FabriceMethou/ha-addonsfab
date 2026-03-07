@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
-import useTraccarStore from "../store/useTraccarStore.js";
+import useTraccarStore, { shouldNotify } from "../store/useTraccarStore.js";
+import { detectCrash } from "../utils/crashDetection.js";
+import { detectFlight } from "../utils/flightDetection.js";
 
 const PING_INTERVAL_MS = 30_000; // send ping every 30 s
 const WATCHDOG_TIMEOUT_MS = 75_000; // force-reconnect if no message for 75 s
@@ -112,6 +114,47 @@ export function useWebSocket() {
             for (const pos of data.positions) {
               updatePosition(pos);
               checkBatteryAlert(pos);
+
+              // Speed-based crash detection
+              const speedKmh = Math.round((pos.speed ?? 0) * 1.852);
+              const crashResult = detectCrash(pos.deviceId, speedKmh, pos);
+              if (crashResult && shouldNotify("crash", pos.deviceId)) {
+                const { setCrash, pushAlert, devices } =
+                  useTraccarStore.getState();
+                const dev = devices.find((d) => d.id === pos.deviceId);
+                const crashData = {
+                  deviceName: dev?.name ?? `Device ${pos.deviceId}`,
+                  latitude: pos.latitude,
+                  longitude: pos.longitude,
+                  timestamp: Date.now(),
+                };
+                setCrash(crashData);
+                pushAlert({
+                  type: "crash",
+                  deviceName: crashData.deviceName,
+                  ts: crashData.timestamp,
+                });
+              }
+
+              // Flight/landing detection
+              const flightResult = detectFlight(pos.deviceId, speedKmh, pos);
+              if (flightResult) {
+                const { pushAlert, setDeviceFlightState, devices } =
+                  useTraccarStore.getState();
+                const dev = devices.find((d) => d.id === pos.deviceId);
+                setDeviceFlightState(
+                  pos.deviceId,
+                  flightResult.event === "takeoff" ? "airborne" : "ground",
+                );
+                if (shouldNotify(flightResult.event, pos.deviceId)) {
+                  pushAlert({
+                    type: flightResult.event,
+                    deviceName: dev?.name ?? `Device ${pos.deviceId}`,
+                    address: pos.address ?? null,
+                    ts: Date.now(),
+                  });
+                }
+              }
             }
           }
 

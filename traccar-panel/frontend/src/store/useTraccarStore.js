@@ -3,7 +3,7 @@ import { create } from "zustand";
 const MAX_ALERTS = 20;
 
 /** Check notification prefs in localStorage — returns true if this alert should fire. */
-function shouldNotify(type, deviceId) {
+export function shouldNotify(type, deviceId) {
   try {
     const raw = localStorage.getItem("notificationPrefs");
     if (!raw) return true; // no prefs = allow all
@@ -60,6 +60,39 @@ const useTraccarStore = create((set, get) => ({
 
   // SOS emergency state (set by WS, cleared by user dismiss)
   activeSOS: null, // { deviceName, latitude, longitude, timestamp }
+
+  // Crash detection state
+  activeCrash: null, // { deviceName, latitude, longitude, timestamp }
+
+  // Flight state tracking per device
+  deviceFlightState: {}, // { [deviceId]: 'ground'|'airborne' }
+
+  // Paused devices — location hidden on the map (localStorage-backed)
+  pausedDevices: (() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("pausedDevices") || "[]"));
+    } catch {
+      return new Set();
+    }
+  })(),
+
+  // Bubble mode — approximate location (large circle) instead of precise pin
+  bubbleDevices: (() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem("bubbleDevices") || "[]"));
+    } catch {
+      return new Set();
+    }
+  })(),
+
+  // Device profile photos (localStorage-backed)
+  devicePhotos: (() => {
+    try {
+      return JSON.parse(localStorage.getItem("devicePhotos") || "{}");
+    } catch {
+      return {};
+    }
+  })(),
 
   // Actions
   setDevices: (devices) => set({ devices }),
@@ -193,6 +226,52 @@ const useTraccarStore = create((set, get) => ({
   setSOS: (sos) => set({ activeSOS: sos }),
   dismissSOS: () => set({ activeSOS: null }),
 
+  setCrash: (crash) => set({ activeCrash: crash }),
+  dismissCrash: () => set({ activeCrash: null }),
+
+  setDeviceFlightState: (deviceId, state) =>
+    set((s) => ({
+      deviceFlightState: { ...s.deviceFlightState, [deviceId]: state },
+    })),
+
+  togglePauseDevice: (deviceId) =>
+    set((s) => {
+      const next = new Set(s.pausedDevices);
+      if (next.has(deviceId)) {
+        next.delete(deviceId);
+      } else {
+        next.add(deviceId);
+      }
+      localStorage.setItem("pausedDevices", JSON.stringify([...next]));
+      return { pausedDevices: next };
+    }),
+
+  toggleBubbleDevice: (deviceId) =>
+    set((s) => {
+      const next = new Set(s.bubbleDevices);
+      if (next.has(deviceId)) {
+        next.delete(deviceId);
+      } else {
+        next.add(deviceId);
+      }
+      localStorage.setItem("bubbleDevices", JSON.stringify([...next]));
+      return { bubbleDevices: next };
+    }),
+
+  setDevicePhoto: (deviceId, dataUrl) =>
+    set((s) => {
+      const photos = { ...s.devicePhotos, [String(deviceId)]: dataUrl };
+      localStorage.setItem("devicePhotos", JSON.stringify(photos));
+      return { devicePhotos: photos };
+    }),
+  removeDevicePhoto: (deviceId) =>
+    set((s) => {
+      const photos = { ...s.devicePhotos };
+      delete photos[String(deviceId)];
+      localStorage.setItem("devicePhotos", JSON.stringify(photos));
+      return { devicePhotos: photos };
+    }),
+
   setAnimatedRoute: (points) => set({ animatedRoute: points }),
   setAnimatedMarker: (pos) => set({ animatedMarker: pos }),
   clearAnimation: () => set({ animatedRoute: [], animatedMarker: null }),
@@ -298,21 +377,6 @@ const useTraccarStore = create((set, get) => ({
   getDeviceName: (deviceId) => {
     const d = get().devices.find((d) => d.id === deviceId);
     return d?.name ?? `Device ${deviceId}`;
-  },
-
-  getGeofencePresence: () => {
-    const { devices, positions, geofences } = get();
-    const presence = {};
-    for (const gf of geofences) presence[gf.id] = [];
-    for (const device of devices) {
-      const pos = positions[device.id];
-      if (pos?.geofenceIds) {
-        for (const gfId of pos.geofenceIds) {
-          if (presence[gfId] !== undefined) presence[gfId].push(device.name);
-        }
-      }
-    }
-    return presence;
   },
 }));
 
