@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.26
+- Fix stastic for transfer double entry
+
 ## 2.0.25
 - Fix scripts for migration
 
