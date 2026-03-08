@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.25
+- Fix scripts for migration
+
 ## 2.0.24
 - Fix scripts for migration
 
