@@ -1401,7 +1401,8 @@ class FinanceDatabase:
 
         # Get all confirmed transactions ordered by date
         cursor.execute("""
-            SELECT t.id, t.account_id, t.amount, t.is_transfer, t.transfer_account_id, t.is_historical, t.transaction_date, tt.category
+            SELECT t.id, t.account_id, t.amount, t.is_transfer, t.transfer_account_id,
+                   t.is_historical, t.transaction_date, t.linked_transfer_id, tt.category
             FROM transactions t
             JOIN transaction_types tt ON t.type_id = tt.id
             WHERE t.confirmed = 1
@@ -1441,8 +1442,12 @@ class FinanceDatabase:
                 trans_dict['category']
             )
 
-            # Handle same-currency transfers (update destination account too)
-            if trans_dict['is_transfer'] and trans_dict['transfer_account_id'] and trans_dict['category'] == 'transfer':
+            # Handle old-style single-entry transfers (update destination account too)
+            # For double-entry transfers (linked_transfer_id set), the mirror transaction
+            # already handles the destination side, so we skip this.
+            if (trans_dict['is_transfer'] and trans_dict['transfer_account_id']
+                    and trans_dict['category'] == 'transfer'
+                    and not trans_dict.get('linked_transfer_id')):
                 amount = abs(trans_dict['amount'])  # Use absolute value for destination
                 trans_id = trans_dict['id']
 
