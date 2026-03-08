@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.23
+
+- Fix envelope transaction history
+- Fix Recipient Filter
+- Created double netry for transfer + script for migrqtion of preexisting 
+
 ## 2.0.22
 -Fix conversion bug in the debts 
 

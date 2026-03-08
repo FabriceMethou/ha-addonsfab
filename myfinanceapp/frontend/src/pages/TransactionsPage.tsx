@@ -1,13 +1,16 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useForm, Controller } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { transactionsAPI, accountsAPI, categoriesAPI } from '../services/api';
-import { format } from 'date-fns';
-import { useToast } from '../contexts/ToastContext';
-import { transactionSchema, type TransactionFormData } from '../lib/validations';
-import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
-import { sumMoney, subtractMoney, absMoney } from '../lib/money';
+import { useState, useEffect, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useForm, Controller } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { transactionsAPI, accountsAPI, categoriesAPI } from "../services/api";
+import { format } from "date-fns";
+import { useToast } from "../contexts/ToastContext";
+import {
+  transactionSchema,
+  type TransactionFormData,
+} from "../lib/validations";
+import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
+import { sumMoney, subtractMoney, absMoney } from "../lib/money";
 import {
   Card,
   Button,
@@ -29,7 +32,7 @@ import {
   SelectValue,
   FormField,
   TransactionsSkeleton,
-} from '../components/shadcn';
+} from "../components/shadcn";
 import {
   Plus,
   Edit2,
@@ -46,7 +49,7 @@ import {
   Wallet,
   ArrowUpCircle,
   ArrowDownCircle,
-} from 'lucide-react';
+} from "lucide-react";
 
 // KPI Card Component
 interface KPICardProps {
@@ -61,23 +64,31 @@ function KPICard({ title, value, icon, iconColor, loading }: KPICardProps) {
   return (
     <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
       {/* Background gradient effect */}
-      <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
+      <div
+        className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`}
+      />
 
       <div className="relative">
         <div className="flex items-start justify-between mb-2 sm:mb-4">
-          <div className={`p-2 sm:p-3 rounded-lg ${iconColor} bg-opacity-10 [&>svg]:w-5 [&>svg]:h-5 sm:[&>svg]:w-6 sm:[&>svg]:h-6`}>
+          <div
+            className={`p-2 sm:p-3 rounded-lg ${iconColor} bg-opacity-10 [&>svg]:w-5 [&>svg]:h-5 sm:[&>svg]:w-6 sm:[&>svg]:h-6`}
+          >
             {icon}
           </div>
         </div>
 
         <div>
-          <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">{title}</p>
+          <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
+            {title}
+          </p>
           {loading ? (
             <div className="h-6 sm:h-8 flex items-center">
               <Spinner className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           ) : (
-            <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{value}</p>
+            <p className="text-lg sm:text-2xl font-bold text-foreground truncate">
+              {value}
+            </p>
           )}
         </div>
       </div>
@@ -99,28 +110,29 @@ export default function TransactionsPage() {
 
   // Pending filters (what user is currently editing)
   const [pendingFilters, setPendingFilters] = useState({
-    account_id: '',
-    owner_id: '',
-    category_id: '',
-    start_date: '',
-    end_date: '',
-    recipient: '',
-    tags: '',
+    account_id: "",
+    owner_id: "",
+    category_id: "",
+    start_date: "",
+    end_date: "",
+    recipient: "",
+    tags: "",
   });
 
   // Applied filters (what's actually used for the query)
   const [appliedFilters, setAppliedFilters] = useState({
-    account_id: '',
-    owner_id: '',
-    category_id: '',
-    start_date: '',
-    end_date: '',
-    recipient: '',
-    tags: '',
+    account_id: "",
+    owner_id: "",
+    category_id: "",
+    start_date: "",
+    end_date: "",
+    recipient: "",
+    tags: "",
   });
 
   // Check if pending filters differ from applied filters
-  const hasUnappliedChanges = JSON.stringify(pendingFilters) !== JSON.stringify(appliedFilters);
+  const hasUnappliedChanges =
+    JSON.stringify(pendingFilters) !== JSON.stringify(appliedFilters);
 
   // Apply filters when button is clicked
   const applyFilters = () => {
@@ -143,25 +155,26 @@ export default function TransactionsPage() {
     trigger,
   } = useForm<TransactionFormData>({
     resolver: zodResolver(transactionSchema),
-    mode: 'onChange', // Validate on change for immediate feedback
+    mode: "onChange", // Validate on change for immediate feedback
     defaultValues: {
-      account_id: '',
-      date: format(new Date(), 'yyyy-MM-dd'),
-      due_date: '',
-      amount: '',
-      type_id: '',
-      subtype_id: '',
-      description: '',
-      recipient: '',
-      transfer_account_id: '',
-      transfer_amount: '',
-      tags: '',
+      account_id: "",
+      date: format(new Date(), "yyyy-MM-dd"),
+      due_date: "",
+      amount: "",
+      type_id: "",
+      subtype_id: "",
+      description: "",
+      recipient: "",
+      transfer_account_id: "",
+      transfer_amount: "",
+      tags: "",
     },
   });
 
   // Watch form values for conditional rendering
   const formData = watch();
-  const [autoCategorizingDescription, setAutoCategorizingDescription] = useState(false);
+  const [autoCategorizingDescription, setAutoCategorizingDescription] =
+    useState(false);
 
   const queryClient = useQueryClient();
 
@@ -170,31 +183,42 @@ export default function TransactionsPage() {
     setCurrentPage(1);
   }, [debouncedFilters, pageSize]);
 
-  const { data: transactionsResponse, isLoading: transactionsLoading } = useQuery({
-    queryKey: ['transactions', debouncedFilters, currentPage, pageSize],
-    queryFn: async () => {
-      const params: any = { limit: pageSize, offset: (currentPage - 1) * pageSize };
-      if (debouncedFilters.start_date) params.start_date = debouncedFilters.start_date;
-      if (debouncedFilters.end_date) params.end_date = debouncedFilters.end_date;
-      if (debouncedFilters.account_id) params.account_id = debouncedFilters.account_id;
-      if (debouncedFilters.owner_id) params.owner_id = debouncedFilters.owner_id;
-      if (debouncedFilters.category_id) params.type_id = debouncedFilters.category_id;
-      if (debouncedFilters.recipient) params.recipient = debouncedFilters.recipient;
-      if (debouncedFilters.tags) params.tags = debouncedFilters.tags;
+  const { data: transactionsResponse, isLoading: transactionsLoading } =
+    useQuery({
+      queryKey: ["transactions", debouncedFilters, currentPage, pageSize],
+      queryFn: async () => {
+        const params: any = {
+          limit: pageSize,
+          offset: (currentPage - 1) * pageSize,
+        };
+        if (debouncedFilters.start_date)
+          params.start_date = debouncedFilters.start_date;
+        if (debouncedFilters.end_date)
+          params.end_date = debouncedFilters.end_date;
+        if (debouncedFilters.account_id)
+          params.account_id = debouncedFilters.account_id;
+        if (debouncedFilters.owner_id)
+          params.owner_id = debouncedFilters.owner_id;
+        if (debouncedFilters.category_id)
+          params.type_id = debouncedFilters.category_id;
+        if (debouncedFilters.recipient)
+          params.recipient = debouncedFilters.recipient;
+        if (debouncedFilters.tags) params.tags = debouncedFilters.tags;
 
-      const response = await transactionsAPI.getAll(params);
-      const transactions = response.data.transactions;
-      const total = response.data.total ?? response.data.count ?? transactions.length;
+        const response = await transactionsAPI.getAll(params);
+        const transactions = response.data.transactions;
+        const total =
+          response.data.total ?? response.data.count ?? transactions.length;
 
-      return { transactions, total };
-    },
-    placeholderData: (prev) => prev,
-  });
+        return { transactions, total };
+      },
+      placeholderData: (prev) => prev,
+    });
 
   const transactionsData = transactionsResponse?.transactions;
 
   const { data: accountsData } = useQuery({
-    queryKey: ['accounts'],
+    queryKey: ["accounts"],
     queryFn: async () => {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
@@ -203,7 +227,7 @@ export default function TransactionsPage() {
   });
 
   const { data: ownersData } = useQuery({
-    queryKey: ['owners'],
+    queryKey: ["owners"],
     queryFn: async () => {
       const response = await accountsAPI.getOwners();
       return response.data.owners;
@@ -212,7 +236,7 @@ export default function TransactionsPage() {
   });
 
   const { data: categoriesData } = useQuery({
-    queryKey: ['categories-hierarchy'],
+    queryKey: ["categories-hierarchy"],
     queryFn: async () => {
       const response = await categoriesAPI.getHierarchy();
       return response.data.categories;
@@ -221,7 +245,7 @@ export default function TransactionsPage() {
   });
 
   const { data: tagsData } = useQuery({
-    queryKey: ['tags'],
+    queryKey: ["tags"],
     queryFn: async () => {
       const response = await transactionsAPI.getAllTags();
       return response.data.tags;
@@ -230,7 +254,7 @@ export default function TransactionsPage() {
   });
 
   const { data: recipientsData } = useQuery({
-    queryKey: ['recipients'],
+    queryKey: ["recipients"],
     queryFn: async () => {
       const response = await transactionsAPI.getAllRecipients();
       return response.data.recipients;
@@ -242,35 +266,52 @@ export default function TransactionsPage() {
     mutationFn: (data: any) => transactionsAPI.create(data),
     onMutate: async (newData: any) => {
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['transactions', debouncedFilters] });
+      await queryClient.cancelQueries({
+        queryKey: ["transactions", debouncedFilters],
+      });
 
       // Snapshot the previous value
-      const previousTransactions = queryClient.getQueryData(['transactions', debouncedFilters]);
+      const previousTransactions = queryClient.getQueryData([
+        "transactions",
+        debouncedFilters,
+      ]);
 
       // Build optimistic transaction with available info
-      const account = accountsData?.find((a: any) => a.id === newData.account_id);
-      const category = categoriesData?.find((c: any) => c.id === newData.type_id);
-      const subtype = category?.subtypes?.find((s: any) => s.id === newData.subtype_id);
+      const account = accountsData?.find(
+        (a: any) => a.id === newData.account_id,
+      );
+      const category = categoriesData?.find(
+        (c: any) => c.id === newData.type_id,
+      );
+      const subtype = category?.subtypes?.find(
+        (s: any) => s.id === newData.subtype_id,
+      );
 
       const optimisticTransaction = {
         id: Date.now(), // Temporary ID
         ...newData,
-        account_name: account?.name || '',
-        bank_name: account?.bank_name || '',
-        account_currency: account?.currency || 'EUR',
-        type_name: category?.name || '',
-        subtype_name: subtype?.name || '',
-        category: category?.category || '',
+        account_name: account?.name || "",
+        bank_name: account?.bank_name || "",
+        account_currency: account?.currency || "EUR",
+        type_name: category?.name || "",
+        subtype_name: subtype?.name || "",
+        category: category?.category || "",
         // Amount sign based on category
-        amount: category?.category === 'expense' ? -Math.abs(newData.amount) : Math.abs(newData.amount),
+        amount:
+          category?.category === "expense"
+            ? -Math.abs(newData.amount)
+            : Math.abs(newData.amount),
         _optimistic: true, // Flag for visual indication
       };
 
       // Optimistically update to the new value
-      queryClient.setQueryData(['transactions', debouncedFilters], (old: any[] | undefined) => {
-        if (!old) return [optimisticTransaction];
-        return [optimisticTransaction, ...old];
-      });
+      queryClient.setQueryData(
+        ["transactions", debouncedFilters],
+        (old: any[] | undefined) => {
+          if (!old) return [optimisticTransaction];
+          return [optimisticTransaction, ...old];
+        },
+      );
 
       // Return context with the previous value
       return { previousTransactions };
@@ -278,62 +319,84 @@ export default function TransactionsPage() {
     onError: (error: any, _newData, context) => {
       // Rollback to previous state on error
       if (context?.previousTransactions) {
-        queryClient.setQueryData(['transactions', debouncedFilters], context.previousTransactions);
+        queryClient.setQueryData(
+          ["transactions", debouncedFilters],
+          context.previousTransactions,
+        );
       }
-      console.error('Failed to create transaction:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to create transaction:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to create transaction: ${errorMessage}`);
     },
     onSuccess: () => {
       // Don't close dialog - allow adding multiple transactions
       resetFormPartial();
-      toast.success('Transaction created successfully!');
+      toast.success("Transaction created successfully!");
     },
     onSettled: () => {
       // Always refetch after error or success to ensure data consistency
-      queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['recipients'] });
-      queryClient.invalidateQueries({ queryKey: ['tags'] });
+      queryClient.invalidateQueries({ queryKey: ["transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["transactions-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["recipients"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: any }) => transactionsAPI.update(id, data),
+    mutationFn: ({ id, data }: { id: number; data: any }) =>
+      transactionsAPI.update(id, data),
     onMutate: async ({ id, data: updatedData }) => {
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['transactions', debouncedFilters] });
+      await queryClient.cancelQueries({
+        queryKey: ["transactions", debouncedFilters],
+      });
 
       // Snapshot the previous value
-      const previousTransactions = queryClient.getQueryData(['transactions', debouncedFilters]);
+      const previousTransactions = queryClient.getQueryData([
+        "transactions",
+        debouncedFilters,
+      ]);
 
       // Build optimistic transaction with available info
-      const account = accountsData?.find((a: any) => a.id === updatedData.account_id);
-      const category = categoriesData?.find((c: any) => c.id === updatedData.type_id);
-      const subtype = category?.subtypes?.find((s: any) => s.id === updatedData.subtype_id);
+      const account = accountsData?.find(
+        (a: any) => a.id === updatedData.account_id,
+      );
+      const category = categoriesData?.find(
+        (c: any) => c.id === updatedData.type_id,
+      );
+      const subtype = category?.subtypes?.find(
+        (s: any) => s.id === updatedData.subtype_id,
+      );
 
       // Optimistically update to the new value
-      queryClient.setQueryData(['transactions', debouncedFilters], (old: any[] | undefined) => {
-        if (!old) return old;
-        return old.map((t: any) => {
-          if (t.id === id) {
-            return {
-              ...t,
-              ...updatedData,
-              account_name: account?.name || t.account_name,
-              bank_name: account?.bank_name || t.bank_name,
-              account_currency: account?.currency || t.account_currency,
-              type_name: category?.name || t.type_name,
-              subtype_name: subtype?.name || t.subtype_name,
-              category: category?.category || t.category,
-              amount: category?.category === 'expense' ? -Math.abs(updatedData.amount) : Math.abs(updatedData.amount),
-              _optimistic: true,
-            };
-          }
-          return t;
-        });
-      });
+      queryClient.setQueryData(
+        ["transactions", debouncedFilters],
+        (old: any[] | undefined) => {
+          if (!old) return old;
+          return old.map((t: any) => {
+            if (t.id === id) {
+              return {
+                ...t,
+                ...updatedData,
+                account_name: account?.name || t.account_name,
+                bank_name: account?.bank_name || t.bank_name,
+                account_currency: account?.currency || t.account_currency,
+                type_name: category?.name || t.type_name,
+                subtype_name: subtype?.name || t.subtype_name,
+                category: category?.category || t.category,
+                amount:
+                  category?.category === "expense"
+                    ? -Math.abs(updatedData.amount)
+                    : Math.abs(updatedData.amount),
+                _optimistic: true,
+              };
+            }
+            return t;
+          });
+        },
+      );
 
       // Return context with the previous value
       return { previousTransactions };
@@ -341,25 +404,29 @@ export default function TransactionsPage() {
     onError: (error: any, _variables, context) => {
       // Rollback to previous state on error
       if (context?.previousTransactions) {
-        queryClient.setQueryData(['transactions', debouncedFilters], context.previousTransactions);
+        queryClient.setQueryData(
+          ["transactions", debouncedFilters],
+          context.previousTransactions,
+        );
       }
-      console.error('Failed to update transaction:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to update transaction:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to update transaction: ${errorMessage}`);
     },
     onSuccess: () => {
       setOpenDialog(false);
       setEditingTransaction(null);
       resetFormCompletely();
-      toast.success('Transaction updated successfully!');
+      toast.success("Transaction updated successfully!");
     },
     onSettled: () => {
       // Always refetch after error or success to ensure data consistency
-      queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['recipients'] });
-      queryClient.invalidateQueries({ queryKey: ['tags'] });
+      queryClient.invalidateQueries({ queryKey: ["transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["transactions-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["recipients"] });
+      queryClient.invalidateQueries({ queryKey: ["tags"] });
     },
   });
 
@@ -367,16 +434,24 @@ export default function TransactionsPage() {
     mutationFn: (id: number) => transactionsAPI.delete(id),
     onMutate: async (deletedId: number) => {
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ queryKey: ['transactions', debouncedFilters] });
+      await queryClient.cancelQueries({
+        queryKey: ["transactions", debouncedFilters],
+      });
 
       // Snapshot the previous value
-      const previousTransactions = queryClient.getQueryData(['transactions', debouncedFilters]);
+      const previousTransactions = queryClient.getQueryData([
+        "transactions",
+        debouncedFilters,
+      ]);
 
       // Optimistically remove from the list
-      queryClient.setQueryData(['transactions', debouncedFilters], (old: any[] | undefined) => {
-        if (!old) return old;
-        return old.filter((t: any) => t.id !== deletedId);
-      });
+      queryClient.setQueryData(
+        ["transactions", debouncedFilters],
+        (old: any[] | undefined) => {
+          if (!old) return old;
+          return old.filter((t: any) => t.id !== deletedId);
+        },
+      );
 
       // Close UI elements immediately for better UX
       setDeleteConfirm(null);
@@ -388,20 +463,24 @@ export default function TransactionsPage() {
     onError: (error: any, _deletedId, context) => {
       // Rollback to previous state on error
       if (context?.previousTransactions) {
-        queryClient.setQueryData(['transactions', debouncedFilters], context.previousTransactions);
+        queryClient.setQueryData(
+          ["transactions", debouncedFilters],
+          context.previousTransactions,
+        );
       }
-      console.error('Failed to delete transaction:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to delete transaction:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to delete transaction: ${errorMessage}`);
     },
     onSuccess: () => {
-      toast.success('Transaction deleted successfully!');
+      toast.success("Transaction deleted successfully!");
     },
     onSettled: () => {
       // Always refetch after error or success to ensure data consistency
-      queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['accounts-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['transactions-summary'] });
+      queryClient.invalidateQueries({ queryKey: ["transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["transactions-summary"] });
     },
   });
 
@@ -413,80 +492,92 @@ export default function TransactionsPage() {
       account_id: currentValues.account_id,
       date: currentValues.date,
       due_date: currentValues.due_date,
-      amount: '',
-      type_id: '',
-      subtype_id: '',
-      description: '',
-      recipient: '',
-      transfer_account_id: '',
-      transfer_amount: '',
+      amount: "",
+      type_id: "",
+      subtype_id: "",
+      description: "",
+      recipient: "",
+      transfer_account_id: "",
+      transfer_amount: "",
       tags: currentValues.tags,
     });
   };
 
   const resetFormCompletely = () => {
     resetForm({
-      account_id: '',
-      date: format(new Date(), 'yyyy-MM-dd'),
-      due_date: '',
-      amount: '',
-      type_id: '',
-      subtype_id: '',
-      description: '',
-      recipient: '',
-      transfer_account_id: '',
-      transfer_amount: '',
-      tags: '',
+      account_id: "",
+      date: format(new Date(), "yyyy-MM-dd"),
+      due_date: "",
+      amount: "",
+      type_id: "",
+      subtype_id: "",
+      description: "",
+      recipient: "",
+      transfer_account_id: "",
+      transfer_amount: "",
+      tags: "",
     });
   };
 
   const clearFilters = () => {
     const emptyFilters = {
-      account_id: '',
-      owner_id: '',
-      category_id: '',
-      start_date: '',
-      end_date: '',
-      recipient: '',
-      tags: '',
+      account_id: "",
+      owner_id: "",
+      category_id: "",
+      start_date: "",
+      end_date: "",
+      recipient: "",
+      tags: "",
     };
     setPendingFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
   };
 
-  const hasActiveFilters = Object.values(appliedFilters).some(v => v) || Object.values(pendingFilters).some(v => v);
+  const hasActiveFilters =
+    Object.values(appliedFilters).some((v) => v) ||
+    Object.values(pendingFilters).some((v) => v);
 
   const handleEdit = (transaction: any) => {
     setEditingTransaction(transaction);
     resetForm({
       account_id: transaction.account_id.toString(),
-      date: transaction.date || format(new Date(), 'yyyy-MM-dd'),
-      due_date: transaction.due_date || '',
+      date: transaction.date || format(new Date(), "yyyy-MM-dd"),
+      due_date: transaction.due_date || "",
       amount: Math.abs(transaction.amount).toString(),
       type_id: transaction.type_id.toString(),
-      subtype_id: transaction.subtype_id?.toString() || '',
-      description: transaction.description || '',
-      recipient: transaction.destinataire || '',
-      transfer_account_id: transaction.transfer_account_id?.toString() || '',
-      transfer_amount: transaction.transfer_amount?.toString() || '',
-      tags: transaction.tags || '',
+      subtype_id: transaction.subtype_id?.toString() || "",
+      description: transaction.description || "",
+      recipient: transaction.destinataire || "",
+      transfer_account_id: transaction.transfer_account_id?.toString() || "",
+      transfer_amount: transaction.transfer_amount?.toString() || "",
+      tags: transaction.tags || "",
     });
     setOpenDialog(true);
     // Trigger validation after reset to enable the Update button
     setTimeout(() => trigger(), 0);
   };
 
-  const selectedType = categoriesData?.find((c: any) => c.id === parseInt(formData.type_id || '0'));
-  const isTransfer = selectedType?.category === 'transfer';
+  const selectedType = categoriesData?.find(
+    (c: any) => c.id === parseInt(formData.type_id || "0"),
+  );
+  const isTransfer = selectedType?.category === "transfer";
 
-  const sourceAccount = accountsData?.find((a: any) => a.id === parseInt(formData.account_id || '0'));
-  const destinationAccount = accountsData?.find((a: any) => a.id === parseInt(formData.transfer_account_id || '0'));
-  const isDifferentCurrency = isTransfer && sourceAccount && destinationAccount &&
-                              sourceAccount.currency !== destinationAccount.currency;
+  const sourceAccount = accountsData?.find(
+    (a: any) => a.id === parseInt(formData.account_id || "0"),
+  );
+  const destinationAccount = accountsData?.find(
+    (a: any) => a.id === parseInt(formData.transfer_account_id || "0"),
+  );
+  const isDifferentCurrency =
+    isTransfer &&
+    sourceAccount &&
+    destinationAccount &&
+    sourceAccount.currency !== destinationAccount.currency;
 
   const handleAutoCategorize = async () => {
     // Prioritize recipient for auto-categorization as it's more indicative of category
-    const textToAnalyze = formData.recipient?.trim() || formData.description?.trim();
+    const textToAnalyze =
+      formData.recipient?.trim() || formData.description?.trim();
     if (!textToAnalyze) return;
 
     setAutoCategorizingDescription(true);
@@ -495,13 +586,16 @@ export default function TransactionsPage() {
       const data = response.data;
 
       if (data.type_id) {
-        setValue('type_id', data.type_id.toString());
-        setValue('subtype_id', data.subtype_id ? data.subtype_id.toString() : '');
+        setValue("type_id", data.type_id.toString());
+        setValue(
+          "subtype_id",
+          data.subtype_id ? data.subtype_id.toString() : "",
+        );
         // Trigger validation after setting values
-        trigger(['type_id', 'subtype_id']);
+        trigger(["type_id", "subtype_id"]);
       }
     } catch (error) {
-      console.error('Auto-categorization failed:', error);
+      console.error("Auto-categorization failed:", error);
     } finally {
       setAutoCategorizingDescription(false);
     }
@@ -514,15 +608,19 @@ export default function TransactionsPage() {
       due_date: formValues.due_date || null,
       amount: parseFloat(formValues.amount),
       type_id: parseInt(formValues.type_id),
-      subtype_id: formValues.subtype_id ? parseInt(formValues.subtype_id) : null,
+      subtype_id: formValues.subtype_id
+        ? parseInt(formValues.subtype_id)
+        : null,
       description: formValues.description || null,
       destinataire: formValues.recipient || null,
-      transfer_account_id: isTransfer && formValues.transfer_account_id
-        ? parseInt(formValues.transfer_account_id)
-        : null,
-      transfer_amount: isDifferentCurrency && formValues.transfer_amount
-        ? parseFloat(formValues.transfer_amount)
-        : null,
+      transfer_account_id:
+        isTransfer && formValues.transfer_account_id
+          ? parseInt(formValues.transfer_account_id)
+          : null,
+      transfer_amount:
+        isDifferentCurrency && formValues.transfer_amount
+          ? parseFloat(formValues.transfer_amount)
+          : null,
       is_pending: false,
       tags: formValues.tags || null,
     };
@@ -534,57 +632,80 @@ export default function TransactionsPage() {
     }
   };
 
-  const formatCurrency = (amount: number, currency: string = 'EUR') => {
+  const formatCurrency = (amount: number, currency: string = "EUR") => {
     return formatCurrencyUtil(Math.abs(amount), currency);
   };
 
-  const formatTransactionDate = (dateString: string | null | undefined): string => {
-    if (!dateString) return 'Invalid Date';
+  const formatTransactionDate = (
+    dateString: string | null | undefined,
+  ): string => {
+    if (!dateString) return "Invalid Date";
     try {
       const date = new Date(dateString);
-      if (isNaN(date.getTime())) return 'Invalid Date';
-      return format(date, 'MMM dd, yyyy');
+      if (isNaN(date.getTime())) return "Invalid Date";
+      return format(date, "MMM dd, yyyy");
     } catch {
-      return 'Invalid Date';
+      return "Invalid Date";
     }
   };
 
   const exportToCSV = () => {
     if (!transactionsData || transactionsData.length === 0) {
-      toast.warning('No transactions to export');
+      toast.warning("No transactions to export");
       return;
     }
 
-    const headers = ['ID', 'Date', 'Account', 'Amount', 'Currency', 'Category', 'Subcategory', 'Description', 'Recipient', 'Tags'];
+    const headers = [
+      "ID",
+      "Date",
+      "Account",
+      "Amount",
+      "Currency",
+      "Category",
+      "Subcategory",
+      "Description",
+      "Recipient",
+      "Tags",
+    ];
     const rows = transactionsData.map((t: any) => [
       t.id,
-      t.date || '',
-      t.account_name || '',
+      t.date || "",
+      t.account_name || "",
       t.amount,
-      t.account_currency || 'EUR',
-      t.type_name || '',
-      t.subtype_name || '',
-      t.description || '',
-      t.destinataire || '',
-      t.tags || ''
+      t.account_currency || "EUR",
+      t.type_name || "",
+      t.subtype_name || "",
+      t.description || "",
+      t.destinataire || "",
+      t.tags || "",
     ]);
 
     const csvContent = [
-      headers.join(','),
-      ...rows.map((row: any[]) => row.map((field: any) => {
-        const stringField = String(field);
-        if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n')) {
-          return `"${stringField.replace(/"/g, '""')}"`;
-        }
-        return stringField;
-      }).join(','))
-    ].join('\n');
+      headers.join(","),
+      ...rows.map((row: any[]) =>
+        row
+          .map((field: any) => {
+            const stringField = String(field);
+            if (
+              stringField.includes(",") ||
+              stringField.includes('"') ||
+              stringField.includes("\n")
+            ) {
+              return `"${stringField.replace(/"/g, '""')}"`;
+            }
+            return stringField;
+          })
+          .join(","),
+      ),
+    ].join("\n");
 
-    const dataBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const dataBlob = new Blob([csvContent], {
+      type: "text/csv;charset=utf-8;",
+    });
     const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement('a');
+    const link = document.createElement("a");
     link.href = url;
-    link.download = `transactions_${format(new Date(), 'yyyy-MM-dd_HHmmss')}.csv`;
+    link.download = `transactions_${format(new Date(), "yyyy-MM-dd_HHmmss")}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -593,11 +714,19 @@ export default function TransactionsPage() {
 
   // Calculate summary statistics using precise decimal arithmetic
   const { totalIncome, totalExpenses, netChange } = useMemo(() => {
-    const income = (transactionsData || []).filter((t: any) => t.amount > 0 && t.category !== 'transfer');
-    const expense = (transactionsData || []).filter((t: any) => t.amount < 0 && t.category !== 'transfer');
+    const income = (transactionsData || []).filter(
+      (t: any) => t.amount > 0 && t.category !== "transfer",
+    );
+    const expense = (transactionsData || []).filter(
+      (t: any) => t.amount < 0 && t.category !== "transfer",
+    );
     const inc = sumMoney(income, (t: any) => t.amount);
     const exp = absMoney(sumMoney(expense, (t: any) => t.amount));
-    return { totalIncome: inc, totalExpenses: exp, netChange: subtractMoney(inc, exp) };
+    return {
+      totalIncome: inc,
+      totalExpenses: exp,
+      netChange: subtractMoney(inc, exp),
+    };
   }, [transactionsData]);
 
   // Pagination logic — server-side, total from API
@@ -617,9 +746,12 @@ export default function TransactionsPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-foreground mb-2">Transactions</h1>
+        <h1 className="text-3xl font-bold text-foreground mb-2">
+          Transactions
+        </h1>
         <p className="text-foreground-muted">
-          {totalTransactions} transaction{totalTransactions !== 1 ? 's' : ''} • Track your financial activity
+          {totalTransactions} transaction{totalTransactions !== 1 ? "s" : ""} •
+          Track your financial activity
         </p>
       </div>
 
@@ -649,7 +781,12 @@ export default function TransactionsPage() {
         <KPICard
           title="Net Change"
           value={formatCurrency(netChange)}
-          icon={<Wallet size={24} className={netChange >= 0 ? "text-emerald-500" : "text-rose-500"} />}
+          icon={
+            <Wallet
+              size={24}
+              className={netChange >= 0 ? "text-emerald-500" : "text-rose-500"}
+            />
+          }
           iconColor={netChange >= 0 ? "bg-emerald-500" : "bg-rose-500"}
           loading={transactionsLoading}
         />
@@ -658,11 +795,13 @@ export default function TransactionsPage() {
       {/* Action Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
         <Button
-          variant={showFilters ? 'default' : 'outline'}
+          variant={showFilters ? "default" : "outline"}
           onClick={() => setShowFilters(!showFilters)}
         >
           <Filter className="w-4 h-4 mr-2" />
-          Filters {hasActiveFilters && `(${Object.values(filters).filter(v => v).length})`}
+          Filters{" "}
+          {hasActiveFilters &&
+            `(${Object.values(filters).filter((v) => v).length})`}
         </Button>
         <Button
           variant="outline"
@@ -672,11 +811,13 @@ export default function TransactionsPage() {
           <Download className="w-4 h-4 mr-2" />
           Export CSV
         </Button>
-        <Button onClick={() => {
-          setEditingTransaction(null);
-          resetFormCompletely();
-          setOpenDialog(true);
-        }}>
+        <Button
+          onClick={() => {
+            setEditingTransaction(null);
+            resetFormCompletely();
+            setOpenDialog(true);
+          }}
+        >
           <Plus className="w-4 h-4 mr-2" />
           Add Transaction
         </Button>
@@ -690,7 +831,9 @@ export default function TransactionsPage() {
               <Label htmlFor="filter-account">Account</Label>
               <Select
                 value={pendingFilters.account_id}
-                onValueChange={(value) => setPendingFilters({ ...pendingFilters, account_id: value })}
+                onValueChange={(value) =>
+                  setPendingFilters({ ...pendingFilters, account_id: value })
+                }
               >
                 <SelectTrigger id="filter-account">
                   <SelectValue placeholder="All Accounts" />
@@ -709,7 +852,9 @@ export default function TransactionsPage() {
               <Label htmlFor="filter-owner">Owner</Label>
               <Select
                 value={pendingFilters.owner_id}
-                onValueChange={(value) => setPendingFilters({ ...pendingFilters, owner_id: value })}
+                onValueChange={(value) =>
+                  setPendingFilters({ ...pendingFilters, owner_id: value })
+                }
               >
                 <SelectTrigger id="filter-owner">
                   <SelectValue placeholder="All Owners" />
@@ -728,7 +873,9 @@ export default function TransactionsPage() {
               <Label htmlFor="filter-category">Category</Label>
               <Select
                 value={pendingFilters.category_id}
-                onValueChange={(value) => setPendingFilters({ ...pendingFilters, category_id: value })}
+                onValueChange={(value) =>
+                  setPendingFilters({ ...pendingFilters, category_id: value })
+                }
               >
                 <SelectTrigger id="filter-category">
                   <SelectValue placeholder="All Categories" />
@@ -736,7 +883,10 @@ export default function TransactionsPage() {
                 <SelectContent>
                   <SelectItem value="">All Categories</SelectItem>
                   {categoriesData?.map((category: any) => (
-                    <SelectItem key={category.id} value={category.id.toString()}>
+                    <SelectItem
+                      key={category.id}
+                      value={category.id.toString()}
+                    >
                       {category.name}
                     </SelectItem>
                   ))}
@@ -749,7 +899,9 @@ export default function TransactionsPage() {
                 id="filter-recipient"
                 options={recipientsData || []}
                 value={pendingFilters.recipient}
-                onChange={(value) => setPendingFilters({ ...pendingFilters, recipient: value })}
+                onChange={(value) =>
+                  setPendingFilters({ ...pendingFilters, recipient: value })
+                }
                 placeholder="Search recipient..."
                 freeSolo
               />
@@ -760,7 +912,12 @@ export default function TransactionsPage() {
                 id="filter-start-date"
                 type="date"
                 value={pendingFilters.start_date}
-                onChange={(e) => setPendingFilters({ ...pendingFilters, start_date: e.target.value })}
+                onChange={(e) =>
+                  setPendingFilters({
+                    ...pendingFilters,
+                    start_date: e.target.value,
+                  })
+                }
               />
             </div>
             <div className="space-y-1.5">
@@ -769,7 +926,12 @@ export default function TransactionsPage() {
                 id="filter-end-date"
                 type="date"
                 value={pendingFilters.end_date}
-                onChange={(e) => setPendingFilters({ ...pendingFilters, end_date: e.target.value })}
+                onChange={(e) =>
+                  setPendingFilters({
+                    ...pendingFilters,
+                    end_date: e.target.value,
+                  })
+                }
               />
             </div>
             <div className="space-y-1.5">
@@ -778,7 +940,9 @@ export default function TransactionsPage() {
                 id="filter-tag"
                 options={tagsData || []}
                 value={pendingFilters.tags}
-                onChange={(value) => setPendingFilters({ ...pendingFilters, tags: value })}
+                onChange={(value) =>
+                  setPendingFilters({ ...pendingFilters, tags: value })
+                }
                 placeholder="Filter by tag..."
                 freeSolo
               />
@@ -786,8 +950,13 @@ export default function TransactionsPage() {
           </div>
           <div className="flex justify-between items-center mt-4">
             <p className="text-sm text-foreground-muted">
-              Found {totalTransactions} transaction{totalTransactions !== 1 ? 's' : ''}
-              {hasUnappliedChanges && <span className="text-warning ml-2">(filters changed - click Apply)</span>}
+              Found {totalTransactions} transaction
+              {totalTransactions !== 1 ? "s" : ""}
+              {hasUnappliedChanges && (
+                <span className="text-warning ml-2">
+                  (filters changed - click Apply)
+                </span>
+              )}
             </p>
             <div className="flex gap-2">
               <Button
@@ -834,12 +1003,14 @@ export default function TransactionsPage() {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-foreground-muted">
-            {(currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, totalTransactions)} of {totalTransactions}
+            {(currentPage - 1) * pageSize + 1}-
+            {Math.min(currentPage * pageSize, totalTransactions)} of{" "}
+            {totalTransactions}
           </span>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
             disabled={currentPage === 1}
           >
             <ChevronLeft className="w-4 h-4" />
@@ -850,7 +1021,7 @@ export default function TransactionsPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
             disabled={currentPage >= totalPages}
           >
             <ChevronRight className="w-4 h-4" />
@@ -861,23 +1032,35 @@ export default function TransactionsPage() {
       {/* Transactions List */}
       <div className="space-y-2">
         {paginatedTransactions.map((transaction: any) => {
-          const isTransfer = transaction.category === 'transfer';
+          const isTransfer = transaction.category === "transfer";
           const isIncome = transaction.amount >= 0;
           const isExpanded = expandedRow === transaction.id;
-          const amountDisplay = formatCurrency(transaction.amount, transaction.account_currency || 'EUR');
+          const amountDisplay = formatCurrency(
+            transaction.amount,
+            transaction.account_currency || "EUR",
+          );
 
           // Determine amount color and sign
-          let amountColor = isIncome ? 'text-success' : 'text-error';
-          let amountSign = isIncome ? '+' : '-';
+          // For transfers: positive = money arriving (green), negative = money leaving (red)
+          let amountColor = isIncome ? "text-success" : "text-error";
+          let amountSign = isIncome ? "+" : "-";
           if (isTransfer) {
-            amountColor = 'text-foreground-muted';
-            amountSign = '';
+            amountColor = isIncome ? "text-blue-400" : "text-orange-400";
+            amountSign = isIncome ? "+" : "-";
           }
+
+          // Build transfer direction label
+          const transferLabel =
+            isTransfer && transaction.transfer_account_name
+              ? isIncome
+                ? `From ${transaction.transfer_account_name}`
+                : `To ${transaction.transfer_account_name}`
+              : null;
 
           return (
             <Card
               key={transaction.id}
-              className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${isExpanded ? 'ring-2 ring-primary/50' : ''}`}
+              className={`rounded-xl overflow-hidden border border-border bg-card/50 backdrop-blur-sm transition-all ${isExpanded ? "ring-2 ring-primary/50" : ""}`}
             >
               {/* Collapsed View - Click to Expand */}
               <div
@@ -891,12 +1074,22 @@ export default function TransactionsPage() {
                   <Badge variant="outline" size="sm" className="flex-shrink-0">
                     {transaction.type_name}
                   </Badge>
-                  <span className="text-foreground truncate flex-1 min-w-0">
-                    {transaction.destinataire || transaction.description || '-'}
-                  </span>
+                  <div className="truncate flex-1 min-w-0">
+                    <span className="text-foreground">
+                      {transaction.destinataire ||
+                        transaction.description ||
+                        "-"}
+                    </span>
+                    {transferLabel && (
+                      <span className={`ml-2 text-xs ${amountColor}`}>
+                        {transferLabel}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-3 flex-shrink-0">
                     <span className={`font-bold ${amountColor}`}>
-                      {amountSign}{amountDisplay}
+                      {amountSign}
+                      {amountDisplay}
                     </span>
                     {isExpanded ? (
                       <ChevronUp className="w-5 h-5 text-foreground-muted" />
@@ -918,35 +1111,50 @@ export default function TransactionsPage() {
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-foreground-muted mb-1">Amount</p>
+                      <p className="text-xs text-foreground-muted mb-1">
+                        Amount
+                      </p>
                       <p className={`text-sm font-bold ${amountColor}`}>
-                        {amountSign}{amountDisplay}
+                        {amountSign}
+                        {amountDisplay}
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-foreground-muted mb-1">Account</p>
+                      <p className="text-xs text-foreground-muted mb-1">
+                        Account
+                      </p>
                       <p className="text-sm font-medium text-foreground">
                         {transaction.account_name} - {transaction.bank_name}
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-foreground-muted mb-1">Currency</p>
+                      <p className="text-xs text-foreground-muted mb-1">
+                        Currency
+                      </p>
                       <p className="text-sm font-medium text-foreground">
-                        {transaction.account_currency || 'EUR'}
+                        {transaction.account_currency || "EUR"}
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-foreground-muted mb-1">Category</p>
+                      <p className="text-xs text-foreground-muted mb-1">
+                        Category
+                      </p>
                       <div className="flex gap-1 flex-wrap">
-                        <Badge variant="default" size="sm">{transaction.type_name}</Badge>
+                        <Badge variant="default" size="sm">
+                          {transaction.type_name}
+                        </Badge>
                         {transaction.subtype_name && (
-                          <Badge variant="outline" size="sm">{transaction.subtype_name}</Badge>
+                          <Badge variant="outline" size="sm">
+                            {transaction.subtype_name}
+                          </Badge>
                         )}
                       </div>
                     </div>
                     {transaction.destinataire && (
                       <div>
-                        <p className="text-xs text-foreground-muted mb-1">Recipient</p>
+                        <p className="text-xs text-foreground-muted mb-1">
+                          Recipient
+                        </p>
                         <p className="text-sm font-medium text-foreground">
                           {transaction.destinataire}
                         </p>
@@ -954,29 +1162,45 @@ export default function TransactionsPage() {
                     )}
                     {transaction.description && (
                       <div className="sm:col-span-2">
-                        <p className="text-xs text-foreground-muted mb-1">Description</p>
+                        <p className="text-xs text-foreground-muted mb-1">
+                          Description
+                        </p>
                         <p className="text-sm font-medium text-foreground">
                           {transaction.description}
                         </p>
                       </div>
                     )}
                     <div>
-                      <p className="text-xs text-foreground-muted mb-1">Transaction ID</p>
-                      <p className="text-sm font-medium text-foreground">#{transaction.id}</p>
+                      <p className="text-xs text-foreground-muted mb-1">
+                        Transaction ID
+                      </p>
+                      <p className="text-sm font-medium text-foreground">
+                        #{transaction.id}
+                      </p>
                     </div>
                     {transaction.transfer_account_name && (
                       <>
                         <div>
-                          <p className="text-xs text-foreground-muted mb-1">Transfer To</p>
+                          <p className="text-xs text-foreground-muted mb-1">
+                            {isTransfer && isIncome
+                              ? "Transfer From"
+                              : "Transfer To"}
+                          </p>
                           <p className="text-sm font-medium text-foreground">
-                            {transaction.transfer_account_name} - {transaction.transfer_bank_name || ''}
+                            {transaction.transfer_account_name} -{" "}
+                            {transaction.transfer_bank_name || ""}
                           </p>
                         </div>
                         {transaction.transfer_amount && (
                           <div>
-                            <p className="text-xs text-foreground-muted mb-1">Transfer Amount</p>
+                            <p className="text-xs text-foreground-muted mb-1">
+                              Transfer Amount
+                            </p>
                             <p className="text-sm font-medium text-foreground">
-                              {formatCurrency(transaction.transfer_amount, transaction.transfer_currency || 'EUR')}
+                              {formatCurrency(
+                                transaction.transfer_amount,
+                                transaction.transfer_currency || "EUR",
+                              )}
                             </p>
                           </div>
                         )}
@@ -984,7 +1208,9 @@ export default function TransactionsPage() {
                     )}
                     {transaction.due_date && (
                       <div>
-                        <p className="text-xs text-foreground-muted mb-1">Due Date</p>
+                        <p className="text-xs text-foreground-muted mb-1">
+                          Due Date
+                        </p>
                         <p className="text-sm font-medium text-foreground">
                           {formatTransactionDate(transaction.due_date)}
                         </p>
@@ -992,13 +1218,17 @@ export default function TransactionsPage() {
                     )}
                     {transaction.tags && (
                       <div className="sm:col-span-2">
-                        <p className="text-xs text-foreground-muted mb-1">Tags</p>
+                        <p className="text-xs text-foreground-muted mb-1">
+                          Tags
+                        </p>
                         <div className="flex gap-1 flex-wrap">
-                          {transaction.tags.split(',').map((tag: string, idx: number) => (
-                            <Badge key={idx} variant="info" size="sm">
-                              {tag.trim()}
-                            </Badge>
-                          ))}
+                          {transaction.tags
+                            .split(",")
+                            .map((tag: string, idx: number) => (
+                              <Badge key={idx} variant="info" size="sm">
+                                {tag.trim()}
+                              </Badge>
+                            ))}
                         </div>
                       </div>
                     )}
@@ -1006,7 +1236,11 @@ export default function TransactionsPage() {
 
                   {/* Actions */}
                   <div className="flex gap-2 pt-3 border-t border-border">
-                    <Button size="sm" variant="outline" onClick={() => handleEdit(transaction)}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleEdit(transaction)}
+                    >
                       <Edit2 className="w-4 h-4 mr-2" />
                       Edit
                     </Button>
@@ -1034,14 +1268,18 @@ export default function TransactionsPage() {
                 No Transactions Found
               </h2>
               <p className="text-sm text-foreground-muted mb-6">
-                {hasActiveFilters ? 'Try adjusting your filters' : 'Start by adding your first transaction'}
+                {hasActiveFilters
+                  ? "Try adjusting your filters"
+                  : "Start by adding your first transaction"}
               </p>
               {!hasActiveFilters && (
-                <Button onClick={() => {
-                  setEditingTransaction(null);
-                  resetFormCompletely();
-                  setOpenDialog(true);
-                }}>
+                <Button
+                  onClick={() => {
+                    setEditingTransaction(null);
+                    resetFormCompletely();
+                    setOpenDialog(true);
+                  }}
+                >
                   <Plus className="w-4 h-4 mr-2" />
                   Add Transaction
                 </Button>
@@ -1065,7 +1303,7 @@ export default function TransactionsPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
             disabled={currentPage === 1}
           >
             <ChevronLeft className="w-4 h-4" />
@@ -1077,7 +1315,7 @@ export default function TransactionsPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
             disabled={currentPage >= totalPages}
           >
             Next
@@ -1095,18 +1333,25 @@ export default function TransactionsPage() {
       )}
 
       {/* Add/Edit Transaction Dialog */}
-      <Dialog open={openDialog} onOpenChange={(open) => {
-        if (!open) {
-          setOpenDialog(false);
-          setEditingTransaction(null);
-          resetFormCompletely();
-        }
-      }}>
+      <Dialog
+        open={openDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setOpenDialog(false);
+            setEditingTransaction(null);
+            resetFormCompletely();
+          }
+        }}
+      >
         <DialogContent size="2xl" className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingTransaction ? 'Edit Transaction' : 'Add Transaction'}</DialogTitle>
+            <DialogTitle>
+              {editingTransaction ? "Edit Transaction" : "Add Transaction"}
+            </DialogTitle>
             <DialogDescription>
-              {editingTransaction ? 'Update the transaction details below.' : 'Enter the details for your new transaction.'}
+              {editingTransaction
+                ? "Update the transaction details below."
+                : "Enter the details for your new transaction."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleFormSubmit(onSubmit)}>
@@ -1123,13 +1368,19 @@ export default function TransactionsPage() {
                   control={control}
                   render={({ field }) => (
                     <Select value={field.value} onValueChange={field.onChange}>
-                      <SelectTrigger className={errors.account_id ? 'border-error' : ''}>
+                      <SelectTrigger
+                        className={errors.account_id ? "border-error" : ""}
+                      >
                         <SelectValue placeholder="Select account" />
                       </SelectTrigger>
                       <SelectContent>
                         {accountsData?.map((account: any) => (
-                          <SelectItem key={account.id} value={account.id.toString()}>
-                            {account.name} - {account.bank_name} ({account.currency})
+                          <SelectItem
+                            key={account.id}
+                            value={account.id.toString()}
+                          >
+                            {account.name} - {account.bank_name} (
+                            {account.currency})
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1142,14 +1393,14 @@ export default function TransactionsPage() {
               <FormField label="Date" required error={errors.date?.message}>
                 <Input
                   type="date"
-                  {...register('date')}
-                  className={errors.date ? 'border-error' : ''}
+                  {...register("date")}
+                  className={errors.date ? "border-error" : ""}
                 />
               </FormField>
 
               {/* Due Date Field */}
               <FormField label="Due Date (Optional)">
-                <Input type="date" {...register('due_date')} />
+                <Input type="date" {...register("due_date")} />
               </FormField>
 
               {/* Amount Field */}
@@ -1157,14 +1408,18 @@ export default function TransactionsPage() {
                 <Input
                   type="number"
                   step="0.01"
-                  {...register('amount')}
-                  className={errors.amount ? 'border-error' : ''}
+                  {...register("amount")}
+                  className={errors.amount ? "border-error" : ""}
                   placeholder="0.00"
                 />
               </FormField>
 
               {/* Category Field */}
-              <FormField label="Category" required error={errors.type_id?.message}>
+              <FormField
+                label="Category"
+                required
+                error={errors.type_id?.message}
+              >
                 <Controller
                   name="type_id"
                   control={control}
@@ -1173,15 +1428,20 @@ export default function TransactionsPage() {
                       value={field.value}
                       onValueChange={(value) => {
                         field.onChange(value);
-                        setValue('subtype_id', ''); // Reset subcategory when category changes
+                        setValue("subtype_id", ""); // Reset subcategory when category changes
                       }}
                     >
-                      <SelectTrigger className={errors.type_id ? 'border-error' : ''}>
+                      <SelectTrigger
+                        className={errors.type_id ? "border-error" : ""}
+                      >
                         <SelectValue placeholder="Select category" />
                       </SelectTrigger>
                       <SelectContent>
                         {categoriesData?.map((category: any) => (
-                          <SelectItem key={category.id} value={category.id.toString()}>
+                          <SelectItem
+                            key={category.id}
+                            value={category.id.toString()}
+                          >
                             {category.name}
                           </SelectItem>
                         ))}
@@ -1198,15 +1458,23 @@ export default function TransactionsPage() {
                     name="subtype_id"
                     control={control}
                     render={({ field }) => (
-                      <Select value={field.value || ''} onValueChange={field.onChange}>
+                      <Select
+                        value={field.value || ""}
+                        onValueChange={field.onChange}
+                      >
                         <SelectTrigger>
                           <SelectValue placeholder="Select subcategory" />
                         </SelectTrigger>
                         <SelectContent>
                           {categoriesData
-                            ?.find((c: any) => c.id === parseInt(formData.type_id))
+                            ?.find(
+                              (c: any) => c.id === parseInt(formData.type_id),
+                            )
                             ?.subtypes?.map((subtype: any) => (
-                              <SelectItem key={subtype.id} value={subtype.id.toString()}>
+                              <SelectItem
+                                key={subtype.id}
+                                value={subtype.id.toString()}
+                              >
                                 {subtype.name}
                               </SelectItem>
                             ))}
@@ -1219,21 +1487,34 @@ export default function TransactionsPage() {
 
               {/* Transfer Destination Account */}
               {isTransfer && (
-                <FormField label="Destination Account" className="sm:col-span-2">
+                <FormField
+                  label="Destination Account"
+                  className="sm:col-span-2"
+                >
                   <Controller
                     name="transfer_account_id"
                     control={control}
                     render={({ field }) => (
-                      <Select value={field.value || ''} onValueChange={field.onChange}>
+                      <Select
+                        value={field.value || ""}
+                        onValueChange={field.onChange}
+                      >
                         <SelectTrigger>
                           <SelectValue placeholder="Select destination account" />
                         </SelectTrigger>
                         <SelectContent>
                           {accountsData
-                            ?.filter((account: any) => account.id !== parseInt(formData.account_id))
+                            ?.filter(
+                              (account: any) =>
+                                account.id !== parseInt(formData.account_id),
+                            )
                             ?.map((account: any) => (
-                              <SelectItem key={account.id} value={account.id.toString()}>
-                                {account.name} - {account.bank_name} ({account.currency})
+                              <SelectItem
+                                key={account.id}
+                                value={account.id.toString()}
+                              >
+                                {account.name} - {account.bank_name} (
+                                {account.currency})
                               </SelectItem>
                             ))}
                         </SelectContent>
@@ -1246,15 +1527,15 @@ export default function TransactionsPage() {
               {/* Cross-currency Transfer Amount */}
               {isDifferentCurrency && (
                 <FormField
-                  label={`Amount in ${destinationAccount?.currency || 'destination currency'}`}
+                  label={`Amount in ${destinationAccount?.currency || "destination currency"}`}
                   className="sm:col-span-2"
-                  helperText={`Source: ${formData.amount} ${sourceAccount?.currency || ''} → Destination: ${destinationAccount?.currency || ''}`}
+                  helperText={`Source: ${formData.amount} ${sourceAccount?.currency || ""} → Destination: ${destinationAccount?.currency || ""}`}
                 >
                   <Input
                     type="number"
                     step="0.01"
-                    {...register('transfer_amount')}
-                    placeholder={`Amount in ${destinationAccount?.currency || ''}`}
+                    {...register("transfer_amount")}
+                    placeholder={`Amount in ${destinationAccount?.currency || ""}`}
                   />
                 </FormField>
               )}
@@ -1272,7 +1553,7 @@ export default function TransactionsPage() {
                           <Autocomplete
                             id="transaction-recipient"
                             options={recipientsData || []}
-                            value={field.value || ''}
+                            value={field.value || ""}
                             onChange={field.onChange}
                             placeholder="Select or enter recipient"
                             freeSolo
@@ -1285,21 +1566,30 @@ export default function TransactionsPage() {
                       type="button"
                       variant="outline"
                       onClick={handleAutoCategorize}
-                      disabled={!formData.recipient?.trim() || autoCategorizingDescription}
+                      disabled={
+                        !formData.recipient?.trim() ||
+                        autoCategorizingDescription
+                      }
                       className="shrink-0"
                     >
                       <Sparkles className="w-4 h-4 mr-2" />
-                      {autoCategorizingDescription ? 'Analyzing...' : 'Auto-Categorize'}
+                      {autoCategorizingDescription
+                        ? "Analyzing..."
+                        : "Auto-Categorize"}
                     </Button>
                   </div>
                 </div>
               )}
 
               {/* Description Field */}
-              <FormField label="Description (Optional)" htmlFor="transaction-description" className="sm:col-span-2">
+              <FormField
+                label="Description (Optional)"
+                htmlFor="transaction-description"
+                className="sm:col-span-2"
+              >
                 <Input
                   id="transaction-description"
-                  {...register('description')}
+                  {...register("description")}
                   placeholder="Additional notes or description"
                 />
               </FormField>
@@ -1314,7 +1604,7 @@ export default function TransactionsPage() {
                     <Autocomplete
                       id="transaction-tags"
                       options={tagsData || []}
-                      value={field.value || ''}
+                      value={field.value || ""}
                       onChange={field.onChange}
                       placeholder="Select or type tags (comma-separated)"
                       freeSolo
@@ -1342,9 +1632,12 @@ export default function TransactionsPage() {
                 loading={createMutation.isPending || updateMutation.isPending}
               >
                 {editingTransaction
-                  ? (updateMutation.isPending ? 'Updating...' : 'Update Transaction')
-                  : (createMutation.isPending ? 'Adding...' : 'Add Transaction')
-                }
+                  ? updateMutation.isPending
+                    ? "Updating..."
+                    : "Update Transaction"
+                  : createMutation.isPending
+                    ? "Adding..."
+                    : "Add Transaction"}
               </Button>
             </DialogFooter>
           </form>
@@ -1352,7 +1645,10 @@ export default function TransactionsPage() {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
+      <Dialog
+        open={!!deleteConfirm}
+        onOpenChange={() => setDeleteConfirm(null)}
+      >
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
@@ -1366,9 +1662,21 @@ export default function TransactionsPage() {
             </p>
             {deleteConfirm && (
               <div className="p-4 rounded-lg bg-surface">
-                <p className="text-sm"><strong>Date:</strong> {formatTransactionDate(deleteConfirm.date)}</p>
-                <p className="text-sm"><strong>Amount:</strong> {formatCurrency(deleteConfirm.amount, deleteConfirm.account_currency)}</p>
-                <p className="text-sm"><strong>Description:</strong> {deleteConfirm.description || '-'}</p>
+                <p className="text-sm">
+                  <strong>Date:</strong>{" "}
+                  {formatTransactionDate(deleteConfirm.date)}
+                </p>
+                <p className="text-sm">
+                  <strong>Amount:</strong>{" "}
+                  {formatCurrency(
+                    deleteConfirm.amount,
+                    deleteConfirm.account_currency,
+                  )}
+                </p>
+                <p className="text-sm">
+                  <strong>Description:</strong>{" "}
+                  {deleteConfirm.description || "-"}
+                </p>
               </div>
             )}
           </div>
@@ -1381,7 +1689,7 @@ export default function TransactionsPage() {
               onClick={() => deleteMutation.mutate(deleteConfirm.id)}
               loading={deleteMutation.isPending}
             >
-              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>

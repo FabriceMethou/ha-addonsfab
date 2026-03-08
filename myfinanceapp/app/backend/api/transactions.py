@@ -97,6 +97,8 @@ async def get_transactions(
     end_date: Optional[str] = None,
     type_id: Optional[int] = None,
     subtype_id: Optional[int] = None,
+    recipient: Optional[str] = None,
+    tags: Optional[str] = None,
     limit: int = Query(100, le=1000),
     offset: int = 0,
     current_user: User = Depends(get_current_user)
@@ -116,6 +118,10 @@ async def get_transactions(
         filters['type_id'] = type_id
     if subtype_id:
         filters['subtype_id'] = subtype_id
+    if recipient:
+        filters['destinataire'] = recipient
+    if tags:
+        filters['tags'] = tags
     if limit:
         filters['limit'] = limit
     if offset:
