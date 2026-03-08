@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def migrate():
-    db_path = os.getenv("DATABASE_PATH", "/home/fab/Documents/Development/myfinanceapp/data/finance.db")
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    default_db_path = os.path.join(project_root, "data", "finance.db")
+    db_path = os.getenv("DATABASE_PATH", default_db_path)
 
     print(f"Connecting to database: {db_path}")
     conn = sqlite3.connect(db_path)

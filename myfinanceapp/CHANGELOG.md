@@ -1,7 +1,9 @@
 # Changelog
 
-## 2.0.23
+## 2.0.24
+- Fix scripts for migration
 
+## 2.0.23
 - Fix envelope transaction history
 - Fix Recipient Filter
 - Created double netry for transfer + script for migrqtion of preexisting 
