@@ -428,6 +428,7 @@ class FinanceDatabase:
                 tags TEXT,
                 transfer_account_id INTEGER,
                 is_transfer BOOLEAN DEFAULT 0,
+                linked_transfer_id INTEGER,
                 is_duplicate_flag BOOLEAN DEFAULT 0,
                 recurring_template_id INTEGER,
                 confirmed BOOLEAN DEFAULT 1,
@@ -435,7 +436,8 @@ class FinanceDatabase:
                 FOREIGN KEY (account_id) REFERENCES accounts(id),
                 FOREIGN KEY (type_id) REFERENCES transaction_types(id),
                 FOREIGN KEY (subtype_id) REFERENCES transaction_subtypes(id),
-                FOREIGN KEY (transfer_account_id) REFERENCES accounts(id)
+                FOREIGN KEY (transfer_account_id) REFERENCES accounts(id),
+                FOREIGN KEY (linked_transfer_id) REFERENCES transactions(id)
             )
         """)
 
@@ -654,6 +656,14 @@ class FinanceDatabase:
         if 'is_historical' not in columns:
             cursor.execute("ALTER TABLE transactions ADD COLUMN is_historical BOOLEAN DEFAULT 0")
             logger.info("Added is_historical column to transactions table")
+
+        # Migration: Add linked_transfer_id column for double-entry transfers
+        cursor.execute("PRAGMA table_info(transactions)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'linked_transfer_id' not in columns:
+            cursor.execute("ALTER TABLE transactions ADD COLUMN linked_transfer_id INTEGER REFERENCES transactions(id)")
+            conn.commit()
+            logger.info("Added linked_transfer_id column to transactions table")
 
         # Migration: Add ISIN column if it doesn't exist (for existing databases)
         cursor.execute("PRAGMA table_info(investment_holdings)")
@@ -2323,8 +2333,8 @@ class FinanceDatabase:
             INSERT INTO transactions
             (account_id, transaction_date, due_date, amount, currency, description,
              destinataire, type_id, subtype_id, tags, transfer_account_id,
-             is_transfer, is_duplicate_flag, recurring_template_id, confirmed, is_historical, transfer_amount)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             is_transfer, linked_transfer_id, is_duplicate_flag, recurring_template_id, confirmed, is_historical, transfer_amount)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             transaction_data['account_id'],
             transaction_data['transaction_date'],
@@ -2338,6 +2348,7 @@ class FinanceDatabase:
             transaction_data.get('tags', ''),
             transaction_data.get('transfer_account_id'),
             transaction_data.get('is_transfer', False),
+            transaction_data.get('linked_transfer_id'),
             is_duplicate,
             transaction_data.get('recurring_template_id'),
             transaction_data.get('confirmed', True),
@@ -2364,26 +2375,69 @@ class FinanceDatabase:
                     category
                 )
 
-                # Handle transfers (update destination account too)
+                # Handle transfers: create mirror transaction in destination account
                 is_transfer = transaction_data.get('is_transfer', False)
                 transfer_account_id = transaction_data.get('transfer_account_id')
                 transfer_amount = transaction_data.get('transfer_amount')
+                # Only create mirror if this is not already a mirror (no linked_transfer_id set)
+                is_mirror = transaction_data.get('linked_transfer_id') is not None
 
-                if is_transfer and transfer_account_id and category == 'transfer':
-                    # Determine the amount to add to destination account
-                    # If transfer_amount is provided, use it (cross-currency transfer)
-                    # Otherwise use the source amount (same-currency transfer)
-                    amount = transaction_data['amount']
+                if is_transfer and transfer_account_id and category == 'transfer' and not is_mirror:
+                    # Determine the destination amount
+                    source_amount = transaction_data['amount']
 
                     if transfer_amount is not None:
-                        # Cross-currency transfer: use specified transfer_amount for destination
                         destination_amount = abs(transfer_amount)
-                        self._update_account_balance(cursor, transfer_account_id, destination_amount, 'transfer')
-                        logger.info(f"Cross-currency transfer: Updated destination account {transfer_account_id} with +{destination_amount}")
                     else:
-                        # Same-currency transfer: use abs of source amount for destination
-                        self._update_account_balance(cursor, transfer_account_id, abs(amount), 'transfer')
-                        logger.info(f"Same-currency transfer: Updated destination account {transfer_account_id} with +{abs(amount)}")
+                        destination_amount = abs(source_amount)
+
+                    # Get destination account info
+                    cursor.execute("SELECT name, currency FROM accounts WHERE id = ?", (transfer_account_id,))
+                    dest_account = cursor.fetchone()
+                    dest_currency = dest_account['currency'] if dest_account else transaction_data['currency']
+
+                    # Get source account name for the mirror's destinataire
+                    cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction_data['account_id'],))
+                    source_account = cursor.fetchone()
+                    source_account_name = source_account['name'] if source_account else ''
+
+                    # Create mirror transaction in destination account (positive amount = money arriving)
+                    cursor.execute("""
+                        INSERT INTO transactions
+                        (account_id, transaction_date, due_date, amount, currency, description,
+                         destinataire, type_id, subtype_id, tags, transfer_account_id,
+                         is_transfer, linked_transfer_id, is_duplicate_flag, recurring_template_id,
+                         confirmed, is_historical, transfer_amount)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        transfer_account_id,
+                        transaction_data['transaction_date'],
+                        transaction_data.get('due_date'),
+                        destination_amount,  # Positive: money arriving
+                        dest_currency,
+                        transaction_data.get('description', ''),
+                        source_account_name,  # Destinataire = source account name
+                        transaction_data['type_id'],
+                        transaction_data['subtype_id'],
+                        transaction_data.get('tags', ''),
+                        transaction_data['account_id'],  # Points back to source account
+                        True,
+                        transaction_id,  # Link to source transaction
+                        False,
+                        transaction_data.get('recurring_template_id'),
+                        transaction_data.get('confirmed', True),
+                        is_historical,
+                        abs(source_amount) if transfer_amount is not None else None
+                    ))
+
+                    mirror_id = cursor.lastrowid
+
+                    # Link source transaction to mirror
+                    cursor.execute("UPDATE transactions SET linked_transfer_id = ? WHERE id = ?", (mirror_id, transaction_id))
+
+                    # Update destination account balance
+                    self._update_account_balance(cursor, transfer_account_id, destination_amount, 'transfer')
+                    logger.info(f"Double-entry transfer: source={transaction_id} (account {transaction_data['account_id']}), mirror={mirror_id} (account {transfer_account_id})")
 
         conn.commit()
         conn.close()
@@ -2487,6 +2541,12 @@ class FinanceDatabase:
             if 'owner_id' in filters:
                 query += " AND a.owner_id = ?"
                 params.append(filters['owner_id'])
+            if 'destinataire' in filters:
+                query += " AND t.destinataire = ?"
+                params.append(filters['destinataire'])
+            if 'tags' in filters:
+                query += " AND t.tags LIKE ?"
+                params.append(f"%{filters['tags']}%")
 
         cursor.execute(query, params)
         count = cursor.fetchone()[0]
@@ -2548,7 +2608,7 @@ class FinanceDatabase:
         ALLOWED_COLUMNS = {
             'account_id', 'transaction_date', 'due_date', 'amount', 'type_id', 'subtype_id',
             'description', 'destinataire', 'tags', 'confirmed', 'is_transfer',
-            'transfer_account_id', 'transfer_amount', 'is_historical', 'notes',
+            'transfer_account_id', 'transfer_amount', 'linked_transfer_id', 'is_historical', 'notes',
             'currency', 'original_amount', 'original_currency', 'exchange_rate'
         }
         updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
@@ -2556,24 +2616,29 @@ class FinanceDatabase:
             conn.close()
             return False
 
+        linked_transfer_id = old_transaction.get('linked_transfer_id')
+
         # Reverse old balance if transaction was confirmed
         if old_transaction['confirmed']:
             # Reverse the balance change (negate the amount)
             self._update_account_balance(
                 cursor,
                 old_transaction['account_id'],
-                -old_transaction['amount'],  # Reverse the amount
+                -old_transaction['amount'],
                 old_transaction['category']
             )
 
-            # Reverse transfer destination if applicable
-            if old_transaction['is_transfer'] and old_transaction['transfer_account_id'] and old_transaction['category'] == 'transfer':
-                # Check if this was a cross-currency transfer with transfer_amount
+            # Reverse mirror transaction balance if linked
+            if linked_transfer_id and old_transaction['category'] == 'transfer':
+                cursor.execute("SELECT amount, account_id, confirmed FROM transactions WHERE id = ?", (linked_transfer_id,))
+                mirror_row = cursor.fetchone()
+                if mirror_row and mirror_row['confirmed']:
+                    self._update_account_balance(cursor, mirror_row['account_id'], -mirror_row['amount'], 'transfer')
+            elif not linked_transfer_id and old_transaction['is_transfer'] and old_transaction['transfer_account_id'] and old_transaction['category'] == 'transfer':
+                # Legacy transfer without mirror
                 if old_transaction.get('transfer_amount') is not None:
-                    # Reverse cross-currency transfer using stored transfer_amount
                     self._update_account_balance(cursor, old_transaction['transfer_account_id'], -abs(old_transaction['transfer_amount']), 'transfer')
                 else:
-                    # Reverse same-currency transfer
                     self._update_account_balance(cursor, old_transaction['transfer_account_id'], -abs(old_transaction['amount']), 'transfer')
 
         # Apply updates
@@ -2602,14 +2667,40 @@ class FinanceDatabase:
                     new_transaction['category']
                 )
 
-                # Apply transfer destination if applicable
-                if new_transaction['is_transfer'] and new_transaction['transfer_account_id'] and new_transaction['category'] == 'transfer':
-                    # Check if this is a cross-currency transfer with transfer_amount
+                # Update mirror transaction if linked
+                if linked_transfer_id and new_transaction['category'] == 'transfer':
+                    new_transfer_amount = new_transaction.get('transfer_amount')
+                    new_amount = new_transaction['amount']
+                    dest_amount = abs(new_transfer_amount) if new_transfer_amount is not None else abs(new_amount)
+
+                    # Get source account name for mirror's destinataire
+                    cursor.execute("SELECT name FROM accounts WHERE id = ?", (new_transaction['account_id'],))
+                    src_acct = cursor.fetchone()
+                    src_name = src_acct['name'] if src_acct else ''
+
+                    # Sync mirror transaction fields
+                    mirror_updates = {
+                        'transaction_date': new_transaction['transaction_date'],
+                        'due_date': new_transaction.get('due_date'),
+                        'amount': dest_amount,
+                        'description': new_transaction.get('description', ''),
+                        'destinataire': src_name,
+                        'type_id': new_transaction['type_id'],
+                        'subtype_id': new_transaction['subtype_id'],
+                        'tags': new_transaction.get('tags', ''),
+                        'confirmed': new_transaction['confirmed'],
+                    }
+                    mirror_set = ", ".join([f"{k} = ?" for k in mirror_updates.keys()])
+                    mirror_vals = list(mirror_updates.values()) + [linked_transfer_id]
+                    cursor.execute(f"UPDATE transactions SET {mirror_set} WHERE id = ?", mirror_vals)
+
+                    # Apply mirror balance
+                    self._update_account_balance(cursor, new_transaction['transfer_account_id'], dest_amount, 'transfer')
+                elif not linked_transfer_id and new_transaction['is_transfer'] and new_transaction['transfer_account_id'] and new_transaction['category'] == 'transfer':
+                    # Legacy transfer without mirror
                     if new_transaction.get('transfer_amount') is not None:
-                        # Apply cross-currency transfer using transfer_amount
                         self._update_account_balance(cursor, new_transaction['transfer_account_id'], abs(new_transaction['transfer_amount']), 'transfer')
                     else:
-                        # Apply same-currency transfer
                         self._update_account_balance(cursor, new_transaction['transfer_account_id'], abs(new_transaction['amount']), 'transfer')
 
         conn.commit()
@@ -2620,7 +2711,7 @@ class FinanceDatabase:
         return success
 
     def delete_transaction(self, transaction_id: int) -> bool:
-        """Delete a transaction."""
+        """Delete a transaction. If it's a transfer with a linked mirror, delete both sides."""
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -2638,6 +2729,7 @@ class FinanceDatabase:
             return False
 
         transaction = dict(transaction)
+        linked_transfer_id = transaction.get('linked_transfer_id')
 
         # Reverse balance if transaction was confirmed AND not historical
         if transaction['confirmed'] and not transaction.get('is_historical', False):
@@ -2649,14 +2741,31 @@ class FinanceDatabase:
                 transaction['category']
             )
 
-            # Reverse transfer destination if applicable
-            if transaction['is_transfer'] and transaction['transfer_account_id'] and transaction['category'] == 'transfer':
-                # Check if this was a cross-currency transfer with transfer_amount
+            # If there's a linked mirror transaction, reverse and delete it too
+            if linked_transfer_id and transaction['category'] == 'transfer':
+                cursor.execute("""
+                    SELECT t.*, tt.category
+                    FROM transactions t
+                    JOIN transaction_types tt ON t.type_id = tt.id
+                    WHERE t.id = ?
+                """, (linked_transfer_id,))
+                mirror = cursor.fetchone()
+                if mirror:
+                    mirror = dict(mirror)
+                    if mirror['confirmed'] and not mirror.get('is_historical', False):
+                        self._update_account_balance(
+                            cursor,
+                            mirror['account_id'],
+                            -mirror['amount'],
+                            mirror['category']
+                        )
+                    cursor.execute("DELETE FROM transactions WHERE id = ?", (linked_transfer_id,))
+                    logger.info(f"Deleted mirror transaction {linked_transfer_id}")
+            elif not linked_transfer_id and transaction['is_transfer'] and transaction['transfer_account_id'] and transaction['category'] == 'transfer':
+                # Legacy transfer without mirror: reverse destination balance directly
                 if transaction.get('transfer_amount') is not None:
-                    # Reverse cross-currency transfer using stored transfer_amount
                     self._update_account_balance(cursor, transaction['transfer_account_id'], -abs(transaction['transfer_amount']), 'transfer')
                 else:
-                    # Reverse same-currency transfer
                     self._update_account_balance(cursor, transaction['transfer_account_id'], -abs(transaction['amount']), 'transfer')
 
         # Delete the transaction
@@ -2853,7 +2962,7 @@ class FinanceDatabase:
             SELECT
                 et.*,
                 a.name as account_name,
-                t.date as linked_transaction_date,
+                t.transaction_date as linked_transaction_date,
                 t.description as linked_transaction_description,
                 t.amount as linked_transaction_amount
             FROM envelope_transactions et
