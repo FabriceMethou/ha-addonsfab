@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.0.27
+
+### Bug Fixes
+- Fix monthly summary off-by-one: transactions on the 1st of the next month no longer leak into the current month (December boundary also fixed)
+- Fix investment purchases (`Investments` type) reclassified as `transfer` — buy transactions no longer inflate monthly expenses
+- Fix budget mid-month start: budgets starting part-way through a month now appear correctly in that month's report
+- Fix `update_transaction`: marking a transaction as `is_historical` now correctly reverses its balance impact
+- Fix `update_recurring_template` whitelist: `recurrence_interval`, `day_of_month`, and `name` fields are now updatable
+- Fix extra debt payment logic: `payment_type=extra` now correctly sets `interest_paid=0`
+- Fix debt payment `transaction_id` made optional — API always provides it; direct DB calls no longer require it
+- Fix `add_envelope_transaction`: `transaction_date` now defaults to today when not provided (at DB layer, not just API layer)
+- Fix `get_exchange_rates_map` to use read-only connection (`commit=False`)
+- Fix transaction pagination: `offset=0` and `limit=0` now handled correctly (falsy-zero check replaced)
+- Fix transfer mirror sync: updating `transfer_account_id` on source transaction now updates the mirror's back-reference
+- Fix auth register endpoint: real error message from `create_user` now returned instead of generic text
+- Fix bulk transaction endpoint: missing account now returns per-row error instead of silently defaulting to EUR
+- Fix `_init_database` connection leak: body now wrapped in `try/finally conn.close()`
+
+### Schema Migrations (auto-applied on startup, backward compatible)
+- Add `transfer_amount` column to `transactions` table
+- Make `debt_payments.transaction_id` nullable (was `NOT NULL`; existing data preserved)
+- Add `notes` column to `debt_payments` table
+
+### Features
+- Add **Monthly Investments** KPI card on the Dashboard (amber, with month-over-month change indicator)
+- New `/api/investments/monthly` endpoint returning total invested, sold, dividends, and net cash flow
+
 ## 2.0.26
 - Fix stastic for transfer double entry
 

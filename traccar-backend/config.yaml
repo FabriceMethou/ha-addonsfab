@@ -1,0 +1,23 @@
+name: "MyLife360 Backend"
+description: "Mobile API backend for MyLife360 family tracking app"
+version: "1.0.0"
+slug: "mylife360_backend"
+init: false
+arch:
+  - amd64
+  - aarch64
+startup: services
+ingress: true
+ingress_port: 8765
+panel_icon: mdi:map-marker-account
+panel_title: "MyLife360"
+options:
+  traccar_url: "http://192.168.1.100:8082"
+  traccar_admin_token: ""
+  traccar_admin_user_id: 1
+  log_level: "info"
+schema:
+  traccar_url: str
+  traccar_admin_token: str
+  traccar_admin_user_id: int
+  log_level: "list(debug|info|warning|error)"

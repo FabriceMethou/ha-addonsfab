@@ -580,6 +580,61 @@ async def delete_transaction(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.get("/monthly")
+async def get_monthly_summary(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get investment activity summary for a date range.
+
+    Returns total amount invested (buys), received from sales, dividends earned,
+    and net cash flow for the period. Useful for the dashboard monthly KPI card.
+    """
+    transactions = db.get_investment_transactions()
+
+    total_invested = 0.0   # sum of buy total_amount (including fees + tax)
+    total_sold = 0.0       # sum of sell proceeds (net of fees + tax)
+    total_dividends = 0.0  # sum of dividend amounts
+    buy_count = 0
+    sell_count = 0
+    dividend_count = 0
+
+    for t in transactions:
+        t_date = t.get('transaction_date', '')
+        if start_date and t_date < start_date:
+            continue
+        if end_date and t_date > end_date:
+            continue
+
+        t_type = t.get('transaction_type')
+        amount = t.get('total_amount', 0) or 0
+        fees = t.get('fees', 0) or 0
+        tax = t.get('tax', 0) or 0
+
+        if t_type == 'buy':
+            total_invested += amount + fees + tax
+            buy_count += 1
+        elif t_type == 'sell':
+            total_sold += amount - fees - tax
+            sell_count += 1
+        elif t_type == 'dividend':
+            total_dividends += amount
+            dividend_count += 1
+
+    return {
+        "total_invested": total_invested,
+        "total_sold": total_sold,
+        "total_dividends": total_dividends,
+        "net_cash_flow": total_sold + total_dividends - total_invested,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "dividend_count": dividend_count,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+
 @router.get("/summary")
 async def get_summary(current_user: User = Depends(get_current_user)):
     """Get investment portfolio summary with detailed metrics"""

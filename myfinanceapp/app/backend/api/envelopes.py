@@ -125,9 +125,11 @@ async def add_envelope_transaction(transaction: EnvelopeTransaction, current_use
         if target > 0 and new_total > target:
             warning = f"This allocation exceeds the target by {new_total - target:.2f}"
 
+    from datetime import datetime
+    transaction_date = transaction.date if transaction.date else datetime.now().strftime('%Y-%m-%d')
     transaction_data = {
         'envelope_id': transaction.envelope_id,
-        'transaction_date': transaction.date,  # API uses 'date', DB uses 'transaction_date'
+        'transaction_date': transaction_date,  # API uses 'date', DB uses 'transaction_date'
         'amount': transaction.amount,
         'account_id': transaction.account_id,
         'description': transaction.description,
