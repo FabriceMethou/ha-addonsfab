@@ -109,14 +109,10 @@ async def create_debt(debt: DebtCreate, current_user: User = Depends(get_current
     # Default current_balance to original_amount if not provided
     current_balance = debt.current_balance if debt.current_balance is not None else debt.original_amount
 
-    # Get first account if not provided
+    # linked_account_id is required
     linked_account_id = debt.linked_account_id
     if not linked_account_id:
-        accounts = db.get_accounts()
-        if accounts:
-            linked_account_id = accounts[0]['id']
-        else:
-            raise HTTPException(status_code=400, detail="No accounts available. Please create an account first.")
+        raise HTTPException(status_code=400, detail="linked_account_id is required")
 
     # Map frontend fields to database fields
     debt_data = {
@@ -284,7 +280,8 @@ async def add_debt_payment(payment: DebtPayment, current_user: User = Depends(ge
                 'amount': 0,  # No regular payment
                 'payment_date': payment.payment_date,
                 'transaction_id': transaction_id,
-                'extra_payment': payment.amount  # All goes to principal
+                'extra_payment': payment.amount,  # All goes to principal
+                'notes': payment.notes
             }
         else:
             payment_data = {
@@ -292,7 +289,8 @@ async def add_debt_payment(payment: DebtPayment, current_user: User = Depends(ge
                 'amount': payment.amount,  # Regular monthly payment
                 'payment_date': payment.payment_date,
                 'transaction_id': transaction_id,
-                'extra_payment': 0  # No extra
+                'extra_payment': 0,  # No extra
+                'notes': payment.notes
             }
 
         payment_id = db.add_debt_payment(payment_data)

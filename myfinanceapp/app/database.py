@@ -319,371 +319,298 @@ class FinanceDatabase:
     def _init_database(self):
         """Create database tables if they don't exist."""
         conn = self._get_connection()
-        cursor = conn.cursor()
-
-        # Enable WAL mode for better concurrency
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=30000")  # 30 second timeout
-
-        # Banks table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS banks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Owners table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS owners (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Currencies table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS currencies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                name TEXT NOT NULL,
-                symbol TEXT,
-                exchange_rate_to_eur REAL NOT NULL DEFAULT 1.0,
-                is_active BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Insert default currencies if table is empty
-        cursor.execute("SELECT COUNT(*) as count FROM currencies")
-        if cursor.fetchone()['count'] == 0:
-            default_currencies = [
-                ('EUR', 'Euro', '€', 1.0, 1),
-                ('SEK', 'Swedish Krona', 'kr', 0.088, 1),  # ~11.4 SEK = 1 EUR
-                ('DKK', 'Danish Krone', 'kr', 0.134, 1),  # ~7.5 DKK = 1 EUR
-            ]
-            cursor.executemany("""
-                INSERT INTO currencies (code, name, symbol, exchange_rate_to_eur, is_active)
-                VALUES (?, ?, ?, ?, ?)
-            """, default_currencies)
-
-        # Accounts table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                bank_id INTEGER,
-                name TEXT NOT NULL,
-                account_type TEXT NOT NULL CHECK(account_type IN ('cash', 'investment', 'savings', 'checking')),
-                currency TEXT NOT NULL,
-                owner_id INTEGER NOT NULL,
-                opening_date DATE,
-                balance REAL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (bank_id) REFERENCES banks(id),
-                FOREIGN KEY (owner_id) REFERENCES owners(id),
-                FOREIGN KEY (currency) REFERENCES currencies(code)
-            )
-        """)
-
-        # Transaction types
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS transaction_types (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                category TEXT NOT NULL CHECK(category IN ('income', 'expense', 'transfer')),
-                icon TEXT,
-                color TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Transaction subtypes
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS transaction_subtypes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (type_id) REFERENCES transaction_types(id) ON DELETE CASCADE,
-                UNIQUE(type_id, name)
-            )
-        """)
-
-        # Transactions table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_id INTEGER NOT NULL,
-                transaction_date DATE NOT NULL,
-                due_date DATE,
-                amount REAL NOT NULL,
-                currency TEXT NOT NULL,
-                description TEXT,
-                destinataire TEXT NOT NULL,
-                type_id INTEGER NOT NULL,
-                subtype_id INTEGER NOT NULL,
-                tags TEXT,
-                transfer_account_id INTEGER,
-                is_transfer BOOLEAN DEFAULT 0,
-                linked_transfer_id INTEGER,
-                is_duplicate_flag BOOLEAN DEFAULT 0,
-                recurring_template_id INTEGER,
-                confirmed BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (account_id) REFERENCES accounts(id),
-                FOREIGN KEY (type_id) REFERENCES transaction_types(id),
-                FOREIGN KEY (subtype_id) REFERENCES transaction_subtypes(id),
-                FOREIGN KEY (transfer_account_id) REFERENCES accounts(id),
-                FOREIGN KEY (linked_transfer_id) REFERENCES transactions(id)
-            )
-        """)
-
-
-        # Envelopes (Savings Goals)
-        cursor.execute("""   
-            CREATE TABLE IF NOT EXISTS envelopes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                target_amount REAL NOT NULL,
-                current_amount REAL DEFAULT 0,
-                deadline DATE,
-                color TEXT DEFAULT '#4ECDC4',
-                is_active BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Envelope Transactions (Money Allocations)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS envelope_transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                envelope_id INTEGER NOT NULL,
-                transaction_date DATE NOT NULL,
-                amount REAL NOT NULL,
-                account_id INTEGER,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (envelope_id) REFERENCES envelopes(id) ON DELETE CASCADE,
-                FOREIGN KEY (account_id) REFERENCES accounts(id)
-            )
-        """)
-
-        # Add transaction_id column if it doesn't exist (virtual link to transactions)
         try:
-            cursor.execute("ALTER TABLE envelope_transactions ADD COLUMN transaction_id INTEGER REFERENCES transactions(id)")
-        except Exception:
-            pass  # Column already exists
+            cursor = conn.cursor()
 
-        # Recurring transaction templates
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS recurring_templates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                account_id INTEGER NOT NULL,
-                amount REAL NOT NULL,
-                currency TEXT NOT NULL,
-                description TEXT,
-                destinataire TEXT NOT NULL,
-                type_id INTEGER NOT NULL,
-                subtype_id INTEGER NOT NULL,
-                tags TEXT,
-                recurrence_pattern TEXT NOT NULL CHECK(recurrence_pattern IN ('daily', 'weekly', 'monthly', 'yearly', 'custom')),
-                recurrence_interval INTEGER DEFAULT 1,
-                day_of_month INTEGER,
-                start_date DATE NOT NULL,
-                end_date DATE,
-                last_generated DATE,
-                is_active BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (account_id) REFERENCES accounts(id),
-                FOREIGN KEY (type_id) REFERENCES transaction_types(id),
-                FOREIGN KEY (subtype_id) REFERENCES transaction_subtypes(id)
-            )
-        """)
+            # Enable WAL mode for better concurrency
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=30000")  # 30 second timeout
 
-        # Pending transactions (awaiting confirmation)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pending_transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                recurring_template_id INTEGER NOT NULL,
-                transaction_date DATE NOT NULL,
-                amount REAL NOT NULL,
-                currency TEXT NOT NULL,
-                description TEXT,
-                destinataire TEXT NOT NULL,
-                account_id INTEGER NOT NULL,
-                type_id INTEGER NOT NULL,
-                subtype_id INTEGER NOT NULL,
-                tags TEXT,
-                notified BOOLEAN DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (recurring_template_id) REFERENCES recurring_templates(id) ON DELETE CASCADE,
-                FOREIGN KEY (account_id) REFERENCES accounts(id),
-                FOREIGN KEY (type_id) REFERENCES transaction_types(id),
-                FOREIGN KEY (subtype_id) REFERENCES transaction_subtypes(id)
-            )
-        """)
+            # Banks table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS banks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-        # Debt tracking table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS debts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                principal_amount REAL NOT NULL,
-                current_balance REAL NOT NULL,
-                interest_rate REAL NOT NULL,
-                interest_type TEXT NOT NULL CHECK(interest_type IN ('simple', 'compound')),
-                monthly_payment REAL NOT NULL,
-                payment_day INTEGER NOT NULL,
-                start_date DATE NOT NULL,
-                linked_account_id INTEGER,
-                currency TEXT NOT NULL DEFAULT 'EUR',
-                is_active BOOLEAN DEFAULT 1,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (linked_account_id) REFERENCES accounts(id),
-                FOREIGN KEY (currency) REFERENCES currencies(code)
-            )
-        """)
+            # Owners table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS owners (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-        # Debt payments tracking
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS debt_payments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                debt_id INTEGER NOT NULL,
-                transaction_id INTEGER NOT NULL,
-                payment_date DATE NOT NULL,
-                amount REAL NOT NULL,
-                principal_paid REAL NOT NULL,
-                interest_paid REAL NOT NULL,
-                extra_payment REAL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (debt_id) REFERENCES debts(id) ON DELETE CASCADE,
-                FOREIGN KEY (transaction_id) REFERENCES transactions(id)
-            )
-        """)
+            # Currencies table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS currencies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    symbol TEXT,
+                    exchange_rate_to_eur REAL NOT NULL DEFAULT 1.0,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-        # Budget table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS budgets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type_id INTEGER NOT NULL,
-                amount REAL NOT NULL,
-                currency TEXT NOT NULL DEFAULT 'EUR',
-                period TEXT DEFAULT 'monthly' CHECK(period IN ('monthly', 'yearly')),
-                start_date DATE NOT NULL,
-                end_date DATE,
-                is_active BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (type_id) REFERENCES transaction_types(id)
-            )
-        """)
+            # Insert default currencies if table is empty
+            cursor.execute("SELECT COUNT(*) as count FROM currencies")
+            if cursor.fetchone()['count'] == 0:
+                default_currencies = [
+                    ('EUR', 'Euro', '€', 1.0, 1),
+                    ('SEK', 'Swedish Krona', 'kr', 0.088, 1),  # ~11.4 SEK = 1 EUR
+                    ('DKK', 'Danish Krone', 'kr', 0.134, 1),  # ~7.5 DKK = 1 EUR
+                ]
+                cursor.executemany("""
+                    INSERT INTO currencies (code, name, symbol, exchange_rate_to_eur, is_active)
+                    VALUES (?, ?, ?, ?, ?)
+                """, default_currencies)
 
-        # Migration: Add currency column to existing budgets table if it doesn't exist
-        cursor.execute("PRAGMA table_info(budgets)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'currency' not in columns:
-            cursor.execute("ALTER TABLE budgets ADD COLUMN currency TEXT NOT NULL DEFAULT 'EUR'")
+            # Accounts table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bank_id INTEGER,
+                    name TEXT NOT NULL,
+                    account_type TEXT NOT NULL CHECK(account_type IN ('cash', 'investment', 'savings', 'checking')),
+                    currency TEXT NOT NULL,
+                    owner_id INTEGER NOT NULL,
+                    opening_date DATE,
+                    balance REAL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (bank_id) REFERENCES banks(id),
+                    FOREIGN KEY (owner_id) REFERENCES owners(id),
+                    FOREIGN KEY (currency) REFERENCES currencies(code)
+                )
+            """)
 
-        # Securities master table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS securities (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT NOT NULL UNIQUE,
-                name TEXT NOT NULL,
-                investment_type TEXT NOT NULL CHECK(investment_type IN ('stock', 'etf', 'mutual_fund', 'bond', 'crypto')),
-                isin TEXT UNIQUE,
-                exchange TEXT,
-                currency TEXT NOT NULL,
-                sector TEXT,
-                country TEXT,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+            # Transaction types
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transaction_types (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    category TEXT NOT NULL CHECK(category IN ('income', 'expense', 'transfer')),
+                    icon TEXT,
+                    color TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-        # Investment holdings table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS investment_holdings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_id INTEGER NOT NULL,
-                security_id INTEGER NOT NULL,
-                quantity REAL DEFAULT 0,
-                average_cost REAL DEFAULT 0,
-                currency TEXT NOT NULL,
-                current_price REAL DEFAULT 0,
-                last_price_update TIMESTAMP,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (account_id) REFERENCES accounts(id),
-                FOREIGN KEY (security_id) REFERENCES securities(id),
-                UNIQUE(account_id, security_id)
-            )
-        """)
+            # Transaction subtypes
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transaction_subtypes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (type_id) REFERENCES transaction_types(id) ON DELETE CASCADE,
+                    UNIQUE(type_id, name)
+                )
+            """)
 
-        # Migration: Add notes column to investment_holdings if it doesn't exist
-        cursor.execute("PRAGMA table_info(investment_holdings)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'notes' not in columns:
-            cursor.execute("ALTER TABLE investment_holdings ADD COLUMN notes TEXT")
-            logger.info("Added notes column to investment_holdings table")
+            # Transactions table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL,
+                    transaction_date DATE NOT NULL,
+                    due_date DATE,
+                    amount REAL NOT NULL,
+                    currency TEXT NOT NULL,
+                    description TEXT,
+                    destinataire TEXT NOT NULL,
+                    type_id INTEGER NOT NULL,
+                    subtype_id INTEGER NOT NULL,
+                    tags TEXT,
+                    transfer_account_id INTEGER,
+                    is_transfer BOOLEAN DEFAULT 0,
+                    linked_transfer_id INTEGER,
+                    is_duplicate_flag BOOLEAN DEFAULT 0,
+                    recurring_template_id INTEGER,
+                    confirmed BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    transfer_amount REAL,
+                    FOREIGN KEY (account_id) REFERENCES accounts(id),
+                    FOREIGN KEY (type_id) REFERENCES transaction_types(id),
+                    FOREIGN KEY (subtype_id) REFERENCES transaction_subtypes(id),
+                    FOREIGN KEY (transfer_account_id) REFERENCES accounts(id),
+                    FOREIGN KEY (linked_transfer_id) REFERENCES transactions(id)
+                )
+            """)
 
-        # Migration: Add linked_account_id column to accounts if it doesn't exist
-        cursor.execute("PRAGMA table_info(accounts)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'linked_account_id' not in columns:
-            cursor.execute("ALTER TABLE accounts ADD COLUMN linked_account_id INTEGER REFERENCES accounts(id)")
-            logger.info("Added linked_account_id column to accounts table")
 
-        # Migration: Add opening_balance column to accounts if it doesn't exist
-        cursor.execute("PRAGMA table_info(accounts)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'opening_balance' not in columns:
-            cursor.execute("ALTER TABLE accounts ADD COLUMN opening_balance REAL")
-            # For existing accounts, set opening_balance to current balance
-            cursor.execute("UPDATE accounts SET opening_balance = balance WHERE opening_balance IS NULL")
-            conn.commit()
-            logger.info("Added opening_balance column to accounts table and populated with current balances")
+            # Envelopes (Savings Goals)
+            cursor.execute("""   
+                CREATE TABLE IF NOT EXISTS envelopes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    target_amount REAL NOT NULL,
+                    current_amount REAL DEFAULT 0,
+                    deadline DATE,
+                    color TEXT DEFAULT '#4ECDC4',
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-        # Migration: Add is_historical column to transactions if it doesn't exist
-        cursor.execute("PRAGMA table_info(transactions)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'is_historical' not in columns:
-            cursor.execute("ALTER TABLE transactions ADD COLUMN is_historical BOOLEAN DEFAULT 0")
-            logger.info("Added is_historical column to transactions table")
+            # Envelope Transactions (Money Allocations)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS envelope_transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    envelope_id INTEGER NOT NULL,
+                    transaction_date DATE NOT NULL,
+                    amount REAL NOT NULL,
+                    account_id INTEGER,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (envelope_id) REFERENCES envelopes(id) ON DELETE CASCADE,
+                    FOREIGN KEY (account_id) REFERENCES accounts(id)
+                )
+            """)
 
-        # Migration: Add linked_transfer_id column for double-entry transfers
-        cursor.execute("PRAGMA table_info(transactions)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'linked_transfer_id' not in columns:
-            cursor.execute("ALTER TABLE transactions ADD COLUMN linked_transfer_id INTEGER REFERENCES transactions(id)")
-            conn.commit()
-            logger.info("Added linked_transfer_id column to transactions table")
+            # Add transaction_id column if it doesn't exist (virtual link to transactions)
+            try:
+                cursor.execute("ALTER TABLE envelope_transactions ADD COLUMN transaction_id INTEGER REFERENCES transactions(id)")
+            except Exception:
+                pass  # Column already exists
 
-        # Migration: Add ISIN column if it doesn't exist (for existing databases)
-        cursor.execute("PRAGMA table_info(investment_holdings)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'isin' not in columns:
-            cursor.execute("ALTER TABLE investment_holdings ADD COLUMN isin TEXT")
-            logger.info("Added ISIN column to investment_holdings table")
+            # Recurring transaction templates
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS recurring_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    account_id INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    currency TEXT NOT NULL,
+                    description TEXT,
+                    destinataire TEXT NOT NULL,
+                    type_id INTEGER NOT NULL,
+                    subtype_id INTEGER NOT NULL,
+                    tags TEXT,
+                    recurrence_pattern TEXT NOT NULL CHECK(recurrence_pattern IN ('daily', 'weekly', 'monthly', 'yearly', 'custom')),
+                    recurrence_interval INTEGER DEFAULT 1,
+                    day_of_month INTEGER,
+                    start_date DATE NOT NULL,
+                    end_date DATE,
+                    last_generated DATE,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (account_id) REFERENCES accounts(id),
+                    FOREIGN KEY (type_id) REFERENCES transaction_types(id),
+                    FOREIGN KEY (subtype_id) REFERENCES transaction_subtypes(id)
+                )
+            """)
 
-        # Migration: Check if we need to migrate from old investment_holdings schema to new one with securities
-        cursor.execute("PRAGMA table_info(investment_holdings)")
-        columns = [col[1] for col in cursor.fetchall()]
-        
-        # If the table has 'symbol' and 'name' columns but no 'security_id', we need to migrate
-        if 'symbol' in columns and 'name' in columns and 'security_id' not in columns:
-            logger.info("Migrating investment_holdings to use securities table...")
-            
-            # Create a backup of the old table
-            cursor.execute("ALTER TABLE investment_holdings RENAME TO investment_holdings_old")
-            
-            # Create the new table structure
+            # Pending transactions (awaiting confirmation)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pending_transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recurring_template_id INTEGER NOT NULL,
+                    transaction_date DATE NOT NULL,
+                    amount REAL NOT NULL,
+                    currency TEXT NOT NULL,
+                    description TEXT,
+                    destinataire TEXT NOT NULL,
+                    account_id INTEGER NOT NULL,
+                    type_id INTEGER NOT NULL,
+                    subtype_id INTEGER NOT NULL,
+                    tags TEXT,
+                    notified BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (recurring_template_id) REFERENCES recurring_templates(id) ON DELETE CASCADE,
+                    FOREIGN KEY (account_id) REFERENCES accounts(id),
+                    FOREIGN KEY (type_id) REFERENCES transaction_types(id),
+                    FOREIGN KEY (subtype_id) REFERENCES transaction_subtypes(id)
+                )
+            """)
+
+            # Debt tracking table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS debts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    principal_amount REAL NOT NULL,
+                    current_balance REAL NOT NULL,
+                    interest_rate REAL NOT NULL,
+                    interest_type TEXT NOT NULL CHECK(interest_type IN ('simple', 'compound')),
+                    monthly_payment REAL NOT NULL,
+                    payment_day INTEGER NOT NULL,
+                    start_date DATE NOT NULL,
+                    linked_account_id INTEGER,
+                    currency TEXT NOT NULL DEFAULT 'EUR',
+                    is_active BOOLEAN DEFAULT 1,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (linked_account_id) REFERENCES accounts(id),
+                    FOREIGN KEY (currency) REFERENCES currencies(code)
+                )
+            """)
+
+            # Debt payments tracking
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS debt_payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    debt_id INTEGER NOT NULL,
+                    transaction_id INTEGER,
+                    payment_date DATE NOT NULL,
+                    amount REAL NOT NULL,
+                    principal_paid REAL NOT NULL,
+                    interest_paid REAL NOT NULL,
+                    extra_payment REAL DEFAULT 0,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (debt_id) REFERENCES debts(id) ON DELETE CASCADE,
+                    FOREIGN KEY (transaction_id) REFERENCES transactions(id)
+                )
+            """)
+
+            # Budget table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS budgets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type_id INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    currency TEXT NOT NULL DEFAULT 'EUR',
+                    period TEXT DEFAULT 'monthly' CHECK(period IN ('monthly', 'yearly')),
+                    start_date DATE NOT NULL,
+                    end_date DATE,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (type_id) REFERENCES transaction_types(id)
+                )
+            """)
+
+            # Migration: Add currency column to existing budgets table if it doesn't exist
+            cursor.execute("PRAGMA table_info(budgets)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'currency' not in columns:
+                cursor.execute("ALTER TABLE budgets ADD COLUMN currency TEXT NOT NULL DEFAULT 'EUR'")
+
+            # Securities master table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS securities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    investment_type TEXT NOT NULL CHECK(investment_type IN ('stock', 'etf', 'mutual_fund', 'bond', 'crypto')),
+                    isin TEXT UNIQUE,
+                    exchange TEXT,
+                    currency TEXT NOT NULL,
+                    sector TEXT,
+                    country TEXT,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Investment holdings table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS investment_holdings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -694,186 +621,313 @@ class FinanceDatabase:
                     currency TEXT NOT NULL,
                     current_price REAL DEFAULT 0,
                     last_price_update TIMESTAMP,
+                    notes TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (account_id) REFERENCES accounts(id),
                     FOREIGN KEY (security_id) REFERENCES securities(id),
                     UNIQUE(account_id, security_id)
                 )
             """)
-            
-            # Migrate data from old table to new structure
-            cursor.execute("SELECT * FROM investment_holdings_old")
-            old_holdings = cursor.fetchall()
-            
-            for holding in old_holdings:
-                # Create security entry
+
+            # Migration: Add notes column to investment_holdings if it doesn't exist
+            cursor.execute("PRAGMA table_info(investment_holdings)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'notes' not in columns:
+                cursor.execute("ALTER TABLE investment_holdings ADD COLUMN notes TEXT")
+                logger.info("Added notes column to investment_holdings table")
+
+            # Migration: Add linked_account_id column to accounts if it doesn't exist
+            cursor.execute("PRAGMA table_info(accounts)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'linked_account_id' not in columns:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN linked_account_id INTEGER REFERENCES accounts(id)")
+                logger.info("Added linked_account_id column to accounts table")
+
+            # Migration: Add opening_balance column to accounts if it doesn't exist
+            cursor.execute("PRAGMA table_info(accounts)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'opening_balance' not in columns:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN opening_balance REAL")
+                # For existing accounts, set opening_balance to current balance
+                cursor.execute("UPDATE accounts SET opening_balance = balance WHERE opening_balance IS NULL")
+                conn.commit()
+                logger.info("Added opening_balance column to accounts table and populated with current balances")
+
+            # Migration: Add is_historical column to transactions if it doesn't exist
+            cursor.execute("PRAGMA table_info(transactions)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'is_historical' not in columns:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN is_historical BOOLEAN DEFAULT 0")
+                logger.info("Added is_historical column to transactions table")
+
+            # Migration: Add transfer_amount column to transactions if it doesn't exist
+            cursor.execute("PRAGMA table_info(transactions)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'transfer_amount' not in columns:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN transfer_amount REAL")
+                logger.info("Added transfer_amount column to transactions table")
+
+            # Migration: Make debt_payments.transaction_id nullable (was NOT NULL in older schema)
+            cursor.execute("PRAGMA table_info(debt_payments)")
+            dp_cols = cursor.fetchall()
+            txn_col = next((c for c in dp_cols if c[1] == 'transaction_id'), None)
+            if txn_col and txn_col[3] == 1:  # notnull == 1
+                cursor.execute("ALTER TABLE debt_payments RENAME TO debt_payments_old")
                 cursor.execute("""
-                    INSERT OR IGNORE INTO securities 
-                    (symbol, name, investment_type, isin, currency, notes)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    holding['symbol'],
-                    holding['name'],
-                    holding['investment_type'],
-                    holding['isin'] if 'isin' in holding.keys() else None,
-                    holding['currency'],
-                    ''
-                ))
-                
-                # Get the security ID
-                cursor.execute("SELECT id FROM securities WHERE symbol = ?", (holding['symbol'],))
-                security_row = cursor.fetchone()
-                security_id = security_row['id']
-                
-                # Insert into new holdings table
+                    CREATE TABLE debt_payments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        debt_id INTEGER NOT NULL,
+                        transaction_id INTEGER,
+                        payment_date DATE NOT NULL,
+                        amount REAL NOT NULL,
+                        principal_paid REAL NOT NULL,
+                        interest_paid REAL NOT NULL,
+                        extra_payment REAL DEFAULT 0,
+                        notes TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (debt_id) REFERENCES debts(id) ON DELETE CASCADE,
+                        FOREIGN KEY (transaction_id) REFERENCES transactions(id)
+                    )
+                """)
+                cursor.execute("INSERT INTO debt_payments SELECT * FROM debt_payments_old")
+                cursor.execute("DROP TABLE debt_payments_old")
+                conn.commit()
+                logger.info("Migrated debt_payments: made transaction_id nullable")
+
+            # Migration: Add linked_transfer_id column for double-entry transfers
+            cursor.execute("PRAGMA table_info(transactions)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'linked_transfer_id' not in columns:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN linked_transfer_id INTEGER REFERENCES transactions(id)")
+                conn.commit()
+                logger.info("Added linked_transfer_id column to transactions table")
+
+            # Migration: Add ISIN column if it doesn't exist (for existing databases)
+            cursor.execute("PRAGMA table_info(investment_holdings)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'isin' not in columns:
+                cursor.execute("ALTER TABLE investment_holdings ADD COLUMN isin TEXT")
+                logger.info("Added ISIN column to investment_holdings table")
+
+            # Migration: Check if we need to migrate from old investment_holdings schema to new one with securities
+            cursor.execute("PRAGMA table_info(investment_holdings)")
+            columns = [col[1] for col in cursor.fetchall()]
+
+            # If the table has 'symbol' and 'name' columns but no 'security_id', we need to migrate
+            if 'symbol' in columns and 'name' in columns and 'security_id' not in columns:
+                logger.info("Migrating investment_holdings to use securities table...")
+
+                # Create a backup of the old table
+                cursor.execute("ALTER TABLE investment_holdings RENAME TO investment_holdings_old")
+
+                # Create the new table structure
                 cursor.execute("""
-                    INSERT INTO investment_holdings 
-                    (id, account_id, security_id, quantity, average_cost, currency, current_price, last_price_update, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    holding['id'],
-                    holding['account_id'],
-                    security_id,
-                    0,  # quantity will be calculated from transactions
-                    0,  # average_cost will be calculated from transactions
-                    holding['currency'],
-                    holding['current_price'],
-                    holding['last_price_update'],
-                    holding['created_at']
-                ))
-            
-            # Drop the old table
-            cursor.execute("DROP TABLE investment_holdings_old")
-            
+                    CREATE TABLE IF NOT EXISTS investment_holdings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        account_id INTEGER NOT NULL,
+                        security_id INTEGER NOT NULL,
+                        quantity REAL DEFAULT 0,
+                        average_cost REAL DEFAULT 0,
+                        currency TEXT NOT NULL,
+                        current_price REAL DEFAULT 0,
+                        last_price_update TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (account_id) REFERENCES accounts(id),
+                        FOREIGN KEY (security_id) REFERENCES securities(id),
+                        UNIQUE(account_id, security_id)
+                    )
+                """)
+
+                # Migrate data from old table to new structure
+                cursor.execute("SELECT * FROM investment_holdings_old")
+                old_holdings = cursor.fetchall()
+
+                for holding in old_holdings:
+                    # Create security entry
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO securities 
+                        (symbol, name, investment_type, isin, currency, notes)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        holding['symbol'],
+                        holding['name'],
+                        holding['investment_type'],
+                        holding['isin'] if 'isin' in holding.keys() else None,
+                        holding['currency'],
+                        ''
+                    ))
+
+                    # Get the security ID
+                    cursor.execute("SELECT id FROM securities WHERE symbol = ?", (holding['symbol'],))
+                    security_row = cursor.fetchone()
+                    security_id = security_row['id']
+
+                    # Insert into new holdings table
+                    cursor.execute("""
+                        INSERT INTO investment_holdings 
+                        (id, account_id, security_id, quantity, average_cost, currency, current_price, last_price_update, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        holding['id'],
+                        holding['account_id'],
+                        security_id,
+                        0,  # quantity will be calculated from transactions
+                        0,  # average_cost will be calculated from transactions
+                        holding['currency'],
+                        holding['current_price'],
+                        holding['last_price_update'],
+                        holding['created_at']
+                    ))
+
+                # Drop the old table
+                cursor.execute("DROP TABLE investment_holdings_old")
+
+                conn.commit()
+                logger.info("Successfully migrated investment_holdings to use securities table")
+
+            # Investment transactions table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS investment_transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    holding_id INTEGER NOT NULL,
+                    transaction_type TEXT NOT NULL CHECK(transaction_type IN ('buy', 'sell', 'dividend')),
+                    transaction_date DATE NOT NULL,
+                    shares REAL,
+                    price_per_share REAL,
+                    total_amount REAL NOT NULL,
+                    fees REAL DEFAULT 0,
+                    tax REAL DEFAULT 0,
+                    currency TEXT NOT NULL,
+                    notes TEXT,
+                    linked_transaction_id INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (holding_id) REFERENCES investment_holdings(id) ON DELETE CASCADE,
+                    FOREIGN KEY (linked_transaction_id) REFERENCES transactions(id)
+                )
+            """)
+
+            #User mode preference
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key TEXT NOT NULL UNIQUE,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Balance validations table - for monthly account reconciliation
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS balance_validations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL,
+                    validation_date DATE NOT NULL,
+                    system_balance REAL NOT NULL,
+                    actual_balance REAL NOT NULL,
+                    difference REAL NOT NULL,
+                    is_match BOOLEAN NOT NULL,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+                )
+            """)
+
+            # Work profiles table - for work hours calculator
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS work_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_id INTEGER NOT NULL UNIQUE,
+                    monthly_salary REAL NOT NULL,
+                    working_hours_per_month REAL NOT NULL,
+                    hourly_rate REAL NOT NULL,
+                    currency TEXT NOT NULL DEFAULT 'EUR',
+                    tax_rate REAL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
+                )
+            """)
+
+            # Database migrations - add columns if they don't exist
+            # Check if linked_debt_id column exists in recurring_templates
+            cursor.execute("PRAGMA table_info(recurring_templates)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'linked_debt_id' not in columns:
+                cursor.execute("ALTER TABLE recurring_templates ADD COLUMN linked_debt_id INTEGER")
+                logger.info("Added linked_debt_id column to recurring_templates")
+                # Note: SQLite doesn't support adding FOREIGN KEY constraints via ALTER TABLE
+                # The constraint will be enforced at the application level
+
+            # Create indexes
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_envelope_transactions_envelope ON envelope_transactions(envelope_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_envelope_transactions_date ON envelope_transactions(transaction_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_recurring_templates_active ON recurring_templates(is_active)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_recurring_templates_debt ON recurring_templates(linked_debt_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_transactions_date ON pending_transactions(transaction_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_debt_payments_debt ON debt_payments(debt_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_debt_payments_date ON debt_payments(payment_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_type ON budgets(type_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_active ON budgets(is_active)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_holdings_account ON investment_holdings(account_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_holdings_security ON investment_holdings(security_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_securities_symbol ON securities(symbol)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_securities_isin ON securities(isin)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_transactions_holding ON investment_transactions(holding_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_transactions_date ON investment_transactions(transaction_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_validations_account ON balance_validations(account_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_validations_date ON balance_validations(validation_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_work_profiles_owner ON work_profiles(owner_id)")
+
+            # Schema migrations - Add tags column to envelopes if it doesn't exist
+            cursor.execute("PRAGMA table_info(envelopes)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'tags' not in columns:
+                cursor.execute("ALTER TABLE envelopes ADD COLUMN tags TEXT")
+                logger.info("Added tags column to envelopes table")
+
+            # Migration: Add tax column to investment_transactions if it doesn't exist
+            cursor.execute("PRAGMA table_info(investment_transactions)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'tax' not in columns:
+                cursor.execute("ALTER TABLE investment_transactions ADD COLUMN tax REAL DEFAULT 0")
+                logger.info("Added tax column to investment_transactions table")
+
+            # Migration: Add tax_rate column to work_profiles if it doesn't exist
+            cursor.execute("PRAGMA table_info(work_profiles)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'tax_rate' not in columns:
+                cursor.execute("ALTER TABLE work_profiles ADD COLUMN tax_rate REAL DEFAULT 0")
+                logger.info("Added tax_rate column to work_profiles table")
+
+            # Migration: Add notes column to debt_payments if missing
+            cursor.execute("PRAGMA table_info(debt_payments)")
+            dp_columns = [col[1] for col in cursor.fetchall()]
+            if 'notes' not in dp_columns:
+                cursor.execute("ALTER TABLE debt_payments ADD COLUMN notes TEXT")
+                logger.info("Added notes column to debt_payments table")
+
+            # Migration: Reclassify 'Investments' transaction type from 'expense' to 'transfer'.
+            # Investment purchases are wealth conversion (cash → securities), not consumption.
+            # This prevents buy transactions from inflating Monthly Expenses on the dashboard.
+            cursor.execute(
+                "UPDATE transaction_types SET category = 'transfer' WHERE name = 'Investments' AND category = 'expense'"
+            )
+            if cursor.rowcount:
+                logger.info("Migrated 'Investments' transaction type: expense → transfer")
+
             conn.commit()
-            logger.info("Successfully migrated investment_holdings to use securities table")
 
-        # Investment transactions table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS investment_transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                holding_id INTEGER NOT NULL,
-                transaction_type TEXT NOT NULL CHECK(transaction_type IN ('buy', 'sell', 'dividend')),
-                transaction_date DATE NOT NULL,
-                shares REAL,
-                price_per_share REAL,
-                total_amount REAL NOT NULL,
-                fees REAL DEFAULT 0,
-                tax REAL DEFAULT 0,
-                currency TEXT NOT NULL,
-                notes TEXT,
-                linked_transaction_id INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (holding_id) REFERENCES investment_holdings(id) ON DELETE CASCADE,
-                FOREIGN KEY (linked_transaction_id) REFERENCES transactions(id)
-            )
-        """)
+            # Insert default data if tables are empty
+            cursor.execute("SELECT COUNT(*) FROM owners")
+            if cursor.fetchone()[0] == 0:
+                self._insert_default_data(cursor)
+                conn.commit()
 
-        #User mode preference
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_preferences (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key TEXT NOT NULL UNIQUE,
-                value TEXT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # Balance validations table - for monthly account reconciliation
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS balance_validations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_id INTEGER NOT NULL,
-                validation_date DATE NOT NULL,
-                system_balance REAL NOT NULL,
-                actual_balance REAL NOT NULL,
-                difference REAL NOT NULL,
-                is_match BOOLEAN NOT NULL,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-            )
-        """)
-
-        # Work profiles table - for work hours calculator
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS work_profiles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner_id INTEGER NOT NULL UNIQUE,
-                monthly_salary REAL NOT NULL,
-                working_hours_per_month REAL NOT NULL,
-                hourly_rate REAL NOT NULL,
-                currency TEXT NOT NULL DEFAULT 'EUR',
-                tax_rate REAL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE
-            )
-        """)
-
-        # Database migrations - add columns if they don't exist
-        # Check if linked_debt_id column exists in recurring_templates
-        cursor.execute("PRAGMA table_info(recurring_templates)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'linked_debt_id' not in columns:
-            cursor.execute("ALTER TABLE recurring_templates ADD COLUMN linked_debt_id INTEGER")
-            logger.info("Added linked_debt_id column to recurring_templates")
-            # Note: SQLite doesn't support adding FOREIGN KEY constraints via ALTER TABLE
-            # The constraint will be enforced at the application level
-
-        # Create indexes
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_envelope_transactions_envelope ON envelope_transactions(envelope_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_envelope_transactions_date ON envelope_transactions(transaction_date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recurring_templates_active ON recurring_templates(is_active)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recurring_templates_debt ON recurring_templates(linked_debt_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_transactions_date ON pending_transactions(transaction_date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_debt_payments_debt ON debt_payments(debt_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_debt_payments_date ON debt_payments(payment_date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_type ON budgets(type_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_active ON budgets(is_active)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_holdings_account ON investment_holdings(account_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_holdings_security ON investment_holdings(security_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_securities_symbol ON securities(symbol)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_securities_isin ON securities(isin)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_transactions_holding ON investment_transactions(holding_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_investment_transactions_date ON investment_transactions(transaction_date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_validations_account ON balance_validations(account_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_validations_date ON balance_validations(validation_date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_work_profiles_owner ON work_profiles(owner_id)")
-
-        # Schema migrations - Add tags column to envelopes if it doesn't exist
-        cursor.execute("PRAGMA table_info(envelopes)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'tags' not in columns:
-            cursor.execute("ALTER TABLE envelopes ADD COLUMN tags TEXT")
-            logger.info("Added tags column to envelopes table")
-
-        # Migration: Add tax column to investment_transactions if it doesn't exist
-        cursor.execute("PRAGMA table_info(investment_transactions)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'tax' not in columns:
-            cursor.execute("ALTER TABLE investment_transactions ADD COLUMN tax REAL DEFAULT 0")
-            logger.info("Added tax column to investment_transactions table")
-
-        # Migration: Add tax_rate column to work_profiles if it doesn't exist
-        cursor.execute("PRAGMA table_info(work_profiles)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'tax_rate' not in columns:
-            cursor.execute("ALTER TABLE work_profiles ADD COLUMN tax_rate REAL DEFAULT 0")
-            logger.info("Added tax_rate column to work_profiles table")
-
-        conn.commit()
-
-        # Insert default data if tables are empty
-        cursor.execute("SELECT COUNT(*) FROM owners")
-        if cursor.fetchone()[0] == 0:
-            self._insert_default_data(cursor)
-            conn.commit()
-
-        conn.close()
+        finally:
+            conn.close()
 
     def _insert_default_data(self, cursor):
         """Insert default owners and transaction types."""
@@ -1058,7 +1112,7 @@ class FinanceDatabase:
         Returns a dict mapping currency code to its exchange_rate_to_eur.
         This is more efficient than calling convert_currency() multiple times.
         """
-        with self.db_connection() as conn:
+        with self.db_connection(commit=False) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT code, exchange_rate_to_eur FROM currencies WHERE is_active = 1")
             return {row['code']: row['exchange_rate_to_eur'] for row in cursor.fetchall()}
@@ -2623,8 +2677,8 @@ class FinanceDatabase:
 
         linked_transfer_id = old_transaction.get('linked_transfer_id')
 
-        # Reverse old balance if transaction was confirmed
-        if old_transaction['confirmed']:
+        # Reverse old balance if transaction was confirmed and not historical
+        if old_transaction['confirmed'] and not old_transaction.get('is_historical', False):
             # Reverse the balance change (negate the amount)
             self._update_account_balance(
                 cursor,
@@ -2663,8 +2717,8 @@ class FinanceDatabase:
             """, (transaction_id,))
             new_transaction = dict(cursor.fetchone())
 
-            # Apply new balance if transaction is confirmed
-            if new_transaction['confirmed']:
+            # Apply new balance if transaction is confirmed and not historical
+            if new_transaction['confirmed'] and not new_transaction.get('is_historical', False):
                 self._update_account_balance(
                     cursor,
                     new_transaction['account_id'],
@@ -2694,6 +2748,7 @@ class FinanceDatabase:
                         'subtype_id': new_transaction['subtype_id'],
                         'tags': new_transaction.get('tags', ''),
                         'confirmed': new_transaction['confirmed'],
+                        'transfer_account_id': new_transaction['account_id'],
                     }
                     mirror_set = ", ".join([f"{k} = ?" for k in mirror_updates.keys()])
                     mirror_vals = list(mirror_updates.values()) + [linked_transfer_id]
@@ -2930,6 +2985,11 @@ class FinanceDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
 
+        transaction_date = (
+            envelope_transaction_data.get('transaction_date')
+            or datetime.now().strftime('%Y-%m-%d')
+        )
+
         # Insert envelope transaction with optional transaction_id link
         cursor.execute("""
             INSERT INTO envelope_transactions
@@ -2937,7 +2997,7 @@ class FinanceDatabase:
             VALUES (?, ?, ?, ?, ?, ?)
         """, (
             envelope_transaction_data['envelope_id'],
-            envelope_transaction_data['transaction_date'],
+            transaction_date,
             envelope_transaction_data['amount'],
             envelope_transaction_data['account_id'],
             envelope_transaction_data.get('description', ''),
@@ -3137,7 +3197,8 @@ class FinanceDatabase:
         # Whitelist allowed columns to prevent SQL injection
         ALLOWED_COLUMNS = {
             'account_id', 'type_id', 'subtype_id', 'amount', 'description', 'destinataire',
-            'tags', 'recurrence_pattern', 'recurrence_day', 'start_date', 'end_date',
+            'tags', 'recurrence_pattern', 'recurrence_day', 'recurrence_interval', 'day_of_month',
+            'name', 'start_date', 'end_date',
             'is_active', 'is_transfer', 'transfer_account_id'
         }
         processed_updates = {k: v for k, v in processed_updates.items() if k in ALLOWED_COLUMNS}
@@ -3836,20 +3897,28 @@ class FinanceDatabase:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # 1. Ensure 'Investments' type exists (for buying securities - expense)
-        cursor.execute("SELECT id FROM transaction_types WHERE name = 'Investments'")
+        # 1. Ensure 'Investments' type exists (for buying securities - transfer, not expense)
+        # Investment purchases are wealth conversion (cash → securities), not consumption.
+        cursor.execute("SELECT id, category FROM transaction_types WHERE name = 'Investments'")
         result = cursor.fetchone()
 
         if not result:
             cursor.execute(
                 "INSERT INTO transaction_types (name, category, icon, color) VALUES (?, ?, ?, ?)",
-                ('Investments', 'expense', '📈', '#6C5CE7')
+                ('Investments', 'transfer', '📈', '#6C5CE7')
             )
             investments_type_id = cursor.lastrowid
             conn.commit()
             logger.info("Created 'Investments' transaction type")
         else:
             investments_type_id = result['id']
+            # Migrate existing records: change category from 'expense' to 'transfer'
+            if result['category'] == 'expense':
+                cursor.execute(
+                    "UPDATE transaction_types SET category = 'transfer' WHERE name = 'Investments'",
+                )
+                conn.commit()
+                logger.info("Migrated 'Investments' transaction type category from 'expense' to 'transfer'")
 
         # Add 'Securities Purchase' subtype
         cursor.execute("""
@@ -3926,37 +3995,45 @@ class FinanceDatabase:
             monthly_rate = annual_rate / 12
             current_balance = debt['current_balance']
 
-            # Calculate interest portion
-            if debt['interest_type'] == 'simple':
-                # Simple interest: (Balance × Annual Rate) / 12
-                interest_paid = (current_balance * annual_rate) / 12
-            else:
-                # Compound interest: Balance × Monthly Rate
-                interest_paid = current_balance * monthly_rate
-
-            # Calculate principal portion
+            # Calculate principal/interest split depending on payment type
             total_payment = payment_data['amount']
             extra_payment = payment_data.get('extra_payment', 0)
+            payment_type = payment_data.get('payment_type', 'regular')
 
-            # Principal = Total Payment - Interest - Extra
-            # But if total < interest (shouldn't happen), just record as is
-            principal_paid = max(0, total_payment - interest_paid - extra_payment)
+            if payment_type == 'extra':
+                # Extra payment: entire amount reduces principal, no interest charged
+                interest_paid = 0.0
+                principal_paid = 0.0
+                total_principal = total_payment
+            else:
+                # Regular monthly payment: split into interest + principal
+                if debt['interest_type'] == 'simple':
+                    # Simple interest: (Balance × Annual Rate) / 12
+                    interest_paid = (current_balance * annual_rate) / 12
+                else:
+                    # Compound interest: Balance × Monthly Rate
+                    interest_paid = current_balance * monthly_rate
 
-            # If extra payment specified, it all goes to principal
-            total_principal = principal_paid + extra_payment
+                # Principal = Total Payment - Interest - Extra
+                # But if total < interest (shouldn't happen), just record as is
+                principal_paid = max(0, total_payment - interest_paid - extra_payment)
+
+                # If extra payment specified, it all goes to principal
+                total_principal = principal_paid + extra_payment
 
             cursor.execute("""
                 INSERT INTO debt_payments
-                (debt_id, transaction_id, payment_date, amount, principal_paid, interest_paid, extra_payment)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (debt_id, transaction_id, payment_date, amount, principal_paid, interest_paid, extra_payment, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 payment_data['debt_id'],
-                payment_data['transaction_id'],
+                payment_data.get('transaction_id'),
                 payment_data['payment_date'],
                 total_payment,
                 principal_paid,
                 round(interest_paid, 2),
-                extra_payment
+                extra_payment,
+                payment_data.get('notes')
             ))
 
             payment_id = cursor.lastrowid
@@ -4247,17 +4324,16 @@ class FinanceDatabase:
         """Get monthly summary report."""
         from datetime import date
         
+        import calendar
         start_date = date(year, month, 1)
-        if month == 12:
-            end_date = date(year + 1, 1, 1)
-        else:
-            end_date = date(year, month + 1, 1)
-        
+        last_day = calendar.monthrange(year, month)[1]
+        end_date = date(year, month, last_day)
+
         transactions = self.get_transactions({
             'start_date': start_date.isoformat(),
             'end_date': end_date.isoformat()
         })
-        
+
         income = sum(t['amount'] for t in transactions if t['category'] == 'income')
         expenses = sum(abs(t['amount']) for t in transactions if t['category'] == 'expense')
 
@@ -4353,13 +4429,12 @@ class FinanceDatabase:
                 - categories: List of budget vs actual comparisons
                 - display_currency: The user's preferred display currency
         """
+        import calendar
         from datetime import date
 
         start_date = date(year, month, 1)
-        if month == 12:
-            end_date = date(year + 1, 1, 1)
-        else:
-            end_date = date(year, month + 1, 1)
+        last_day = calendar.monthrange(year, month)[1]
+        end_date = date(year, month, last_day)
 
         # Get user's display currency for UI formatting
         display_currency = self.get_preference('display_currency', 'EUR')
@@ -4368,14 +4443,16 @@ class FinanceDatabase:
         all_budgets = self.get_budgets()
         budgets = []
         for b in all_budgets:
-            # Include budget if the requested month falls within its date range
+            # Include budget if any part of the requested month falls within its date range
             b_start = b.get('start_date')
             b_end = b.get('end_date')
-            month_str = start_date.isoformat()
-            if b_start and month_str < b_start:
-                continue  # Budget hasn't started yet
-            if b_end and month_str > b_end:
-                continue  # Budget has ended
+            end_date_str = end_date.isoformat()
+            # Skip if the entire month ends before the budget starts
+            if b_start and end_date_str < b_start:
+                continue  # Budget hasn't started yet this month
+            # Skip if the month starts after the budget ends
+            if b_end and start_date.isoformat() > b_end:
+                continue  # Budget has already ended before this month
             budgets.append(b)
 
         # Get actual spending
@@ -4686,17 +4763,28 @@ class FinanceDatabase:
                 converted_balance = self.convert_currency(balance, account['currency'], display_currency)
                 total_assets += converted_balance
 
-            # Get debt balances at this date (simplified - using current balance)
-            # Note: For full historical accuracy, we'd need to track debt payment history
+            # Get historical debt balances at this snapshot date
+            # Balance at date = principal_amount - sum of principal reductions up to that date
             total_debts = 0
-            debts = self.get_debts()
+            debts = self.get_debts(include_inactive=True)
             # Filter debts by owner if specified
             if owner_id:
                 debts = [d for d in debts if d.get('owner_id') == owner_id]
             for debt in debts:
-                if debt.get('is_active', True):
-                    # Convert debt to display currency using debt's actual currency
-                    debt_balance = debt.get('current_balance', 0)
+                debt_start = debt.get('start_date') or ''
+                # Skip debts that hadn't started yet at this snapshot date
+                if debt_start and debt_start > calc_date:
+                    continue
+                principal_amount = debt.get('principal_amount', 0) or 0
+                # Sum all principal reductions (principal_paid + extra_payment) up to calc_date
+                cursor.execute("""
+                    SELECT COALESCE(SUM(principal_paid + extra_payment), 0)
+                    FROM debt_payments
+                    WHERE debt_id = ? AND payment_date <= ?
+                """, (debt['id'], calc_date))
+                total_principal_paid = cursor.fetchone()[0] or 0
+                debt_balance = max(0, principal_amount - total_principal_paid)
+                if debt_balance > 0:
                     debt_currency = debt.get('currency', 'EUR')
                     converted_debt = self.convert_currency(debt_balance, debt_currency, display_currency)
                     total_debts += converted_debt
@@ -4720,124 +4808,6 @@ class FinanceDatabase:
             'data': trend_data
         }
 
-
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        query = "SELECT * FROM securities"
-        params = []
-        
-        if search:
-            query += " WHERE symbol LIKE ? OR name LIKE ? OR isin LIKE ?"
-            params = [f"%{search}%", f"%{search}%", f"%{search}%"]
-        
-        query += " ORDER BY symbol"
-        
-        if limit:
-            query += " LIMIT ?"
-            params.append(limit)
-        
-        cursor.execute(query, params)
-        securities = cursor.fetchall()
-        conn.close()
-        
-        return securities
-
-    def get_security(self, security_id: int) -> Dict[str, Any]:
-        """Get a single security by ID."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT * FROM securities WHERE id = ?", (security_id,))
-        security = cursor.fetchone()
-        conn.close()
-        
-        return security
-
-    def add_security(self, security_data: Dict[str, Any]) -> int:
-        """Add a new security to the master list."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        required_fields = ['symbol', 'name', 'investment_type', 'currency']
-        for field in required_fields:
-            if field not in security_data:
-                raise ValueError(f"Missing required field: {field}")
-        
-        cursor.execute("""
-            INSERT INTO securities 
-            (symbol, name, investment_type, isin, exchange, currency, sector, country, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            security_data['symbol'].upper(),
-            security_data['name'],
-            security_data['investment_type'],
-            security_data.get('isin'),
-            security_data.get('exchange'),
-            security_data['currency'],
-            security_data.get('sector'),
-            security_data.get('country'),
-            security_data.get('notes', '')
-        ))
-        
-        security_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        
-        logger.info(f"Added security: {security_data['symbol']} - {security_data['name']}")
-        return security_id
-
-    def update_security(self, security_id: int, update_data: Dict[str, Any]) -> bool:
-        """Update security information.
-
-        NOTE: This method appears to be duplicated in the codebase - consider removing duplicate.
-        """
-        # Whitelist allowed columns to prevent SQL injection
-        ALLOWED_COLUMNS = {
-            'symbol', 'name', 'isin', 'investment_type', 'currency',
-            'current_price', 'notes', 'is_active'
-        }
-        update_data = {k: v for k, v in update_data.items() if k in ALLOWED_COLUMNS}
-        if not update_data:
-            return False
-
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        set_clause = ", ".join([f"{key} = ?" for key in update_data.keys()])
-        values = list(update_data.values()) + [security_id]
-
-        cursor.execute(f"UPDATE securities SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
-
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-
-        if success:
-            logger.info(f"Updated security {security_id}")
-        return success
-
-    def delete_security(self, security_id: int) -> bool:
-        """Delete a security from master list (only if not used by any holdings)."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        # Check if security is used by any holdings
-        cursor.execute("SELECT COUNT(*) FROM investment_holdings WHERE security_id = ?", (security_id,))
-        count = cursor.fetchone()[0]
-        
-        if count > 0:
-            conn.close()
-            raise ValueError("Cannot delete security that is used by existing holdings")
-        
-        cursor.execute("DELETE FROM securities WHERE id = ?", (security_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        
-        if success:
-            logger.info(f"Deleted security {security_id}")
-        return success
     # ==================== INVESTMENTS ====================
 
 
@@ -4863,8 +4833,8 @@ class FinanceDatabase:
         cursor.execute(query, params)
         securities = cursor.fetchall()
         conn.close()
-        
-        return securities
+
+        return [dict(s) for s in securities]
 
     def get_security(self, security_id: int) -> Dict[str, Any]:
         """Get a single security by ID."""

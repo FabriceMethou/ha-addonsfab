@@ -122,9 +122,9 @@ async def get_transactions(
         filters['destinataire'] = recipient
     if tags:
         filters['tags'] = tags
-    if limit:
+    if limit is not None:
         filters['limit'] = limit
-    if offset:
+    if offset is not None:
         filters['offset'] = offset
 
     # Get total count (ignores limit/offset) for pagination
@@ -326,48 +326,54 @@ async def create_transactions_bulk(
         try:
             # Get transaction type category from database directly
             conn = db._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (transaction.type_id,))
-            result = cursor.fetchone()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (transaction.type_id,))
+                result = cursor.fetchone()
 
-            if not result:
-                conn.close()
-                errors.append({
-                    "index": idx,
-                    "error": "Invalid transaction type"
-                })
-                continue
+                if not result:
+                    errors.append({
+                        "index": idx,
+                        "error": "Invalid transaction type"
+                    })
+                    continue
 
-            category = result['category']
+                category = result['category']
 
-            # Determine amount sign based on category
-            amount = transaction.amount
-            if category == 'expense':
-                amount = -abs(amount)  # Expenses are negative
-            elif category == 'income':
-                amount = abs(amount)  # Income is positive
-            elif category == 'transfer':
-                amount = -abs(amount)  # Transfers are negative (money leaving source account)
+                # Determine amount sign based on category
+                amount = transaction.amount
+                if category == 'expense':
+                    amount = -abs(amount)  # Expenses are negative
+                elif category == 'income':
+                    amount = abs(amount)  # Income is positive
+                elif category == 'transfer':
+                    amount = -abs(amount)  # Transfers are negative (money leaving source account)
 
-            # Get account currency
-            cursor.execute("SELECT currency FROM accounts WHERE id = ?", (transaction.account_id,))
-            account_result = cursor.fetchone()
-            account_currency = account_result['currency'] if account_result else 'EUR'
+                # Get account currency
+                cursor.execute("SELECT currency FROM accounts WHERE id = ?", (transaction.account_id,))
+                account_result = cursor.fetchone()
+                if not account_result:
+                    errors.append({
+                        "index": idx,
+                        "error": f"Account {transaction.account_id} not found"
+                    })
+                    continue
+                account_currency = account_result['currency']
 
-            # Determine destinataire - priority: explicit destinataire > transfer account name > description
-            if transaction.destinataire:
-                destinataire = transaction.destinataire
-            elif category == 'transfer' and transaction.transfer_account_id:
-                cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
-                dest_account_result = cursor.fetchone()
-                if dest_account_result:
-                    destinataire = dest_account_result['name']
+                # Determine destinataire - priority: explicit destinataire > transfer account name > description
+                if transaction.destinataire:
+                    destinataire = transaction.destinataire
+                elif category == 'transfer' and transaction.transfer_account_id:
+                    cursor.execute("SELECT name FROM accounts WHERE id = ?", (transaction.transfer_account_id,))
+                    dest_account_result = cursor.fetchone()
+                    if dest_account_result:
+                        destinataire = dest_account_result['name']
+                    else:
+                        destinataire = transaction.description
                 else:
                     destinataire = transaction.description
-            else:
-                destinataire = transaction.description
-
-            conn.close()
+            finally:
+                conn.close()
 
             # Auto-detect and set is_transfer flag
             is_transfer = bool(category == 'transfer' and transaction.transfer_account_id)

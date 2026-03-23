@@ -1,11 +1,26 @@
-import { useQuery } from '@tanstack/react-query';
-import { useMemo } from 'react';
-import { format, subMonths, startOfMonth, endOfMonth } from 'date-fns';
-import { accountsAPI, transactionsAPI, reportsAPI, budgetsAPI, envelopesAPI, settingsAPI } from '../services/api';
-import { Card, Badge, Progress, Spinner, Button, DashboardSkeleton } from '../components/shadcn';
-import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
-import { absMoney, subtractMoney, percentChange } from '../lib/money';
-import { useIsMobile } from '../hooks/useBreakpoint';
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { format, subMonths, startOfMonth, endOfMonth } from "date-fns";
+import {
+  accountsAPI,
+  transactionsAPI,
+  reportsAPI,
+  budgetsAPI,
+  envelopesAPI,
+  settingsAPI,
+  investmentsAPI,
+} from "../services/api";
+import {
+  Card,
+  Badge,
+  Progress,
+  Spinner,
+  Button,
+  DashboardSkeleton,
+} from "../components/shadcn";
+import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
+import { absMoney, subtractMoney, percentChange } from "../lib/money";
+import { useIsMobile } from "../hooks/useBreakpoint";
 import {
   TrendingUp,
   TrendingDown,
@@ -14,8 +29,8 @@ import {
   Wallet,
   ArrowUpCircle,
   ArrowDownCircle,
-} from 'lucide-react';
-import { Link } from 'react-router-dom';
+} from "lucide-react";
+import { Link } from "react-router-dom";
 
 // Recharts
 import {
@@ -28,11 +43,11 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-} from 'recharts';
+} from "recharts";
 
 // Nivo
-import { ResponsiveSunburst } from '@nivo/sunburst';
-import { ResponsivePie } from '@nivo/pie';
+import { ResponsiveSunburst } from "@nivo/sunburst";
+import { ResponsivePie } from "@nivo/pie";
 
 interface KPICardProps {
   title: string;
@@ -44,44 +59,75 @@ interface KPICardProps {
   loading?: boolean;
 }
 
-function KPICard({ title, value, change, changeLabel, icon, iconColor, loading }: KPICardProps) {
+function KPICard({
+  title,
+  value,
+  change,
+  changeLabel,
+  icon,
+  iconColor,
+  loading,
+}: KPICardProps) {
   const isPositive = change && change > 0;
   const isNegative = change && change < 0;
 
   return (
     <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
       {/* Background gradient effect */}
-      <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
+      <div
+        className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`}
+      />
 
       <div className="relative">
         <div className="flex items-start justify-between mb-2 sm:mb-4">
-          <div className={`p-2 sm:p-3 rounded-lg ${iconColor} bg-opacity-10 [&>svg]:w-5 [&>svg]:h-5 sm:[&>svg]:w-6 sm:[&>svg]:h-6`}>
+          <div
+            className={`p-2 sm:p-3 rounded-lg ${iconColor} bg-opacity-10 [&>svg]:w-5 [&>svg]:h-5 sm:[&>svg]:w-6 sm:[&>svg]:h-6`}
+          >
             {icon}
           </div>
           {change !== undefined && (
-            <div className={`flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md text-[10px] sm:text-xs font-medium ${isPositive ? 'bg-success/10 text-success' :
-              isNegative ? 'bg-error/10 text-error' :
-                'bg-foreground-muted/10 text-foreground-muted'
-              }`}>
+            <div
+              className={`flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md text-[10px] sm:text-xs font-medium ${
+                isPositive
+                  ? "bg-success/10 text-success"
+                  : isNegative
+                    ? "bg-error/10 text-error"
+                    : "bg-foreground-muted/10 text-foreground-muted"
+              }`}
+            >
               {isPositive && <TrendingUp size={10} className="sm:w-3 sm:h-3" />}
-              {isNegative && <TrendingDown size={10} className="sm:w-3 sm:h-3" />}
-              <span className="hidden sm:inline">{change > 0 ? '+' : ''}{change.toFixed(1)}%</span>
-              <span className="sm:hidden">{change > 0 ? '+' : ''}{Math.round(change)}%</span>
+              {isNegative && (
+                <TrendingDown size={10} className="sm:w-3 sm:h-3" />
+              )}
+              <span className="hidden sm:inline">
+                {change > 0 ? "+" : ""}
+                {change.toFixed(1)}%
+              </span>
+              <span className="sm:hidden">
+                {change > 0 ? "+" : ""}
+                {Math.round(change)}%
+              </span>
             </div>
           )}
         </div>
 
         <div>
-          <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">{title}</p>
+          <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
+            {title}
+          </p>
           {loading ? (
             <div className="h-6 sm:h-8 flex items-center">
               <Spinner className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           ) : (
-            <p className="text-lg sm:text-2xl font-bold text-foreground truncate">{value}</p>
+            <p className="text-lg sm:text-2xl font-bold text-foreground truncate">
+              {value}
+            </p>
           )}
           {changeLabel && (
-            <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">{changeLabel}</p>
+            <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">
+              {changeLabel}
+            </p>
           )}
         </div>
       </div>
@@ -95,7 +141,11 @@ interface AccountBalanceItemProps {
   currency: string;
 }
 
-function AccountBalanceItem({ name, balance, currency }: AccountBalanceItemProps) {
+function AccountBalanceItem({
+  name,
+  balance,
+  currency,
+}: AccountBalanceItemProps) {
   return (
     <div className="flex items-center justify-between py-3 px-4 rounded-lg hover:bg-surface-hover transition-colors">
       <div className="flex-1">
@@ -112,44 +162,58 @@ export default function DashboardPage() {
   const isMobile = useIsMobile();
   // Current date calculations
   const now = new Date();
-  const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-  const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
+  const currentMonthStart = format(startOfMonth(now), "yyyy-MM-dd");
+  const currentMonthEnd = format(endOfMonth(now), "yyyy-MM-dd");
   const previousMonth = subMonths(now, 1);
-  const previousMonthStart = format(startOfMonth(previousMonth), 'yyyy-MM-dd');
-  const previousMonthEnd = format(endOfMonth(previousMonth), 'yyyy-MM-dd');
+  const previousMonthStart = format(startOfMonth(previousMonth), "yyyy-MM-dd");
+  const previousMonthEnd = format(endOfMonth(previousMonth), "yyyy-MM-dd");
 
   // Fetch user settings
   const { data: settings } = useQuery({
-    queryKey: ['settings'],
+    queryKey: ["settings"],
     queryFn: async () => {
       const response = await settingsAPI.getAll();
       return response.data.settings || {};
     },
   });
 
-  const displayCurrency = settings?.display_currency || 'EUR';
+  const displayCurrency = settings?.display_currency || "EUR";
 
   // Fetch current month data
-  const { data: transactionsSummary, isLoading: transactionsLoading, isError: transactionsError } = useQuery({
-    queryKey: ['transactions-summary'],
+  const {
+    data: transactionsSummary,
+    isLoading: transactionsLoading,
+    isError: transactionsError,
+  } = useQuery({
+    queryKey: ["transactions-summary"],
     queryFn: async () => {
-      const response = await transactionsAPI.getSummary({ start_date: currentMonthStart, end_date: currentMonthEnd });
+      const response = await transactionsAPI.getSummary({
+        start_date: currentMonthStart,
+        end_date: currentMonthEnd,
+      });
       return response.data;
     },
   });
 
   // Fetch previous month data for deltas
   const { data: previousTransactionsSummary } = useQuery({
-    queryKey: ['transactions-summary-previous'],
+    queryKey: ["transactions-summary-previous"],
     queryFn: async () => {
-      const response = await transactionsAPI.getSummary({ start_date: previousMonthStart, end_date: previousMonthEnd });
+      const response = await transactionsAPI.getSummary({
+        start_date: previousMonthStart,
+        end_date: previousMonthEnd,
+      });
       return response.data;
     },
   });
 
   // Fetch net worth
-  const { data: netWorthData, isLoading: netWorthLoading, isError: netWorthError } = useQuery({
-    queryKey: ['net-worth'],
+  const {
+    data: netWorthData,
+    isLoading: netWorthLoading,
+    isError: netWorthError,
+  } = useQuery({
+    queryKey: ["net-worth"],
     queryFn: async () => {
       const response = await reportsAPI.getNetWorth();
       return response.data;
@@ -158,7 +222,7 @@ export default function DashboardPage() {
 
   // Fetch net worth trend for delta
   const { data: netWorthTrend } = useQuery({
-    queryKey: ['net-worth-trend'],
+    queryKey: ["net-worth-trend"],
     queryFn: async () => {
       const response = await reportsAPI.getNetWorthTrend(2);
       return response.data.trend;
@@ -167,7 +231,7 @@ export default function DashboardPage() {
 
   // Fetch spending trends for chart
   const { data: spendingTrends } = useQuery({
-    queryKey: ['spending-trends'],
+    queryKey: ["spending-trends"],
     queryFn: async () => {
       const response = await reportsAPI.getSpendingTrends(6);
       return response.data.trends || [];
@@ -176,7 +240,7 @@ export default function DashboardPage() {
 
   // Fetch accounts
   const { data: accounts } = useQuery({
-    queryKey: ['accounts'],
+    queryKey: ["accounts"],
     queryFn: async () => {
       const response = await accountsAPI.getAll();
       return response.data.accounts || [];
@@ -186,27 +250,36 @@ export default function DashboardPage() {
 
   // Fetch spending by category
   const { data: spendingByCategory } = useQuery({
-    queryKey: ['spending-by-category'],
+    queryKey: ["spending-by-category"],
     queryFn: async () => {
-      const response = await reportsAPI.getSpendingByCategory({ start_date: currentMonthStart, end_date: currentMonthEnd });
+      const response = await reportsAPI.getSpendingByCategory({
+        start_date: currentMonthStart,
+        end_date: currentMonthEnd,
+      });
       return response.data.categories || [];
     },
   });
 
   // Fetch income by category
   const { data: incomeByCategory } = useQuery({
-    queryKey: ['income-by-category'],
+    queryKey: ["income-by-category"],
     queryFn: async () => {
-      const response = await reportsAPI.getIncomeVsExpenses({ start_date: currentMonthStart, end_date: currentMonthEnd });
+      const response = await reportsAPI.getIncomeVsExpenses({
+        start_date: currentMonthStart,
+        end_date: currentMonthEnd,
+      });
       return response.data.income_categories || [];
     },
   });
 
   // Fetch budgets
   const { data: budgetsVsActual } = useQuery({
-    queryKey: ['budgets-vs-actual'],
+    queryKey: ["budgets-vs-actual"],
     queryFn: async () => {
-      const response = await budgetsAPI.getVsActual(now.getFullYear(), now.getMonth() + 1);
+      const response = await budgetsAPI.getVsActual(
+        now.getFullYear(),
+        now.getMonth() + 1,
+      );
       const categories = response.data.categories || [];
       return categories.map((item: any) => ({
         category_name: item.type_name,
@@ -219,7 +292,7 @@ export default function DashboardPage() {
 
   // Fetch spending prediction
   const { data: spendingPrediction } = useQuery({
-    queryKey: ['spending-prediction'],
+    queryKey: ["spending-prediction"],
     queryFn: async () => {
       const response = await reportsAPI.getSpendingPrediction(1);
       return response.data.prediction;
@@ -228,7 +301,7 @@ export default function DashboardPage() {
 
   // Fetch summary by owner for current month
   const { data: summaryByOwner } = useQuery({
-    queryKey: ['summary-by-owner', currentMonthStart, currentMonthEnd],
+    queryKey: ["summary-by-owner", currentMonthStart, currentMonthEnd],
     queryFn: async () => {
       const response = await transactionsAPI.getSummaryByOwner({
         start_date: currentMonthStart,
@@ -238,13 +311,42 @@ export default function DashboardPage() {
     },
   });
 
+  // Fetch monthly investment activity (current and previous month for delta)
+  const { data: monthlyInvestments, isLoading: investmentsLoading } = useQuery({
+    queryKey: ["monthly-investments", currentMonthStart, currentMonthEnd],
+    queryFn: async () => {
+      const response = await investmentsAPI.getMonthly({
+        start_date: currentMonthStart,
+        end_date: currentMonthEnd,
+      });
+      return response.data;
+    },
+  });
+
+  const { data: previousMonthlyInvestments } = useQuery({
+    queryKey: [
+      "monthly-investments-previous",
+      previousMonthStart,
+      previousMonthEnd,
+    ],
+    queryFn: async () => {
+      const response = await investmentsAPI.getMonthly({
+        start_date: previousMonthStart,
+        end_date: previousMonthEnd,
+      });
+      return response.data;
+    },
+  });
+
   // Fetch active envelopes
   const { data: activeEnvelopes } = useQuery({
-    queryKey: ['active-envelopes'],
+    queryKey: ["active-envelopes"],
     queryFn: async () => {
       const response = await envelopesAPI.getAll();
       const allEnvelopes = response.data.envelopes || [];
-      return allEnvelopes.filter((e: any) => e.is_active && e.current_amount < e.target_amount).slice(0, 5);
+      return allEnvelopes
+        .filter((e: any) => e.is_active && e.current_amount < e.target_amount)
+        .slice(0, 5);
     },
   });
 
@@ -253,7 +355,10 @@ export default function DashboardPage() {
   };
 
   // Helper function to safely calculate percentage change using precise decimal arithmetic
-  const calculatePercentageChange = (current: number, previous: number): number => {
+  const calculatePercentageChange = (
+    current: number,
+    previous: number,
+  ): number => {
     if (previous === 0) {
       return current > 0 ? 100 : 0;
     }
@@ -261,51 +366,64 @@ export default function DashboardPage() {
   };
 
   // Memoize chart data (must be before early returns to satisfy Rules of Hooks)
-  const incomeExpenseChartData = useMemo(() =>
-    spendingTrends?.map((item: any) => ({
-      month: item.month,
-      income: item.total_income ?? 0,
-      expenses: absMoney(item.total_expenses ?? 0),
-    })) ?? [],
-    [spendingTrends]
+  const incomeExpenseChartData = useMemo(
+    () =>
+      spendingTrends?.map((item: any) => ({
+        month: item.month,
+        income: item.total_income ?? 0,
+        expenses: absMoney(item.total_expenses ?? 0),
+      })) ?? [],
+    [spendingTrends],
   );
 
-  const sunburstData = useMemo(() => ({
-    name: 'Expenses',
-    children: spendingByCategory?.slice(0, 8).map((cat: any) => ({
-      name: cat.category || 'Other',
-      value: absMoney(cat.total ?? 0),
-    })) ?? [],
-  }), [spendingByCategory]);
-
-  const nivoPieData = useMemo(() =>
-    incomeByCategory?.map((item: any) => ({
-      id: item.category || 'Other',
-      label: item.category || 'Other',
-      value: item.total ?? 0,
-    })) ?? [],
-    [incomeByCategory]
-  );
-
-  const budgetArray = useMemo(() =>
-    Array.isArray(budgetsVsActual) ? budgetsVsActual : [],
-    [budgetsVsActual]
-  );
-
-  const budgetChartData = useMemo(() =>
-    budgetArray.slice(0, 10).map((budget: any) => {
-      const progress = budget.budget_amount > 0 ? (budget.spent / budget.budget_amount) * 100 : 0;
-      return {
-        name: budget.category_name?.length > 15 ? budget.category_name.substring(0, 15) + '...' : (budget.category_name || 'Unknown'),
-        fullName: budget.category_name || 'Unknown',
-        progress: Math.min(progress, 100),
-        overProgress: progress > 100 ? progress - 100 : 0,
-        spent: budget.spent || 0,
-        budget: budget.budget_amount || 0,
-        isOverBudget: progress > 100,
-      };
+  const sunburstData = useMemo(
+    () => ({
+      name: "Expenses",
+      children:
+        spendingByCategory?.slice(0, 8).map((cat: any) => ({
+          name: cat.category || "Other",
+          value: absMoney(cat.total ?? 0),
+        })) ?? [],
     }),
-    [budgetArray]
+    [spendingByCategory],
+  );
+
+  const nivoPieData = useMemo(
+    () =>
+      incomeByCategory?.map((item: any) => ({
+        id: item.category || "Other",
+        label: item.category || "Other",
+        value: item.total ?? 0,
+      })) ?? [],
+    [incomeByCategory],
+  );
+
+  const budgetArray = useMemo(
+    () => (Array.isArray(budgetsVsActual) ? budgetsVsActual : []),
+    [budgetsVsActual],
+  );
+
+  const budgetChartData = useMemo(
+    () =>
+      budgetArray.slice(0, 10).map((budget: any) => {
+        const progress =
+          budget.budget_amount > 0
+            ? (budget.spent / budget.budget_amount) * 100
+            : 0;
+        return {
+          name:
+            budget.category_name?.length > 15
+              ? budget.category_name.substring(0, 15) + "..."
+              : budget.category_name || "Unknown",
+          fullName: budget.category_name || "Unknown",
+          progress: Math.min(progress, 100),
+          overProgress: progress > 100 ? progress - 100 : 0,
+          spent: budget.spent || 0,
+          budget: budget.budget_amount || 0,
+          isOverBudget: progress > 100,
+        };
+      }),
+    [budgetArray],
   );
 
   // Loading state
@@ -318,9 +436,12 @@ export default function DashboardPage() {
     return (
       <div className="flex justify-center items-center min-h-[60vh]">
         <Card className="p-6 max-w-md">
-          <h2 className="text-xl font-semibold text-error mb-2">Error Loading Dashboard</h2>
+          <h2 className="text-xl font-semibold text-error mb-2">
+            Error Loading Dashboard
+          </h2>
           <p className="text-foreground-muted mb-4">
-            We encountered an error while loading your financial data. Please try refreshing the page.
+            We encountered an error while loading your financial data. Please
+            try refreshing the page.
           </p>
           <Button onClick={() => window.location.reload()}>Refresh Page</Button>
         </Card>
@@ -335,33 +456,51 @@ export default function DashboardPage() {
   const monthlySavings = subtractMoney(monthlyIncome, monthlyExpenses);
 
   const previousIncome = previousTransactionsSummary?.total_income ?? 0;
-  const previousExpenses = absMoney(previousTransactionsSummary?.total_expense ?? 0);
+  const previousExpenses = absMoney(
+    previousTransactionsSummary?.total_expense ?? 0,
+  );
   const previousSavings = subtractMoney(previousIncome, previousExpenses);
 
   // Calculate deltas with safe percentage calculation
-  const netWorthChange = netWorthTrend && netWorthTrend.length >= 2
-    ? calculatePercentageChange(
-      netWorthTrend[netWorthTrend.length - 1].net_worth,
-      netWorthTrend[netWorthTrend.length - 2].net_worth
-    )
-    : 0;
+  const netWorthChange =
+    netWorthTrend && netWorthTrend.length >= 2
+      ? calculatePercentageChange(
+          netWorthTrend[netWorthTrend.length - 1].net_worth,
+          netWorthTrend[netWorthTrend.length - 2].net_worth,
+        )
+      : 0;
 
   const incomeChange = calculatePercentageChange(monthlyIncome, previousIncome);
-  const expensesChange = calculatePercentageChange(monthlyExpenses, previousExpenses);
-  const savingsChange = calculatePercentageChange(monthlySavings, previousSavings);
+  const expensesChange = calculatePercentageChange(
+    monthlyExpenses,
+    previousExpenses,
+  );
+  const savingsChange = calculatePercentageChange(
+    monthlySavings,
+    previousSavings,
+  );
+
+  const monthlyInvested = monthlyInvestments?.total_invested ?? 0;
+  const previousInvested = previousMonthlyInvestments?.total_invested ?? 0;
+  const investedChange = calculatePercentageChange(
+    monthlyInvested,
+    previousInvested,
+  );
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-foreground mb-2">Financial Overview</h1>
+        <h1 className="text-3xl font-bold text-foreground mb-2">
+          Financial Overview
+        </h1>
         <p className="text-foreground-muted">
-          {format(now, 'MMMM yyyy')} • Your complete financial snapshot
+          {format(now, "MMMM yyyy")} • Your complete financial snapshot
         </p>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-6">
         <KPICard
           title="Net Worth"
           value={formatCurrency(netWorth)}
@@ -401,23 +540,43 @@ export default function DashboardPage() {
           iconColor="bg-violet-500"
           loading={transactionsLoading}
         />
+
+        <KPICard
+          title="Monthly Invested"
+          value={formatCurrency(monthlyInvested)}
+          change={investedChange}
+          changeLabel="vs last month"
+          icon={<TrendingUp size={24} className="text-amber-500" />}
+          iconColor="bg-amber-500"
+          loading={investmentsLoading}
+        />
       </div>
 
       {/* Monthly Summary - Kept from original */}
       <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-        <h2 className="text-lg font-semibold text-foreground mb-4">Monthly Summary</h2>
+        <h2 className="text-lg font-semibold text-foreground mb-4">
+          Monthly Summary
+        </h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
           <div className="text-center p-4 rounded-lg bg-success/10 border border-success/20">
             <p className="text-sm text-foreground-muted mb-2">Income</p>
-            <p className="text-3xl font-bold text-success">{formatCurrency(monthlyIncome)}</p>
+            <p className="text-3xl font-bold text-success">
+              {formatCurrency(monthlyIncome)}
+            </p>
           </div>
           <div className="text-center p-4 rounded-lg bg-error/10 border border-error/20">
             <p className="text-sm text-foreground-muted mb-2">Expenses</p>
-            <p className="text-3xl font-bold text-error">{formatCurrency(monthlyExpenses)}</p>
+            <p className="text-3xl font-bold text-error">
+              {formatCurrency(monthlyExpenses)}
+            </p>
           </div>
-          <div className={`text-center p-4 rounded-lg ${monthlySavings >= 0 ? 'bg-primary/10 border border-primary/20' : 'bg-warning/10 border border-warning/20'}`}>
+          <div
+            className={`text-center p-4 rounded-lg ${monthlySavings >= 0 ? "bg-primary/10 border border-primary/20" : "bg-warning/10 border border-warning/20"}`}
+          >
             <p className="text-sm text-foreground-muted mb-2">Net Savings</p>
-            <p className={`text-3xl font-bold ${monthlySavings >= 0 ? 'text-primary' : 'text-warning'}`}>
+            <p
+              className={`text-3xl font-bold ${monthlySavings >= 0 ? "text-primary" : "text-warning"}`}
+            >
               {formatCurrency(monthlySavings)}
             </p>
           </div>
@@ -426,14 +585,25 @@ export default function DashboardPage() {
         {/* Per-Owner Breakdown */}
         {summaryByOwner && summaryByOwner.length > 0 && (
           <div className="mt-6 pt-6 border-t border-border">
-            <h3 className="text-sm font-medium text-foreground-muted mb-4">By Owner</h3>
+            <h3 className="text-sm font-medium text-foreground-muted mb-4">
+              By Owner
+            </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {summaryByOwner.map((owner: any) => (
-                <div key={owner.owner_id} className="p-3 rounded-lg bg-surface-hover border border-border">
-                  <p className="text-sm font-medium text-foreground mb-2">{owner.owner_name}</p>
+                <div
+                  key={owner.owner_id}
+                  className="p-3 rounded-lg bg-surface-hover border border-border"
+                >
+                  <p className="text-sm font-medium text-foreground mb-2">
+                    {owner.owner_name}
+                  </p>
                   <div className="flex justify-between text-xs">
-                    <span className="text-success">+{formatCurrency(owner.income)}</span>
-                    <span className="text-error">-{formatCurrency(owner.expense)}</span>
+                    <span className="text-success">
+                      +{formatCurrency(owner.income)}
+                    </span>
+                    <span className="text-error">
+                      -{formatCurrency(owner.expense)}
+                    </span>
                   </div>
                 </div>
               ))}
@@ -447,7 +617,9 @@ export default function DashboardPage() {
         {/* Income vs Expenses Trend */}
         <Card className="xl:col-span-2 p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="mb-6">
-            <h2 className="text-lg font-semibold text-foreground">Income vs Expenses</h2>
+            <h2 className="text-lg font-semibold text-foreground">
+              Income vs Expenses
+            </h2>
             <p className="text-sm text-foreground-muted">Last 6 months trend</p>
           </div>
 
@@ -456,16 +628,33 @@ export default function DashboardPage() {
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={incomeExpenseChartData}>
                   <defs>
-                    <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient
+                      id="incomeGradient"
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="1"
+                    >
                       <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
                       <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                     </linearGradient>
-                    <linearGradient id="expensesGradient" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient
+                      id="expensesGradient"
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="1"
+                    >
                       <stop offset="5%" stopColor="#ef4444" stopOpacity={0.4} />
                       <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} vertical={false} />
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="#2a2a2a"
+                    opacity={0.2}
+                    vertical={false}
+                  />
                   <XAxis
                     dataKey="month"
                     stroke="#888888"
@@ -482,10 +671,10 @@ export default function DashboardPage() {
                   />
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: '#0a0a0a',
-                      border: '1px solid #2a2a2a',
-                      borderRadius: '8px',
-                      fontSize: '12px',
+                      backgroundColor: "#0a0a0a",
+                      border: "1px solid #2a2a2a",
+                      borderRadius: "8px",
+                      fontSize: "12px",
                     }}
                     formatter={(value: number) => formatCurrency(value)}
                   />
@@ -516,20 +705,24 @@ export default function DashboardPage() {
         {/* Account Balances */}
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="mb-6">
-            <h2 className="text-lg font-semibold text-foreground">Account Balances</h2>
+            <h2 className="text-lg font-semibold text-foreground">
+              Account Balances
+            </h2>
             <p className="text-sm text-foreground-muted">Current holdings</p>
           </div>
 
           <div className="space-y-2 max-h-[300px] overflow-y-auto">
             {accounts && accounts.length > 0 ? (
-              accounts.slice(0, 5).map((account: any) => (
-                <AccountBalanceItem
-                  key={account.id}
-                  name={account.name}
-                  balance={account.balance ?? 0}
-                  currency={account.currency || displayCurrency}
-                />
-              ))
+              accounts
+                .slice(0, 5)
+                .map((account: any) => (
+                  <AccountBalanceItem
+                    key={account.id}
+                    name={account.name}
+                    balance={account.balance ?? 0}
+                    currency={account.currency || displayCurrency}
+                  />
+                ))
             ) : (
               <div className="flex items-center justify-center h-[200px] text-foreground-muted">
                 No accounts available
@@ -545,10 +738,14 @@ export default function DashboardPage() {
           <div className="flex justify-between items-center mb-6">
             <div className="flex items-center gap-2">
               <Wallet className="w-5 h-5 text-primary" />
-              <h2 className="text-lg font-semibold text-foreground">Budget Overview</h2>
+              <h2 className="text-lg font-semibold text-foreground">
+                Budget Overview
+              </h2>
             </div>
             <Link to="/budgets">
-              <Button variant="ghost" size="sm">View All</Button>
+              <Button variant="ghost" size="sm">
+                View All
+              </Button>
             </Link>
           </div>
 
@@ -558,9 +755,20 @@ export default function DashboardPage() {
               <BarChart
                 data={budgetChartData}
                 layout="vertical"
-                margin={{ left: isMobile ? 80 : 130, right: isMobile ? 10 : 40, top: 10, bottom: 10 }}
+                margin={{
+                  left: isMobile ? 80 : 130,
+                  right: isMobile ? 10 : 40,
+                  top: 10,
+                  bottom: 10,
+                }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" opacity={0.2} horizontal={true} vertical={false} />
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="#2a2a2a"
+                  opacity={0.2}
+                  horizontal={true}
+                  vertical={false}
+                />
                 <XAxis
                   type="number"
                   domain={[0, 100]}
@@ -582,10 +790,10 @@ export default function DashboardPage() {
                 <Tooltip
                   cursor={false}
                   contentStyle={{
-                    backgroundColor: '#0a0a0a',
-                    border: '1px solid #2a2a2a',
-                    borderRadius: '8px',
-                    fontSize: '12px',
+                    backgroundColor: "#0a0a0a",
+                    border: "1px solid #2a2a2a",
+                    borderRadius: "8px",
+                    fontSize: "12px",
                   }}
                   content={({ active, payload }) => {
                     if (active && payload && payload.length) {
@@ -593,12 +801,18 @@ export default function DashboardPage() {
                       const totalProgress = data.progress + data.overProgress;
                       return (
                         <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg p-3">
-                          <p className="font-semibold text-foreground mb-2">{data.fullName}</p>
-                          <p className="text-sm text-foreground-muted">
-                            Spent: {formatCurrency(data.spent)} / {formatCurrency(data.budget)}
+                          <p className="font-semibold text-foreground mb-2">
+                            {data.fullName}
                           </p>
-                          <p className={`text-sm font-medium ${data.isOverBudget ? 'text-error' : 'text-success'}`}>
-                            {totalProgress.toFixed(1)}% {data.isOverBudget ? '(Over Budget)' : 'Used'}
+                          <p className="text-sm text-foreground-muted">
+                            Spent: {formatCurrency(data.spent)} /{" "}
+                            {formatCurrency(data.budget)}
+                          </p>
+                          <p
+                            className={`text-sm font-medium ${data.isOverBudget ? "text-error" : "text-success"}`}
+                          >
+                            {totalProgress.toFixed(1)}%{" "}
+                            {data.isOverBudget ? "(Over Budget)" : "Used"}
                           </p>
                         </div>
                       );
@@ -630,8 +844,12 @@ export default function DashboardPage() {
       {sunburstData.children.length > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="mb-6">
-            <h2 className="text-lg font-semibold text-foreground">Spending Breakdown</h2>
-            <p className="text-sm text-foreground-muted">Category distribution this month</p>
+            <h2 className="text-lg font-semibold text-foreground">
+              Spending Breakdown
+            </h2>
+            <p className="text-sm text-foreground-muted">
+              Category distribution this month
+            </p>
           </div>
 
           <div className="h-[400px]">
@@ -643,19 +861,31 @@ export default function DashboardPage() {
               cornerRadius={2}
               borderWidth={2}
               borderColor="#0a0a0a"
-              colors={['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#ef4444']}
-              childColor={{ from: 'color', modifiers: [['brighter', 0.3]] }}
+              colors={[
+                "#3b82f6",
+                "#10b981",
+                "#f59e0b",
+                "#8b5cf6",
+                "#ec4899",
+                "#06b6d4",
+                "#84cc16",
+                "#ef4444",
+              ]}
+              childColor={{ from: "color", modifiers: [["brighter", 0.3]] }}
               enableArcLabels={true}
               arcLabelsSkipAngle={15}
-              arcLabelsTextColor={{ from: 'color', modifiers: [['darker', 2.5]] }}
+              arcLabelsTextColor={{
+                from: "color",
+                modifiers: [["darker", 2.5]],
+              }}
               animate={true}
               theme={{
                 tooltip: {
                   container: {
-                    background: '#0a0a0a',
-                    border: '1px solid #2a2a2a',
-                    borderRadius: '8px',
-                    fontSize: '12px',
+                    background: "#0a0a0a",
+                    border: "1px solid #2a2a2a",
+                    borderRadius: "8px",
+                    fontSize: "12px",
                   },
                 },
               }}
@@ -667,32 +897,48 @@ export default function DashboardPage() {
       {/* Income Nivo Pie */}
       {nivoPieData.length > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <h2 className="text-lg font-semibold text-foreground mb-4">Income by Category (This Month)</h2>
+          <h2 className="text-lg font-semibold text-foreground mb-4">
+            Income by Category (This Month)
+          </h2>
           <div className="h-[400px]">
             <ResponsivePie
               data={nivoPieData}
-              margin={{ top: 20, right: isMobile ? 20 : 80, bottom: 20, left: isMobile ? 20 : 80 }}
+              margin={{
+                top: 20,
+                right: isMobile ? 20 : 80,
+                bottom: 20,
+                left: isMobile ? 20 : 80,
+              }}
               innerRadius={0.5}
               padAngle={0.7}
               cornerRadius={3}
               activeOuterRadiusOffset={8}
-              colors={['#10b981', '#06b6d4', '#84cc16', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444']}
+              colors={[
+                "#10b981",
+                "#06b6d4",
+                "#84cc16",
+                "#f59e0b",
+                "#3b82f6",
+                "#8b5cf6",
+                "#ec4899",
+                "#ef4444",
+              ]}
               borderWidth={1}
-              borderColor={{ from: 'color', modifiers: [['darker', 0.2]] }}
+              borderColor={{ from: "color", modifiers: [["darker", 0.2]] }}
               arcLinkLabelsSkipAngle={10}
               arcLinkLabelsTextColor="#888888"
               arcLinkLabelsThickness={2}
-              arcLinkLabelsColor={{ from: 'color' }}
+              arcLinkLabelsColor={{ from: "color" }}
               arcLabelsSkipAngle={10}
-              arcLabelsTextColor={{ from: 'color', modifiers: [['darker', 2]] }}
+              arcLabelsTextColor={{ from: "color", modifiers: [["darker", 2]] }}
               valueFormat={(value) => formatCurrency(value)}
               theme={{
                 tooltip: {
                   container: {
-                    background: '#0a0a0a',
-                    border: '1px solid #2a2a2a',
-                    borderRadius: '8px',
-                    fontSize: '12px',
+                    background: "#0a0a0a",
+                    border: "1px solid #2a2a2a",
+                    borderRadius: "8px",
+                    fontSize: "12px",
                   },
                 },
               }}
@@ -706,22 +952,36 @@ export default function DashboardPage() {
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex items-center gap-2 mb-4">
             <Lightbulb className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-semibold text-foreground">Next Month Prediction</h2>
+            <h2 className="text-lg font-semibold text-foreground">
+              Next Month Prediction
+            </h2>
           </div>
           <div className="flex flex-wrap items-center gap-6">
             <div>
               <p className="text-3xl font-bold text-primary mb-2">
                 {formatCurrency(spendingPrediction.predicted || 0)}
               </p>
-              <p className="text-sm text-foreground-muted">Predicted spending for next month</p>
+              <p className="text-sm text-foreground-muted">
+                Predicted spending for next month
+              </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Badge variant="outline">Base: {formatCurrency(spendingPrediction.base_prediction || 0)}</Badge>
-              <Badge variant={spendingPrediction.confidence > 0.7 ? 'success' : 'warning'}>
-                Confidence: {Math.round((spendingPrediction.confidence || 0) * 100)}%
+              <Badge variant="outline">
+                Base: {formatCurrency(spendingPrediction.base_prediction || 0)}
+              </Badge>
+              <Badge
+                variant={
+                  spendingPrediction.confidence > 0.7 ? "success" : "warning"
+                }
+              >
+                Confidence:{" "}
+                {Math.round((spendingPrediction.confidence || 0) * 100)}%
               </Badge>
               {spendingPrediction.recurring_amount > 0 && (
-                <Badge variant="outline">Recurring: {formatCurrency(spendingPrediction.recurring_amount)}</Badge>
+                <Badge variant="outline">
+                  Recurring:{" "}
+                  {formatCurrency(spendingPrediction.recurring_amount)}
+                </Badge>
               )}
             </div>
           </div>
@@ -734,33 +994,59 @@ export default function DashboardPage() {
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center gap-2">
               <PiggyBank className="w-5 h-5 text-primary" />
-              <h2 className="text-lg font-semibold text-foreground">Active Savings Goals</h2>
+              <h2 className="text-lg font-semibold text-foreground">
+                Active Savings Goals
+              </h2>
             </div>
             <Link to="/envelopes">
-              <Button variant="ghost" size="sm">View All</Button>
+              <Button variant="ghost" size="sm">
+                View All
+              </Button>
             </Link>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {activeEnvelopes.map((envelope: any) => {
-              const progress = envelope.target_amount > 0 ? (envelope.current_amount / envelope.target_amount) * 100 : 0;
-              const remaining = envelope.target_amount - envelope.current_amount;
-              const daysLeft = envelope.deadline ? Math.ceil((new Date(envelope.deadline).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)) : null;
-              const progressVariant = progress < 50 ? 'info' : progress < 80 ? 'default' : 'success';
+              const progress =
+                envelope.target_amount > 0
+                  ? (envelope.current_amount / envelope.target_amount) * 100
+                  : 0;
+              const remaining =
+                envelope.target_amount - envelope.current_amount;
+              const daysLeft = envelope.deadline
+                ? Math.ceil(
+                    (new Date(envelope.deadline).getTime() -
+                      new Date().getTime()) /
+                      (1000 * 60 * 60 * 24),
+                  )
+                : null;
+              const progressVariant =
+                progress < 50 ? "info" : progress < 80 ? "default" : "success";
 
               return (
                 <div key={envelope.id}>
                   <div className="flex justify-between items-center mb-2">
-                    <p className="font-medium text-foreground">{envelope.name}</p>
+                    <p className="font-medium text-foreground">
+                      {envelope.name}
+                    </p>
                     {daysLeft !== null && (
-                      <Badge variant={daysLeft > 0 ? 'info' : 'error'} size="sm">
-                        {daysLeft > 0 ? `${daysLeft}d left` : 'Overdue'}
+                      <Badge
+                        variant={daysLeft > 0 ? "info" : "error"}
+                        size="sm"
+                      >
+                        {daysLeft > 0 ? `${daysLeft}d left` : "Overdue"}
                       </Badge>
                     )}
                   </div>
                   <p className="text-xs text-foreground-muted mb-2">
-                    {formatCurrency(envelope.current_amount)} / {formatCurrency(envelope.target_amount)}
+                    {formatCurrency(envelope.current_amount)} /{" "}
+                    {formatCurrency(envelope.target_amount)}
                   </p>
-                  <Progress value={Math.min(progress, 100)} variant={progressVariant} size="md" className="mb-1" />
+                  <Progress
+                    value={Math.min(progress, 100)}
+                    variant={progressVariant}
+                    size="md"
+                    className="mb-1"
+                  />
                   <p className="text-xs text-foreground-muted">
                     {progress.toFixed(0)}% - {formatCurrency(remaining)} to go
                   </p>
