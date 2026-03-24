@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -13,7 +14,7 @@ router = APIRouter()
 @router.get("/family")
 async def get_family(session: dict = Depends(require_session)) -> list[dict[str, Any]]:
     try:
-        client = await traccar.user_session(session["traccar_email"], session["traccar_password"])
+        client = await traccar.admin_session()
         try:
             devices, positions = await _fetch_devices_and_positions(client)
         finally:
@@ -48,7 +49,6 @@ async def get_family(session: dict = Depends(require_session)) -> list[dict[str,
 
 
 async def _fetch_devices_and_positions(client):
-    import asyncio
     return await asyncio.gather(
         traccar.get_devices(client),
         traccar.get_positions(client),

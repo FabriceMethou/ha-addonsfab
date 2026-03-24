@@ -15,46 +15,61 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _KEEPALIVE_INTERVAL = 30  # seconds
-_RECONNECT_BASE = 1
-_RECONNECT_MAX = 30
 
 
-@router.get("/stream")
-async def stream(
-    request: Request,
-    session: dict = Depends(require_session),
-) -> EventSourceResponse:
-    return EventSourceResponse(
-        _event_generator(request, session["traccar_email"], session["traccar_password"]),
-        headers={"X-Accel-Buffering": "no"},
-    )
+class _BroadcastBus:
+    """Fan-out bus: one admin WebSocket feeds many SSE client queues."""
+
+    def __init__(self) -> None:
+        self._queues: list[asyncio.Queue] = []
+        self._lock = asyncio.Lock()
+
+    async def subscribe(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=100)
+        async with self._lock:
+            self._queues.append(q)
+        return q
+
+    async def unsubscribe(self, q: asyncio.Queue) -> None:
+        async with self._lock:
+            try:
+                self._queues.remove(q)
+            except ValueError:
+                pass
+
+    async def publish(self, data: str) -> None:
+        async with self._lock:
+            dead: list[asyncio.Queue] = []
+            for q in self._queues:
+                try:
+                    q.put_nowait(data)
+                except asyncio.QueueFull:
+                    dead.append(q)
+            for q in dead:
+                self._queues.remove(q)
 
 
-async def _event_generator(
-    request: Request, email: str, password: str
-) -> AsyncIterator[dict]:
-    backoff = _RECONNECT_BASE
+bus = _BroadcastBus()
 
+
+async def ws_reader_loop() -> None:
+    """Single background task: maintains admin WS, publishes events to bus."""
+    backoff = 1
     while True:
-        if await request.is_disconnected():
-            logger.debug("SSE client disconnected")
-            return
-
         ws = None
         try:
-            ws = await traccar.connect_websocket(email, password)
-            backoff = _RECONNECT_BASE  # reset on successful connect
-
-            async for raw in _ws_with_keepalive(ws, request):
-                yield raw
-                if await request.is_disconnected():
-                    return
-
+            ws = await traccar.connect_admin_websocket()
+            backoff = 1
+            logger.info("Admin WebSocket connected")
+            async for raw in ws:
+                event = _parse_traccar_message(raw)
+                if event:
+                    await bus.publish(json.dumps(event))
         except (TraccarError, websockets.exceptions.WebSocketException, OSError) as exc:
-            logger.warning("Traccar WS disconnected: %s — reconnecting in %ds", exc, backoff)
-            yield {"data": json.dumps({"type": "reconnecting"})}
+            logger.warning("Admin WS error: %s — reconnecting in %ds", exc, backoff)
+            await bus.publish(json.dumps({"type": "reconnecting"}))
             await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, _RECONNECT_MAX)
+            backoff = min(backoff * 2, 30)
         finally:
             if ws is not None:
                 try:
@@ -63,39 +78,30 @@ async def _event_generator(
                     pass
 
 
-async def _ws_with_keepalive(
-    ws, request: Request
-) -> AsyncIterator[dict]:
-    """Yield SSE events from a Traccar websocket, interspersed with keepalives."""
-    keepalive_task = asyncio.ensure_future(_keepalive_ticker())
+@router.get("/stream")
+async def stream(
+    request: Request,
+    session: dict = Depends(require_session),
+) -> EventSourceResponse:
+    return EventSourceResponse(
+        _client_generator(request),
+        headers={"X-Accel-Buffering": "no"},
+    )
+
+
+async def _client_generator(request: Request) -> AsyncIterator[dict]:
+    q = await bus.subscribe()
     try:
         while True:
-            recv_task = asyncio.ensure_future(ws.recv())
-            done, _ = await asyncio.wait(
-                {recv_task, keepalive_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if keepalive_task in done:
-                yield {"comment": "keepalive"}
-                keepalive_task = asyncio.ensure_future(_keepalive_ticker())
-
-            if recv_task in done:
-                raw_msg = recv_task.result()
-                event = _parse_traccar_message(raw_msg)
-                if event is not None:
-                    yield {"data": json.dumps(event)}
-
             if await request.is_disconnected():
-                recv_task.cancel()
-                keepalive_task.cancel()
                 return
+            try:
+                data = await asyncio.wait_for(q.get(), timeout=_KEEPALIVE_INTERVAL)
+                yield {"data": data}
+            except asyncio.TimeoutError:
+                yield {"comment": "keepalive"}
     finally:
-        keepalive_task.cancel()
-
-
-async def _keepalive_ticker() -> None:
-    await asyncio.sleep(_KEEPALIVE_INTERVAL)
+        await bus.unsubscribe(q)
 
 
 def _parse_traccar_message(raw: str) -> dict | None:

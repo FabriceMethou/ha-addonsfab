@@ -191,6 +191,18 @@ class TraccarClient:
         extra_headers = {"Cookie": cookie_header} if cookie_header else {}
         return await websockets.connect(ws_url, extra_headers=extra_headers)
 
+    async def connect_admin_websocket(self) -> WebSocketClientProtocol:
+        """Open a Traccar websocket authenticated as the admin via token."""
+        async with httpx.AsyncClient(base_url=self._base, timeout=_TIMEOUT) as http:
+            resp = await http.get("/api/session", params={"token": self._admin_token})
+            if resp.status_code not in (200, 201):
+                raise TraccarError(f"Admin WS session failed: {resp.status_code}")
+            cookie_header = "; ".join(f"{k}={v}" for k, v in http.cookies.items())
+        ws_url = self._base.replace("http://", "ws://").replace("https://", "wss://")
+        ws_url = f"{ws_url}/api/socket"
+        extra_headers = {"Cookie": cookie_header} if cookie_header else {}
+        return await websockets.connect(ws_url, extra_headers=extra_headers)
+
 
 # ------------------------------------------------------------------
 # Internal helpers
