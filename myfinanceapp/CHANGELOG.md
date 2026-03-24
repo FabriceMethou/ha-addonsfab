@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.28
+- UI improvements: sidebar navigation grouping, notification bell in header, global quick-add transaction button, dashboard month navigator, shared components (KPICard, PageHeader, EmptyState, QueryError), chart context stats, stronger card contrast, locale-aware currency formatting
+
 ## 2.0.27
 
 ### Bug Fixes

@@ -1,8 +1,9 @@
 // Debts Page - Debt Tracking and Payment History
-import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useForm, Controller } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
+import { useState } from "react";
+import PageHeader from "../components/PageHeader";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useForm, Controller } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Plus,
   Pencil,
@@ -14,7 +15,7 @@ import {
   DollarSign,
   TrendingUp,
   Calendar,
-} from 'lucide-react';
+} from "lucide-react";
 import {
   Button,
   Card,
@@ -46,13 +47,18 @@ import {
   TableRow,
   FormField,
   DebtsSkeleton,
-} from '../components/shadcn';
-import { debtsAPI, accountsAPI, currenciesAPI } from '../services/api';
-import { useNavigate } from 'react-router-dom';
-import { format, parseISO } from 'date-fns';
-import { useToast } from '../contexts/ToastContext';
-import { debtSchema, paymentSchema, DebtFormData, PaymentFormData } from '../lib/validations';
-import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
+} from "../components/shadcn";
+import { debtsAPI, accountsAPI, currenciesAPI } from "../services/api";
+import { useNavigate } from "react-router-dom";
+import { format, parseISO } from "date-fns";
+import { useToast } from "../contexts/ToastContext";
+import {
+  debtSchema,
+  paymentSchema,
+  DebtFormData,
+  PaymentFormData,
+} from "../lib/validations";
+import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
 
 // KPI Card Component
 interface KPICardProps {
@@ -64,11 +70,20 @@ interface KPICardProps {
   loading?: boolean;
 }
 
-function KPICard({ title, value, subtitle, icon, iconColor, loading }: KPICardProps) {
+function KPICard({
+  title,
+  value,
+  subtitle,
+  icon,
+  iconColor,
+  loading,
+}: KPICardProps) {
   return (
     <Card className="relative overflow-hidden p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
       {/* Background gradient effect */}
-      <div className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`} />
+      <div
+        className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`}
+      />
 
       <div className="relative">
         <div className="flex items-start justify-between mb-4">
@@ -99,13 +114,13 @@ function KPICard({ title, value, subtitle, icon, iconColor, loading }: KPICardPr
 
 // Helper function to safely format dates
 const formatDate = (dateString: string | null | undefined): string => {
-  if (!dateString) return 'Invalid Date';
+  if (!dateString) return "Invalid Date";
   try {
     const date = parseISO(dateString);
-    if (isNaN(date.getTime())) return 'Invalid Date';
-    return format(date, 'MMM dd, yyyy');
+    if (isNaN(date.getTime())) return "Invalid Date";
+    return format(date, "MMM dd, yyyy");
   } catch {
-    return 'Invalid Date';
+    return "Invalid Date";
   }
 };
 
@@ -121,18 +136,18 @@ export default function DebtsPage() {
   const [showInactive, setShowInactive] = useState(false);
 
   const defaultDebtValues: DebtFormData = {
-    creditor: '',
-    original_amount: '',
-    current_balance: '',
-    interest_rate: '',
-    interest_type: 'simple',
-    minimum_payment: '',
-    payment_day: '1',
-    due_date: format(new Date(), 'yyyy-MM-dd'),
-    status: 'active',
-    notes: '',
-    account_id: '',
-    currency: 'EUR',
+    creditor: "",
+    original_amount: "",
+    current_balance: "",
+    interest_rate: "",
+    interest_type: "simple",
+    minimum_payment: "",
+    payment_day: "1",
+    due_date: format(new Date(), "yyyy-MM-dd"),
+    status: "active",
+    notes: "",
+    account_id: "",
+    currency: "EUR",
   };
 
   const {
@@ -144,17 +159,17 @@ export default function DebtsPage() {
     watch: watchDebt,
   } = useForm<DebtFormData>({
     resolver: zodResolver(debtSchema),
-    mode: 'onChange',
+    mode: "onChange",
     defaultValues: defaultDebtValues,
   });
 
-  const watchDebtInterestType = watchDebt('interest_type');
+  const watchDebtInterestType = watchDebt("interest_type");
 
   const defaultPaymentValues: PaymentFormData = {
-    amount: '',
-    payment_date: format(new Date(), 'yyyy-MM-dd'),
-    payment_type: 'monthly',
-    notes: '',
+    amount: "",
+    payment_date: format(new Date(), "yyyy-MM-dd"),
+    payment_type: "monthly",
+    notes: "",
   };
 
   const {
@@ -166,17 +181,17 @@ export default function DebtsPage() {
     watch: watchPayment,
   } = useForm<PaymentFormData>({
     resolver: zodResolver(paymentSchema),
-    mode: 'onChange',
+    mode: "onChange",
     defaultValues: defaultPaymentValues,
   });
 
-  const watchPaymentType = watchPayment('payment_type');
+  const watchPaymentType = watchPayment("payment_type");
 
   const queryClient = useQueryClient();
 
   // Fetch debts
   const { data: debtsData, isLoading: debtsLoading } = useQuery({
-    queryKey: ['debts', showInactive],
+    queryKey: ["debts", showInactive],
     queryFn: async () => {
       const response = await debtsAPI.getAll(showInactive);
       return response.data.debts;
@@ -185,7 +200,7 @@ export default function DebtsPage() {
 
   // Fetch summary
   const { data: summaryData } = useQuery({
-    queryKey: ['debts-summary'],
+    queryKey: ["debts-summary"],
     queryFn: async () => {
       const response = await debtsAPI.getSummary();
       return response.data;
@@ -194,7 +209,7 @@ export default function DebtsPage() {
 
   // Fetch accounts for linking
   const { data: accountsData } = useQuery({
-    queryKey: ['accounts'],
+    queryKey: ["accounts"],
     queryFn: async () => {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
@@ -204,7 +219,7 @@ export default function DebtsPage() {
 
   // Fetch currencies for dropdown
   const { data: currenciesData } = useQuery({
-    queryKey: ['currencies'],
+    queryKey: ["currencies"],
     queryFn: async () => {
       const response = await currenciesAPI.getAll();
       return response.data.currencies;
@@ -216,15 +231,16 @@ export default function DebtsPage() {
   const createMutation = useMutation({
     mutationFn: (data: any) => debtsAPI.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['debts'] });
-      queryClient.invalidateQueries({ queryKey: ['debts-summary'] });
+      queryClient.invalidateQueries({ queryKey: ["debts"] });
+      queryClient.invalidateQueries({ queryKey: ["debts-summary"] });
       setDebtDialog(false);
       resetDebtForm(defaultDebtValues);
-      toast.success('Debt created successfully!');
+      toast.success("Debt created successfully!");
     },
     onError: (error: any) => {
-      console.error('Failed to create debt:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to create debt:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to create debt: ${errorMessage}`);
     },
   });
@@ -233,16 +249,17 @@ export default function DebtsPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: any) => debtsAPI.update(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['debts'] });
-      queryClient.invalidateQueries({ queryKey: ['debts-summary'] });
+      queryClient.invalidateQueries({ queryKey: ["debts"] });
+      queryClient.invalidateQueries({ queryKey: ["debts-summary"] });
       setDebtDialog(false);
       resetDebtForm(defaultDebtValues);
       setEditingDebt(null);
-      toast.success('Debt updated successfully!');
+      toast.success("Debt updated successfully!");
     },
     onError: (error: any) => {
-      console.error('Failed to update debt:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to update debt:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to update debt: ${errorMessage}`);
     },
   });
@@ -251,14 +268,15 @@ export default function DebtsPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: number) => debtsAPI.delete(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['debts'] });
-      queryClient.invalidateQueries({ queryKey: ['debts-summary'] });
+      queryClient.invalidateQueries({ queryKey: ["debts"] });
+      queryClient.invalidateQueries({ queryKey: ["debts-summary"] });
       setDeleteConfirm(null);
-      toast.success('Debt deleted successfully!');
+      toast.success("Debt deleted successfully!");
     },
     onError: (error: any) => {
-      console.error('Failed to delete debt:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to delete debt:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to delete debt: ${errorMessage}`);
     },
   });
@@ -267,20 +285,22 @@ export default function DebtsPage() {
   const addPaymentMutation = useMutation({
     mutationFn: (data: any) => debtsAPI.addPayment(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['debts'] });
-      queryClient.invalidateQueries({ queryKey: ['debts-summary'] });
-      queryClient.invalidateQueries({ queryKey: ['debt-payments', selectedDebt?.id] });
+      queryClient.invalidateQueries({ queryKey: ["debts"] });
+      queryClient.invalidateQueries({ queryKey: ["debts-summary"] });
+      queryClient.invalidateQueries({
+        queryKey: ["debt-payments", selectedDebt?.id],
+      });
       setPaymentDialog(false);
       resetPaymentForm(defaultPaymentValues);
-      toast.success('Payment added successfully!');
+      toast.success("Payment added successfully!");
     },
     onError: (error: any) => {
-      console.error('Failed to add payment:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to add payment:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to add payment: ${errorMessage}`);
     },
   });
-
 
   const handleEdit = (debt: any) => {
     setEditingDebt(debt);
@@ -288,15 +308,15 @@ export default function DebtsPage() {
       creditor: debt.creditor,
       original_amount: debt.original_amount.toString(),
       current_balance: debt.current_balance.toString(),
-      interest_rate: debt.interest_rate?.toString() || '0',
-      interest_type: debt.interest_type || 'simple',
-      minimum_payment: debt.minimum_payment?.toString() || '0',
-      payment_day: debt.payment_day?.toString() || '1',
-      due_date: debt.due_date || format(new Date(), 'yyyy-MM-dd'),
+      interest_rate: debt.interest_rate?.toString() || "0",
+      interest_type: debt.interest_type || "simple",
+      minimum_payment: debt.minimum_payment?.toString() || "0",
+      payment_day: debt.payment_day?.toString() || "1",
+      due_date: debt.due_date || format(new Date(), "yyyy-MM-dd"),
       status: debt.status,
-      notes: debt.notes || '',
-      account_id: debt.account_id?.toString() || '',
-      currency: debt.currency || 'EUR',
+      notes: debt.notes || "",
+      account_id: debt.account_id?.toString() || "",
+      currency: debt.currency || "EUR",
     });
     setDebtDialog(true);
   };
@@ -362,7 +382,7 @@ export default function DebtsPage() {
     }
 
     // Include notes (can be empty string)
-    data.notes = formData.notes || '';
+    data.notes = formData.notes || "";
 
     // Include linked_account_id if provided
     if (formData.account_id) {
@@ -397,20 +417,22 @@ export default function DebtsPage() {
     }
   };
 
-  const formatCurrency = (amount: number, currency: string = 'EUR') => {
+  const formatCurrency = (amount: number, currency: string = "EUR") => {
     return formatCurrencyUtil(amount, currency);
   };
 
-  const getStatusBadgeVariant = (status: string): 'success' | 'warning' | 'error' | 'default' => {
+  const getStatusBadgeVariant = (
+    status: string,
+  ): "success" | "warning" | "error" | "default" => {
     switch (status) {
-      case 'paid_off':
-        return 'success';
-      case 'active':
-        return 'warning';
-      case 'defaulted':
-        return 'error';
+      case "paid_off":
+        return "success";
+      case "active":
+        return "warning";
+      case "defaulted":
+        return "error";
       default:
-        return 'default';
+        return "default";
     }
   };
 
@@ -422,7 +444,8 @@ export default function DebtsPage() {
   const totalDebt = summaryData?.total_debt || 0;
   const totalOriginal = summaryData?.total_original_amount || 0;
   const totalPaid = totalOriginal - totalDebt;
-  const payoffProgress = totalOriginal > 0 ? (totalPaid / totalOriginal) * 100 : 0;
+  const payoffProgress =
+    totalOriginal > 0 ? (totalPaid / totalOriginal) * 100 : 0;
 
   // Calculate payoff timeline
   const calculatePayoffTimeline = (debt: any) => {
@@ -441,7 +464,10 @@ export default function DebtsPage() {
 
     while (balance > 0 && months < maxMonths) {
       const interestPayment = balance * monthlyRate;
-      const principalPayment = Math.min(monthlyPayment - interestPayment, balance);
+      const principalPayment = Math.min(
+        monthlyPayment - interestPayment,
+        balance,
+      );
 
       if (principalPayment <= 0) {
         return { months: null, payoffDate: null, totalInterest: 0 };
@@ -469,12 +495,11 @@ export default function DebtsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold text-foreground mb-2">Debt Management</h1>
-        <p className="text-foreground-muted">
-          {activeDebts.length} active debt{activeDebts.length !== 1 ? 's' : ''} • Track payments and payoff progress
-        </p>
-      </div>
+      <PageHeader
+        title="Debts"
+        description="Loans and liabilities tracker"
+        accentColor="border-l-orange-500"
+      />
 
       {/* Summary KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
@@ -515,11 +540,11 @@ export default function DebtsPage() {
       {/* Action Bar */}
       <div className="flex justify-end items-center gap-3">
         <Button
-          variant={showInactive ? 'outline' : 'ghost'}
+          variant={showInactive ? "outline" : "ghost"}
           size="sm"
           onClick={() => setShowInactive(!showInactive)}
         >
-          {showInactive ? 'Hide' : 'Show'} Closed Debts ({inactiveDebts.length})
+          {showInactive ? "Hide" : "Show"} Closed Debts ({inactiveDebts.length})
         </Button>
         <Button
           onClick={() => {
@@ -537,13 +562,21 @@ export default function DebtsPage() {
       {totalOriginal > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex justify-between items-center mb-2">
-            <h2 className="text-lg font-semibold text-foreground">Overall Payoff Progress</h2>
-            <span className="text-lg font-bold text-primary">{payoffProgress.toFixed(1)}%</span>
+            <h2 className="text-lg font-semibold text-foreground">
+              Overall Payoff Progress
+            </h2>
+            <span className="text-lg font-bold text-primary">
+              {payoffProgress.toFixed(1)}%
+            </span>
           </div>
           <Progress value={Math.min(payoffProgress, 100)} className="h-3" />
           <div className="flex justify-between mt-2">
-            <span className="text-xs text-foreground-muted">Paid: {formatCurrency(totalPaid)}</span>
-            <span className="text-xs text-foreground-muted">Remaining: {formatCurrency(totalDebt)}</span>
+            <span className="text-xs text-foreground-muted">
+              Paid: {formatCurrency(totalPaid)}
+            </span>
+            <span className="text-xs text-foreground-muted">
+              Remaining: {formatCurrency(totalDebt)}
+            </span>
           </div>
         </Card>
       )}
@@ -551,27 +584,46 @@ export default function DebtsPage() {
       {/* Active Debts List */}
       {activeDebts && activeDebts.length > 0 ? (
         <>
-          <h2 className="text-lg font-semibold text-foreground">Active Debts</h2>
+          <h2 className="text-lg font-semibold text-foreground">
+            Active Debts
+          </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {activeDebts.map((debt: any) => {
-              const progress = debt.original_amount > 0
-                ? ((debt.original_amount - debt.current_balance) / debt.original_amount) * 100
-                : 0;
+              const progress =
+                debt.original_amount > 0
+                  ? ((debt.original_amount - debt.current_balance) /
+                      debt.original_amount) *
+                    100
+                  : 0;
 
               return (
-                <Card key={debt.id} className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                <Card
+                  key={debt.id}
+                  className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm"
+                >
                   <div className="flex justify-between items-start mb-4">
                     <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-foreground">{debt.creditor}</h3>
+                      <h3 className="text-lg font-semibold text-foreground">
+                        {debt.creditor}
+                      </h3>
                       {debt.notes && (
-                        <p className="text-sm text-foreground-muted mt-1">{debt.notes}</p>
+                        <p className="text-sm text-foreground-muted mt-1">
+                          {debt.notes}
+                        </p>
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={getStatusBadgeVariant(debt.status)} size="sm">
-                        {debt.status.replace('_', ' ')}
+                      <Badge
+                        variant={getStatusBadgeVariant(debt.status)}
+                        size="sm"
+                      >
+                        {debt.status.replace("_", " ")}
                       </Badge>
-                      <Button variant="ghost" size="sm" onClick={() => handleEdit(debt)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleEdit(debt)}
+                      >
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button
@@ -587,43 +639,67 @@ export default function DebtsPage() {
 
                   <div className="grid grid-cols-2 gap-4 mb-4">
                     <div>
-                      <span className="text-xs text-foreground-muted">Current Balance</span>
-                      <p className="text-lg font-bold text-error">{formatCurrency(debt.current_balance, debt.currency)}</p>
+                      <span className="text-xs text-foreground-muted">
+                        Current Balance
+                      </span>
+                      <p className="text-lg font-bold text-error">
+                        {formatCurrency(debt.current_balance, debt.currency)}
+                      </p>
                     </div>
                     <div>
-                      <span className="text-xs text-foreground-muted">Original Amount</span>
-                      <p className="text-lg font-bold text-foreground">{formatCurrency(debt.original_amount, debt.currency)}</p>
+                      <span className="text-xs text-foreground-muted">
+                        Original Amount
+                      </span>
+                      <p className="text-lg font-bold text-foreground">
+                        {formatCurrency(debt.original_amount, debt.currency)}
+                      </p>
                     </div>
                   </div>
 
                   {/* Linked Account */}
-                  {debt.account_id && (() => {
-                    const linkedAccount = accountsData?.find((a: any) => a.id === debt.account_id);
-                    if (linkedAccount) {
-                      return (
-                        <div className="mb-4 p-2 rounded-lg bg-surface flex items-center justify-between">
-                          <span className="text-xs text-foreground-muted">Linked Account:</span>
-                          <button
-                            onClick={() => navigate('/accounts')}
-                            className="flex items-center gap-1 text-sm font-medium text-primary hover:underline"
-                          >
-                            {linkedAccount.bank_name} - {linkedAccount.account_type}
-                            <ExternalLink className="h-3 w-3" />
-                          </button>
-                        </div>
+                  {debt.account_id &&
+                    (() => {
+                      const linkedAccount = accountsData?.find(
+                        (a: any) => a.id === debt.account_id,
                       );
-                    }
-                    return null;
-                  })()}
+                      if (linkedAccount) {
+                        return (
+                          <div className="mb-4 p-2 rounded-lg bg-surface flex items-center justify-between">
+                            <span className="text-xs text-foreground-muted">
+                              Linked Account:
+                            </span>
+                            <button
+                              onClick={() => navigate("/accounts")}
+                              className="flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+                            >
+                              {linkedAccount.bank_name} -{" "}
+                              {linkedAccount.account_type}
+                              <ExternalLink className="h-3 w-3" />
+                            </button>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
 
                   <div className="mb-4">
                     <div className="flex justify-between mb-1">
-                      <span className="text-xs text-foreground-muted">Progress</span>
-                      <span className="text-xs font-semibold">{progress.toFixed(1)}%</span>
+                      <span className="text-xs text-foreground-muted">
+                        Progress
+                      </span>
+                      <span className="text-xs font-semibold">
+                        {progress.toFixed(1)}%
+                      </span>
                     </div>
                     <Progress
                       value={Math.min(progress, 100)}
-                      variant={progress >= 75 ? 'success' : progress >= 50 ? 'info' : 'warning'}
+                      variant={
+                        progress >= 75
+                          ? "success"
+                          : progress >= 50
+                            ? "info"
+                            : "warning"
+                      }
                       className="h-2"
                     />
                   </div>
@@ -631,20 +707,32 @@ export default function DebtsPage() {
                   <div className="grid grid-cols-2 gap-4 mb-4">
                     {debt.interest_rate > 0 && (
                       <div>
-                        <span className="text-xs text-foreground-muted">Interest Rate</span>
-                        <p className="text-sm font-semibold">{debt.interest_rate}%</p>
+                        <span className="text-xs text-foreground-muted">
+                          Interest Rate
+                        </span>
+                        <p className="text-sm font-semibold">
+                          {debt.interest_rate}%
+                        </p>
                       </div>
                     )}
                     {debt.minimum_payment > 0 && (
                       <div>
-                        <span className="text-xs text-foreground-muted">Min. Payment</span>
-                        <p className="text-sm font-semibold">{formatCurrency(debt.minimum_payment, debt.currency)}</p>
+                        <span className="text-xs text-foreground-muted">
+                          Min. Payment
+                        </span>
+                        <p className="text-sm font-semibold">
+                          {formatCurrency(debt.minimum_payment, debt.currency)}
+                        </p>
                       </div>
                     )}
                     {debt.due_date && (
                       <div>
-                        <span className="text-xs text-foreground-muted">Due Date</span>
-                        <p className="text-sm font-semibold">{format(parseISO(debt.due_date), 'MMM dd, yyyy')}</p>
+                        <span className="text-xs text-foreground-muted">
+                          Due Date
+                        </span>
+                        <p className="text-sm font-semibold">
+                          {format(parseISO(debt.due_date), "MMM dd, yyyy")}
+                        </p>
                       </div>
                     )}
                   </div>
@@ -655,27 +743,35 @@ export default function DebtsPage() {
                     if (timeline.months && timeline.payoffDate) {
                       const years = Math.floor(timeline.months / 12);
                       const remainingMonths = timeline.months % 12;
-                      const timeDisplay = years > 0
-                        ? `${years}y ${remainingMonths}m`
-                        : `${remainingMonths} months`;
+                      const timeDisplay =
+                        years > 0
+                          ? `${years}y ${remainingMonths}m`
+                          : `${remainingMonths} months`;
 
                       return (
                         <div className="mb-4 p-3 rounded-lg bg-surface border-l-4 border-info">
                           <div className="grid grid-cols-2 gap-4">
                             <div>
-                              <span className="text-xs text-foreground-muted">Payments Left</span>
+                              <span className="text-xs text-foreground-muted">
+                                Payments Left
+                              </span>
                               <p className="text-lg font-bold text-info">
-                                {timeline.months} {timeline.months === 1 ? 'payment' : 'payments'}
-                              </p>
-                              <p className="text-xs text-foreground-muted mt-0.5">({timeDisplay})</p>
-                            </div>
-                            <div>
-                              <span className="text-xs text-foreground-muted">Final Payment</span>
-                              <p className="text-lg font-bold text-success">
-                                {format(timeline.payoffDate, 'MMM dd, yyyy')}
+                                {timeline.months}{" "}
+                                {timeline.months === 1 ? "payment" : "payments"}
                               </p>
                               <p className="text-xs text-foreground-muted mt-0.5">
-                                {format(timeline.payoffDate, 'EEEE')}
+                                ({timeDisplay})
+                              </p>
+                            </div>
+                            <div>
+                              <span className="text-xs text-foreground-muted">
+                                Final Payment
+                              </span>
+                              <p className="text-lg font-bold text-success">
+                                {format(timeline.payoffDate, "MMM dd, yyyy")}
+                              </p>
+                              <p className="text-xs text-foreground-muted mt-0.5">
+                                {format(timeline.payoffDate, "EEEE")}
                               </p>
                             </div>
                             {timeline.totalInterest > 0 && (
@@ -684,7 +780,10 @@ export default function DebtsPage() {
                                   Total Interest to Pay:
                                 </span>
                                 <span className="text-xs font-semibold text-warning ml-2">
-                                  {formatCurrency(timeline.totalInterest, debt.currency)}
+                                  {formatCurrency(
+                                    timeline.totalInterest,
+                                    debt.currency,
+                                  )}
                                 </span>
                               </div>
                             )}
@@ -714,7 +813,7 @@ export default function DebtsPage() {
                         resetPaymentForm(defaultPaymentValues);
                         setPaymentDialog(true);
                       }}
-                      disabled={debt.status === 'paid_off'}
+                      disabled={debt.status === "paid_off"}
                     >
                       <Wallet className="h-4 w-4 mr-2" />
                       Add Payment
@@ -725,10 +824,15 @@ export default function DebtsPage() {
                   <Accordion className="mt-4">
                     <AccordionItem className="border-0 bg-transparent">
                       <AccordionTrigger className="px-0 py-2 hover:bg-transparent">
-                        <span className="text-sm text-foreground-muted">Payment History</span>
+                        <span className="text-sm text-foreground-muted">
+                          Payment History
+                        </span>
                       </AccordionTrigger>
                       <AccordionContent className="px-0">
-                        <DebtPayments debtId={debt.id} currency={debt.currency} />
+                        <DebtPayments
+                          debtId={debt.id}
+                          currency={debt.currency}
+                        />
                       </AccordionContent>
                     </AccordionItem>
                   </Accordion>
@@ -742,7 +846,9 @@ export default function DebtsPage() {
           <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
             <div className="flex flex-col items-center justify-center min-h-[300px]">
               <CreditCard className="h-20 w-20 text-foreground-muted mb-4 opacity-50" />
-              <h2 className="text-xl font-semibold text-foreground-muted mb-2">No Active Debts</h2>
+              <h2 className="text-xl font-semibold text-foreground-muted mb-2">
+                No Active Debts
+              </h2>
               <p className="text-sm text-foreground-muted mb-6">
                 Add your first debt to start tracking payments
               </p>
@@ -764,54 +870,92 @@ export default function DebtsPage() {
       {/* Inactive/Closed Debts List */}
       {showInactive && inactiveDebts && inactiveDebts.length > 0 && (
         <>
-          <h2 className="text-lg font-semibold text-foreground mt-8">Closed/Paid Off Debts</h2>
+          <h2 className="text-lg font-semibold text-foreground mt-8">
+            Closed/Paid Off Debts
+          </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {inactiveDebts.map((debt: any) => {
-              const progress = debt.original_amount > 0
-                ? ((debt.original_amount - debt.current_balance) / debt.original_amount) * 100
-                : 0;
+              const progress =
+                debt.original_amount > 0
+                  ? ((debt.original_amount - debt.current_balance) /
+                      debt.original_amount) *
+                    100
+                  : 0;
 
               return (
-                <Card key={debt.id} className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm opacity-70">
+                <Card
+                  key={debt.id}
+                  className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm opacity-70"
+                >
                   <div className="flex justify-between items-start mb-4">
                     <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-foreground">{debt.creditor}</h3>
+                      <h3 className="text-lg font-semibold text-foreground">
+                        {debt.creditor}
+                      </h3>
                       {debt.notes && (
-                        <p className="text-sm text-foreground-muted mt-1">{debt.notes}</p>
+                        <p className="text-sm text-foreground-muted mt-1">
+                          {debt.notes}
+                        </p>
                       )}
                     </div>
-                    <Badge variant={debt.current_balance <= 0 ? 'success' : 'outline'} size="sm">
-                      {debt.current_balance <= 0 ? 'PAID OFF' : 'INACTIVE'}
+                    <Badge
+                      variant={
+                        debt.current_balance <= 0 ? "success" : "outline"
+                      }
+                      size="sm"
+                    >
+                      {debt.current_balance <= 0 ? "PAID OFF" : "INACTIVE"}
                     </Badge>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4 mb-4">
                     <div>
-                      <span className="text-xs text-foreground-muted">Final Balance</span>
-                      <p className="text-lg font-bold text-foreground">{formatCurrency(debt.current_balance, debt.currency)}</p>
+                      <span className="text-xs text-foreground-muted">
+                        Final Balance
+                      </span>
+                      <p className="text-lg font-bold text-foreground">
+                        {formatCurrency(debt.current_balance, debt.currency)}
+                      </p>
                     </div>
                     <div>
-                      <span className="text-xs text-foreground-muted">Original Amount</span>
-                      <p className="text-lg font-bold text-foreground">{formatCurrency(debt.original_amount, debt.currency)}</p>
+                      <span className="text-xs text-foreground-muted">
+                        Original Amount
+                      </span>
+                      <p className="text-lg font-bold text-foreground">
+                        {formatCurrency(debt.original_amount, debt.currency)}
+                      </p>
                     </div>
                   </div>
 
                   <div className="mb-4">
                     <div className="flex justify-between mb-1">
-                      <span className="text-xs text-foreground-muted">Progress</span>
-                      <span className="text-xs font-semibold">{progress.toFixed(1)}%</span>
+                      <span className="text-xs text-foreground-muted">
+                        Progress
+                      </span>
+                      <span className="text-xs font-semibold">
+                        {progress.toFixed(1)}%
+                      </span>
                     </div>
-                    <Progress value={Math.min(progress, 100)} variant="success" className="h-2" />
+                    <Progress
+                      value={Math.min(progress, 100)}
+                      variant="success"
+                      className="h-2"
+                    />
                   </div>
 
                   {/* Payment History Accordion */}
                   <Accordion className="mt-4">
                     <AccordionItem className="border-0 bg-transparent">
                       <AccordionTrigger className="px-0 py-2 hover:bg-transparent">
-                        <span className="text-sm text-foreground-muted">Payment History</span>
+                        <span className="text-sm text-foreground-muted">
+                          Payment History
+                        </span>
                       </AccordionTrigger>
                       <AccordionContent className="px-0">
-                        <DebtPayments debtId={debt.id} currency={debt.currency} />
+                        <DebtPayments
+                          debtId={debt.id}
+                          currency={debt.currency}
+                        />
                       </AccordionContent>
                     </AccordionItem>
                   </Accordion>
@@ -826,25 +970,35 @@ export default function DebtsPage() {
       <Dialog open={debtDialog} onOpenChange={setDebtDialog}>
         <DialogContent size="lg">
           <DialogHeader>
-            <DialogTitle>{editingDebt ? 'Edit Debt' : 'Add Debt'}</DialogTitle>
+            <DialogTitle>{editingDebt ? "Edit Debt" : "Add Debt"}</DialogTitle>
             <DialogDescription>
-              {editingDebt ? 'Update debt details below.' : 'Enter the details for your new debt.'}
+              {editingDebt
+                ? "Update debt details below."
+                : "Enter the details for your new debt."}
             </DialogDescription>
           </DialogHeader>
 
           <form onSubmit={handleDebtSubmit(onSubmitDebt)}>
             <div className="space-y-4 py-4">
-              <FormField label="Debt Name" error={debtErrors.creditor?.message} required>
+              <FormField
+                label="Debt Name"
+                error={debtErrors.creditor?.message}
+                required
+              >
                 <Input
-                  {...debtRegister('creditor')}
+                  {...debtRegister("creditor")}
                   placeholder="e.g., Credit Card, Car Loan, Mortgage"
                 />
               </FormField>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField label="Original Amount" error={debtErrors.original_amount?.message} required={!editingDebt}>
+                <FormField
+                  label="Original Amount"
+                  error={debtErrors.original_amount?.message}
+                  required={!editingDebt}
+                >
                   <Input
-                    {...debtRegister('original_amount')}
+                    {...debtRegister("original_amount")}
                     type="number"
                     step="0.01"
                     disabled={!!editingDebt}
@@ -855,9 +1009,12 @@ export default function DebtsPage() {
                     </p>
                   )}
                 </FormField>
-                <FormField label="Current Balance (Optional)" error={debtErrors.current_balance?.message}>
+                <FormField
+                  label="Current Balance (Optional)"
+                  error={debtErrors.current_balance?.message}
+                >
                   <Input
-                    {...debtRegister('current_balance')}
+                    {...debtRegister("current_balance")}
                     type="number"
                     step="0.01"
                   />
@@ -867,7 +1024,11 @@ export default function DebtsPage() {
                 </FormField>
               </div>
 
-              <FormField label="Currency" error={debtErrors.currency?.message} required>
+              <FormField
+                label="Currency"
+                error={debtErrors.currency?.message}
+                required
+              >
                 <Controller
                   name="currency"
                   control={debtControl}
@@ -888,7 +1049,10 @@ export default function DebtsPage() {
                 />
               </FormField>
 
-              <FormField label="Link to Account (Optional)" error={debtErrors.account_id?.message}>
+              <FormField
+                label="Link to Account (Optional)"
+                error={debtErrors.account_id?.message}
+              >
                 <Controller
                   name="account_id"
                   control={debtControl}
@@ -900,8 +1064,12 @@ export default function DebtsPage() {
                       <SelectContent>
                         <SelectItem value="">None</SelectItem>
                         {accountsData?.map((account: any) => (
-                          <SelectItem key={account.id} value={account.id.toString()}>
-                            {account.name} - {account.bank_name} ({account.currency})
+                          <SelectItem
+                            key={account.id}
+                            value={account.id.toString()}
+                          >
+                            {account.name} - {account.bank_name} (
+                            {account.currency})
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -914,76 +1082,102 @@ export default function DebtsPage() {
               </FormField>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField label="Interest Rate (%)" error={debtErrors.interest_rate?.message}>
+                <FormField
+                  label="Interest Rate (%)"
+                  error={debtErrors.interest_rate?.message}
+                >
                   <Input
-                    {...debtRegister('interest_rate')}
+                    {...debtRegister("interest_rate")}
                     type="number"
                     step="0.01"
                   />
                 </FormField>
-                <FormField label="Interest Type" error={debtErrors.interest_type?.message}>
+                <FormField
+                  label="Interest Type"
+                  error={debtErrors.interest_type?.message}
+                >
                   <Controller
                     name="interest_type"
                     control={debtControl}
                     render={({ field }) => (
-                      <Select value={field.value} onValueChange={field.onChange}>
+                      <Select
+                        value={field.value}
+                        onValueChange={field.onChange}
+                      >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="simple">Simple Interest</SelectItem>
-                          <SelectItem value="compound">Compound Interest</SelectItem>
+                          <SelectItem value="simple">
+                            Simple Interest
+                          </SelectItem>
+                          <SelectItem value="compound">
+                            Compound Interest
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                     )}
                   />
                   <p className="text-xs text-foreground-muted mt-1">
-                    {watchDebtInterestType === 'simple'
-                      ? 'Interest on principal only'
-                      : 'Interest on principal + accumulated interest'}
+                    {watchDebtInterestType === "simple"
+                      ? "Interest on principal only"
+                      : "Interest on principal + accumulated interest"}
                   </p>
                 </FormField>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField label="Monthly Payment" error={debtErrors.minimum_payment?.message}>
+                <FormField
+                  label="Monthly Payment"
+                  error={debtErrors.minimum_payment?.message}
+                >
                   <Input
-                    {...debtRegister('minimum_payment')}
+                    {...debtRegister("minimum_payment")}
                     type="number"
                     step="0.01"
                   />
                 </FormField>
-                <FormField label="Payment Due Day of Month" error={debtErrors.payment_day?.message}>
+                <FormField
+                  label="Payment Due Day of Month"
+                  error={debtErrors.payment_day?.message}
+                >
                   <Input
-                    {...debtRegister('payment_day')}
+                    {...debtRegister("payment_day")}
                     type="number"
                     min={1}
                     max={28}
                   />
-                  <p className="text-xs text-foreground-muted mt-1">Day of month (1-28)</p>
+                  <p className="text-xs text-foreground-muted mt-1">
+                    Day of month (1-28)
+                  </p>
                 </FormField>
               </div>
 
-              <FormField label="Start Date" error={debtErrors.due_date?.message} required>
-                <Input
-                  {...debtRegister('due_date')}
-                  type="date"
-                />
+              <FormField
+                label="Start Date"
+                error={debtErrors.due_date?.message}
+                required
+              >
+                <Input {...debtRegister("due_date")} type="date" />
                 <p className="text-xs text-foreground-muted mt-1">
                   Date when debt starts or first payment is due
                 </p>
               </FormField>
 
-              <FormField label="Notes (Optional)" error={debtErrors.notes?.message}>
-                <Textarea
-                  {...debtRegister('notes')}
-                  rows={2}
-                />
+              <FormField
+                label="Notes (Optional)"
+                error={debtErrors.notes?.message}
+              >
+                <Textarea {...debtRegister("notes")} rows={2} />
               </FormField>
             </div>
 
             <DialogFooter>
-              <Button variant="outline" type="button" onClick={() => setDebtDialog(false)}>
+              <Button
+                variant="outline"
+                type="button"
+                onClick={() => setDebtDialog(false)}
+              >
                 Cancel
               </Button>
               <Button
@@ -991,7 +1185,7 @@ export default function DebtsPage() {
                 loading={createMutation.isPending || updateMutation.isPending}
                 disabled={!isDebtValid}
               >
-                {editingDebt ? 'Update' : 'Add'}
+                {editingDebt ? "Update" : "Add"}
               </Button>
             </DialogFooter>
           </form>
@@ -1011,22 +1205,30 @@ export default function DebtsPage() {
           <form onSubmit={handlePaymentSubmit(onSubmitPayment)}>
             <div className="space-y-4 py-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField label="Payment Amount" error={paymentErrors.amount?.message} required>
+                <FormField
+                  label="Payment Amount"
+                  error={paymentErrors.amount?.message}
+                  required
+                >
                   <Input
-                    {...paymentRegister('amount')}
+                    {...paymentRegister("amount")}
                     type="number"
                     step="0.01"
                   />
                 </FormField>
-                <FormField label="Payment Date" error={paymentErrors.payment_date?.message} required>
-                  <Input
-                    {...paymentRegister('payment_date')}
-                    type="date"
-                  />
+                <FormField
+                  label="Payment Date"
+                  error={paymentErrors.payment_date?.message}
+                  required
+                >
+                  <Input {...paymentRegister("payment_date")} type="date" />
                 </FormField>
               </div>
 
-              <FormField label="Payment Type" error={paymentErrors.payment_type?.message}>
+              <FormField
+                label="Payment Type"
+                error={paymentErrors.payment_type?.message}
+              >
                 <Controller
                   name="payment_type"
                   control={paymentControl}
@@ -1043,21 +1245,26 @@ export default function DebtsPage() {
                   )}
                 />
                 <p className="text-xs text-foreground-muted mt-1">
-                  {watchPaymentType === 'monthly'
-                    ? 'Regular monthly payment (includes interest + principal)'
-                    : 'Extra payment (goes entirely to principal, reduces interest)'}
+                  {watchPaymentType === "monthly"
+                    ? "Regular monthly payment (includes interest + principal)"
+                    : "Extra payment (goes entirely to principal, reduces interest)"}
                 </p>
               </FormField>
 
-              <FormField label="Notes (Optional)" error={paymentErrors.notes?.message}>
-                <Input
-                  {...paymentRegister('notes')}
-                />
+              <FormField
+                label="Notes (Optional)"
+                error={paymentErrors.notes?.message}
+              >
+                <Input {...paymentRegister("notes")} />
               </FormField>
             </div>
 
             <DialogFooter>
-              <Button variant="outline" type="button" onClick={() => setPaymentDialog(false)}>
+              <Button
+                variant="outline"
+                type="button"
+                onClick={() => setPaymentDialog(false)}
+              >
                 Cancel
               </Button>
               <Button
@@ -1073,7 +1280,10 @@ export default function DebtsPage() {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
+      <Dialog
+        open={!!deleteConfirm}
+        onOpenChange={() => setDeleteConfirm(null)}
+      >
         <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
@@ -1086,8 +1296,9 @@ export default function DebtsPage() {
             <div className="flex items-start gap-3 p-4 rounded-lg bg-warning/10 text-warning border border-warning/20">
               <AlertTriangle className="h-5 w-5 flex-shrink-0 mt-0.5" />
               <p className="text-sm">
-                Are you sure you want to delete the debt "{deleteConfirm?.creditor}"? This will also
-                delete all payment history for this debt.
+                Are you sure you want to delete the debt "
+                {deleteConfirm?.creditor}"? This will also delete all payment
+                history for this debt.
               </p>
             </div>
           </div>
@@ -1111,20 +1322,23 @@ export default function DebtsPage() {
       <Dialog open={scheduleDialog} onOpenChange={setScheduleDialog}>
         <DialogContent size="xl">
           <DialogHeader>
-            <DialogTitle>Amortization Schedule - {selectedDebt?.creditor}</DialogTitle>
+            <DialogTitle>
+              Amortization Schedule - {selectedDebt?.creditor}
+            </DialogTitle>
             <DialogDescription>
               Month-by-month breakdown of payments, interest, and principal.
             </DialogDescription>
           </DialogHeader>
 
           <div className="py-4">
-            <AmortizationSchedule debtId={selectedDebt?.id} currency={selectedDebt?.currency} />
+            <AmortizationSchedule
+              debtId={selectedDebt?.id}
+              currency={selectedDebt?.currency}
+            />
           </div>
 
           <DialogFooter>
-            <Button onClick={() => setScheduleDialog(false)}>
-              Close
-            </Button>
+            <Button onClick={() => setScheduleDialog(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1133,9 +1347,15 @@ export default function DebtsPage() {
 }
 
 // Debt Payments Component
-function DebtPayments({ debtId, currency = 'EUR' }: { debtId: number; currency?: string }) {
+function DebtPayments({
+  debtId,
+  currency = "EUR",
+}: {
+  debtId: number;
+  currency?: string;
+}) {
   const { data: paymentsData, isLoading } = useQuery({
-    queryKey: ['debt-payments', debtId],
+    queryKey: ["debt-payments", debtId],
     queryFn: async () => {
       const response = await debtsAPI.getPayments(debtId);
       return response.data.payments;
@@ -1156,7 +1376,9 @@ function DebtPayments({ debtId, currency = 'EUR' }: { debtId: number; currency?:
 
   if (!paymentsData || paymentsData.length === 0) {
     return (
-      <p className="text-sm text-foreground-muted text-center py-4">No payments yet</p>
+      <p className="text-sm text-foreground-muted text-center py-4">
+        No payments yet
+      </p>
     );
   }
 
@@ -1173,11 +1395,13 @@ function DebtPayments({ debtId, currency = 'EUR' }: { debtId: number; currency?:
         <TableBody>
           {paymentsData.map((payment: any) => (
             <TableRow key={payment.id}>
-              <TableCell className="text-sm">{formatDate(payment.payment_date)}</TableCell>
+              <TableCell className="text-sm">
+                {formatDate(payment.payment_date)}
+              </TableCell>
               <TableCell className="font-semibold text-success">
                 {formatCurrency(payment.amount)}
               </TableCell>
-              <TableCell className="text-sm">{payment.notes || '-'}</TableCell>
+              <TableCell className="text-sm">{payment.notes || "-"}</TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -1187,9 +1411,19 @@ function DebtPayments({ debtId, currency = 'EUR' }: { debtId: number; currency?:
 }
 
 // Amortization Schedule Component
-function AmortizationSchedule({ debtId, currency = 'EUR' }: { debtId: number | undefined; currency?: string }) {
-  const { data: scheduleData, isLoading, error } = useQuery({
-    queryKey: ['debt-schedule', debtId],
+function AmortizationSchedule({
+  debtId,
+  currency = "EUR",
+}: {
+  debtId: number | undefined;
+  currency?: string;
+}) {
+  const {
+    data: scheduleData,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["debt-schedule", debtId],
     queryFn: async () => {
       if (!debtId) return null;
       const response = await debtsAPI.getSchedule(debtId);
@@ -1213,21 +1447,34 @@ function AmortizationSchedule({ debtId, currency = 'EUR' }: { debtId: number | u
   if (error) {
     return (
       <div className="p-4 rounded-lg bg-error/10 text-error border border-error/20">
-        <p className="text-sm">Failed to load amortization schedule. Please try again.</p>
+        <p className="text-sm">
+          Failed to load amortization schedule. Please try again.
+        </p>
       </div>
     );
   }
 
   if (!scheduleData || scheduleData.length === 0) {
     return (
-      <p className="text-sm text-foreground-muted text-center py-8">No payment schedule available</p>
+      <p className="text-sm text-foreground-muted text-center py-8">
+        No payment schedule available
+      </p>
     );
   }
 
   // Calculate totals
-  const totalPayment = scheduleData.reduce((sum: number, item: any) => sum + item.payment, 0);
-  const totalPrincipal = scheduleData.reduce((sum: number, item: any) => sum + item.principal, 0);
-  const totalInterest = scheduleData.reduce((sum: number, item: any) => sum + item.interest, 0);
+  const totalPayment = scheduleData.reduce(
+    (sum: number, item: any) => sum + item.payment,
+    0,
+  );
+  const totalPrincipal = scheduleData.reduce(
+    (sum: number, item: any) => sum + item.principal,
+    0,
+  );
+  const totalInterest = scheduleData.reduce(
+    (sum: number, item: any) => sum + item.interest,
+    0,
+  );
 
   return (
     <div className="space-y-4">
@@ -1235,15 +1482,21 @@ function AmortizationSchedule({ debtId, currency = 'EUR' }: { debtId: number | u
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card className="p-4 rounded-lg border border-border bg-card/50">
           <span className="text-xs text-foreground-muted">Total Payments</span>
-          <p className="text-lg font-bold text-foreground mt-1">{formatCurrency(totalPayment)}</p>
+          <p className="text-lg font-bold text-foreground mt-1">
+            {formatCurrency(totalPayment)}
+          </p>
         </Card>
         <Card className="p-4 rounded-lg border border-border bg-card/50">
           <span className="text-xs text-foreground-muted">Total Principal</span>
-          <p className="text-lg font-bold text-success mt-1">{formatCurrency(totalPrincipal)}</p>
+          <p className="text-lg font-bold text-success mt-1">
+            {formatCurrency(totalPrincipal)}
+          </p>
         </Card>
         <Card className="p-4 rounded-lg border border-border bg-card/50">
           <span className="text-xs text-foreground-muted">Total Interest</span>
-          <p className="text-lg font-bold text-warning mt-1">{formatCurrency(totalInterest)}</p>
+          <p className="text-lg font-bold text-warning mt-1">
+            {formatCurrency(totalInterest)}
+          </p>
         </Card>
       </div>
 
@@ -1266,7 +1519,9 @@ function AmortizationSchedule({ debtId, currency = 'EUR' }: { debtId: number | u
                 <TableCell className="text-center text-sm text-foreground-muted">
                   {item.payment_number}
                 </TableCell>
-                <TableCell className="text-sm">{formatDate(item.date)}</TableCell>
+                <TableCell className="text-sm">
+                  {formatDate(item.date)}
+                </TableCell>
                 <TableCell className="text-right font-semibold">
                   {formatCurrency(item.payment)}
                 </TableCell>

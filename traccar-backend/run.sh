@@ -6,7 +6,7 @@ if [ -z "${TRACCAR_URL:-}" ]; then
     export TRACCAR_URL=$(bashio::config 'traccar_url')
     export TRACCAR_ADMIN_TOKEN=$(bashio::config 'traccar_admin_token')
     export TRACCAR_ADMIN_USER_ID=$(bashio::config 'traccar_admin_user_id')
-    export LOG_LEVEL=$(bashio::config 'log_level' 'info' | tr '[:lower:]' '[:upper:]')
+    export LOG_LEVEL=$(bashio::config 'log_level' 'info')
 fi
 
 bashio::log.info "Traccar URL: ${TRACCAR_URL}"

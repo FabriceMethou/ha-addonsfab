@@ -1,6 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
-import { format, subMonths, startOfMonth, endOfMonth } from "date-fns";
+import { useMemo, useState } from "react";
+import {
+  format,
+  subMonths,
+  startOfMonth,
+  endOfMonth,
+  addMonths,
+  isSameMonth,
+} from "date-fns";
 import {
   accountsAPI,
   transactionsAPI,
@@ -14,21 +21,24 @@ import {
   Card,
   Badge,
   Progress,
-  Spinner,
   Button,
   DashboardSkeleton,
 } from "../components/shadcn";
 import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
 import { absMoney, subtractMoney, percentChange } from "../lib/money";
 import { useIsMobile } from "../hooks/useBreakpoint";
+import KPICard from "../components/KPICard";
+import PageHeader from "../components/PageHeader";
+import QueryError from "../components/QueryError";
 import {
   TrendingUp,
-  TrendingDown,
   PiggyBank,
   Lightbulb,
   Wallet,
   ArrowUpCircle,
   ArrowDownCircle,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -48,92 +58,6 @@ import {
 // Nivo
 import { ResponsiveSunburst } from "@nivo/sunburst";
 import { ResponsivePie } from "@nivo/pie";
-
-interface KPICardProps {
-  title: string;
-  value: string;
-  change?: number;
-  changeLabel?: string;
-  icon: React.ReactNode;
-  iconColor: string;
-  loading?: boolean;
-}
-
-function KPICard({
-  title,
-  value,
-  change,
-  changeLabel,
-  icon,
-  iconColor,
-  loading,
-}: KPICardProps) {
-  const isPositive = change && change > 0;
-  const isNegative = change && change < 0;
-
-  return (
-    <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-      {/* Background gradient effect */}
-      <div
-        className={`absolute top-0 right-0 w-32 h-32 ${iconColor} opacity-5 blur-3xl rounded-full`}
-      />
-
-      <div className="relative">
-        <div className="flex items-start justify-between mb-2 sm:mb-4">
-          <div
-            className={`p-2 sm:p-3 rounded-lg ${iconColor} bg-opacity-10 [&>svg]:w-5 [&>svg]:h-5 sm:[&>svg]:w-6 sm:[&>svg]:h-6`}
-          >
-            {icon}
-          </div>
-          {change !== undefined && (
-            <div
-              className={`flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md text-[10px] sm:text-xs font-medium ${
-                isPositive
-                  ? "bg-success/10 text-success"
-                  : isNegative
-                    ? "bg-error/10 text-error"
-                    : "bg-foreground-muted/10 text-foreground-muted"
-              }`}
-            >
-              {isPositive && <TrendingUp size={10} className="sm:w-3 sm:h-3" />}
-              {isNegative && (
-                <TrendingDown size={10} className="sm:w-3 sm:h-3" />
-              )}
-              <span className="hidden sm:inline">
-                {change > 0 ? "+" : ""}
-                {change.toFixed(1)}%
-              </span>
-              <span className="sm:hidden">
-                {change > 0 ? "+" : ""}
-                {Math.round(change)}%
-              </span>
-            </div>
-          )}
-        </div>
-
-        <div>
-          <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
-            {title}
-          </p>
-          {loading ? (
-            <div className="h-6 sm:h-8 flex items-center">
-              <Spinner className="w-4 h-4 sm:w-5 sm:h-5" />
-            </div>
-          ) : (
-            <p className="text-lg sm:text-2xl font-bold text-foreground truncate">
-              {value}
-            </p>
-          )}
-          {changeLabel && (
-            <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">
-              {changeLabel}
-            </p>
-          )}
-        </div>
-      </div>
-    </Card>
-  );
-}
 
 interface AccountBalanceItemProps {
   name: string;
@@ -160,11 +84,15 @@ function AccountBalanceItem({
 
 export default function DashboardPage() {
   const isMobile = useIsMobile();
-  // Current date calculations
-  const now = new Date();
-  const currentMonthStart = format(startOfMonth(now), "yyyy-MM-dd");
-  const currentMonthEnd = format(endOfMonth(now), "yyyy-MM-dd");
-  const previousMonth = subMonths(now, 1);
+  const today = new Date();
+
+  // Navigable month state (defaults to current month)
+  const [viewDate, setViewDate] = useState(today);
+  const isCurrentMonth = isSameMonth(viewDate, today);
+
+  const currentMonthStart = format(startOfMonth(viewDate), "yyyy-MM-dd");
+  const currentMonthEnd = format(endOfMonth(viewDate), "yyyy-MM-dd");
+  const previousMonth = subMonths(viewDate, 1);
   const previousMonthStart = format(startOfMonth(previousMonth), "yyyy-MM-dd");
   const previousMonthEnd = format(endOfMonth(previousMonth), "yyyy-MM-dd");
 
@@ -185,7 +113,7 @@ export default function DashboardPage() {
     isLoading: transactionsLoading,
     isError: transactionsError,
   } = useQuery({
-    queryKey: ["transactions-summary"],
+    queryKey: ["transactions-summary", currentMonthStart, currentMonthEnd],
     queryFn: async () => {
       const response = await transactionsAPI.getSummary({
         start_date: currentMonthStart,
@@ -197,7 +125,11 @@ export default function DashboardPage() {
 
   // Fetch previous month data for deltas
   const { data: previousTransactionsSummary } = useQuery({
-    queryKey: ["transactions-summary-previous"],
+    queryKey: [
+      "transactions-summary-previous",
+      previousMonthStart,
+      previousMonthEnd,
+    ],
     queryFn: async () => {
       const response = await transactionsAPI.getSummary({
         start_date: previousMonthStart,
@@ -250,7 +182,7 @@ export default function DashboardPage() {
 
   // Fetch spending by category
   const { data: spendingByCategory } = useQuery({
-    queryKey: ["spending-by-category"],
+    queryKey: ["spending-by-category", currentMonthStart, currentMonthEnd],
     queryFn: async () => {
       const response = await reportsAPI.getSpendingByCategory({
         start_date: currentMonthStart,
@@ -262,7 +194,7 @@ export default function DashboardPage() {
 
   // Fetch income by category
   const { data: incomeByCategory } = useQuery({
-    queryKey: ["income-by-category"],
+    queryKey: ["income-by-category", currentMonthStart, currentMonthEnd],
     queryFn: async () => {
       const response = await reportsAPI.getIncomeVsExpenses({
         start_date: currentMonthStart,
@@ -274,11 +206,15 @@ export default function DashboardPage() {
 
   // Fetch budgets
   const { data: budgetsVsActual } = useQuery({
-    queryKey: ["budgets-vs-actual"],
+    queryKey: [
+      "budgets-vs-actual",
+      viewDate.getFullYear(),
+      viewDate.getMonth(),
+    ],
     queryFn: async () => {
       const response = await budgetsAPI.getVsActual(
-        now.getFullYear(),
-        now.getMonth() + 1,
+        viewDate.getFullYear(),
+        viewDate.getMonth() + 1,
       );
       const categories = response.data.categories || [];
       return categories.map((item: any) => ({
@@ -434,18 +370,10 @@ export default function DashboardPage() {
   // Error state
   if (transactionsError || netWorthError) {
     return (
-      <div className="flex justify-center items-center min-h-[60vh]">
-        <Card className="p-6 max-w-md">
-          <h2 className="text-xl font-semibold text-error mb-2">
-            Error Loading Dashboard
-          </h2>
-          <p className="text-foreground-muted mb-4">
-            We encountered an error while loading your financial data. Please
-            try refreshing the page.
-          </p>
-          <Button onClick={() => window.location.reload()}>Refresh Page</Button>
-        </Card>
-      </div>
+      <QueryError
+        message="Failed to load financial data. Please try refreshing the page."
+        onRetry={() => window.location.reload()}
+      />
     );
   }
 
@@ -489,15 +417,34 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold text-foreground mb-2">
-          Financial Overview
-        </h1>
-        <p className="text-foreground-muted">
-          {format(now, "MMMM yyyy")} • Your complete financial snapshot
-        </p>
-      </div>
+      {/* Header with month navigation */}
+      <PageHeader
+        title={`Good ${new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}`}
+        description="Your complete financial snapshot"
+        accentColor="border-l-blue-500"
+        actions={
+          <div className="flex items-center gap-2 bg-surface border border-border rounded-lg px-1 py-1">
+            <button
+              onClick={() => setViewDate((d) => subMonths(d, 1))}
+              aria-label="Previous month"
+              className="p-1.5 rounded hover:bg-surface-hover text-foreground-muted hover:text-foreground transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-sm font-medium text-foreground min-w-[100px] text-center">
+              {format(viewDate, "MMMM yyyy")}
+            </span>
+            <button
+              onClick={() => setViewDate((d) => addMonths(d, 1))}
+              disabled={isCurrentMonth}
+              aria-label="Next month"
+              className="p-1.5 rounded hover:bg-surface-hover text-foreground-muted hover:text-foreground transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        }
+      />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-6">
@@ -509,53 +456,58 @@ export default function DashboardPage() {
           icon={<Wallet size={24} className="text-blue-500" />}
           iconColor="bg-blue-500"
           loading={netWorthLoading}
+          primary
         />
 
         <KPICard
           title="Monthly Income"
           value={formatCurrency(monthlyIncome)}
           change={incomeChange}
-          changeLabel="vs last month"
+          changeLabel="vs prev month"
           icon={<ArrowUpCircle size={24} className="text-emerald-500" />}
           iconColor="bg-emerald-500"
           loading={transactionsLoading}
+          primary
         />
 
         <KPICard
           title="Monthly Expenses"
           value={formatCurrency(monthlyExpenses)}
           change={expensesChange}
-          changeLabel="vs last month"
+          changeLabel="vs prev month"
           icon={<ArrowDownCircle size={24} className="text-rose-500" />}
           iconColor="bg-rose-500"
           loading={transactionsLoading}
+          primary
         />
 
         <KPICard
           title="Monthly Savings"
           value={formatCurrency(monthlySavings)}
           change={savingsChange}
-          changeLabel="vs last month"
+          changeLabel="vs prev month"
           icon={<PiggyBank size={24} className="text-violet-500" />}
           iconColor="bg-violet-500"
           loading={transactionsLoading}
+          primary
         />
 
         <KPICard
           title="Monthly Invested"
           value={formatCurrency(monthlyInvested)}
           change={investedChange}
-          changeLabel="vs last month"
+          changeLabel="vs prev month"
           icon={<TrendingUp size={24} className="text-amber-500" />}
           iconColor="bg-amber-500"
           loading={investmentsLoading}
+          primary
         />
       </div>
 
-      {/* Monthly Summary - Kept from original */}
+      {/* Monthly Summary */}
       <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <h2 className="text-lg font-semibold text-foreground mb-4">
-          Monthly Summary
+          Monthly Summary — {format(viewDate, "MMMM yyyy")}
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
           <div className="text-center p-4 rounded-lg bg-success/10 border border-success/20">
@@ -616,11 +568,41 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Income vs Expenses Trend */}
         <Card className="xl:col-span-2 p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="mb-6">
+          <div className="mb-4">
             <h2 className="text-lg font-semibold text-foreground">
               Income vs Expenses
             </h2>
-            <p className="text-sm text-foreground-muted">Last 6 months trend</p>
+            <p className="text-sm text-foreground-muted mb-3">
+              Last 6 months trend
+            </p>
+            {incomeExpenseChartData.length > 0 && (
+              <div className="flex gap-4 text-xs text-foreground-muted">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                  Total In:{" "}
+                  <span className="text-success font-medium">
+                    {formatCurrency(
+                      incomeExpenseChartData.reduce(
+                        (s: number, d: any) => s + (d.income || 0),
+                        0,
+                      ),
+                    )}
+                  </span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />
+                  Total Out:{" "}
+                  <span className="text-error font-medium">
+                    {formatCurrency(
+                      incomeExpenseChartData.reduce(
+                        (s: number, d: any) => s + (d.expenses || 0),
+                        0,
+                      ),
+                    )}
+                  </span>
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="h-[300px]">
@@ -735,12 +717,27 @@ export default function DashboardPage() {
       {/* Budget Overview - Progress Graph */}
       {budgetArray.length > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="flex justify-between items-center mb-6">
-            <div className="flex items-center gap-2">
-              <Wallet className="w-5 h-5 text-primary" />
-              <h2 className="text-lg font-semibold text-foreground">
-                Budget Overview
-              </h2>
+          <div className="flex justify-between items-start mb-6">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Wallet className="w-5 h-5 text-primary" />
+                <h2 className="text-lg font-semibold text-foreground">
+                  Budget Overview
+                </h2>
+              </div>
+              <p className="text-xs text-foreground-muted">
+                {budgetChartData.filter((b: any) => b.isOverBudget).length >
+                0 ? (
+                  <span className="text-error">
+                    {budgetChartData.filter((b: any) => b.isOverBudget).length}{" "}
+                    of {budgetChartData.length} categories over budget
+                  </span>
+                ) : (
+                  <span className="text-success">
+                    All {budgetChartData.length} categories within budget
+                  </span>
+                )}
+              </p>
             </div>
             <Link to="/budgets">
               <Button variant="ghost" size="sm">
@@ -843,13 +840,24 @@ export default function DashboardPage() {
       {/* Spending Breakdown - Sunburst */}
       {sunburstData.children.length > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="mb-6">
+          <div className="mb-4">
             <h2 className="text-lg font-semibold text-foreground">
               Spending Breakdown
             </h2>
-            <p className="text-sm text-foreground-muted">
-              Category distribution this month
-            </p>
+            <div className="flex items-center gap-3 mt-1 text-xs text-foreground-muted">
+              <span>
+                Category distribution — {format(viewDate, "MMMM yyyy")}
+              </span>
+              {sunburstData.children.length > 0 && (
+                <span>
+                  Top:{" "}
+                  <span className="text-foreground font-medium">
+                    {sunburstData.children[0]?.name}
+                  </span>{" "}
+                  ({formatCurrency(sunburstData.children[0]?.value || 0)})
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="h-[400px]">
@@ -897,9 +905,28 @@ export default function DashboardPage() {
       {/* Income Nivo Pie */}
       {nivoPieData.length > 0 && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <h2 className="text-lg font-semibold text-foreground mb-4">
-            Income by Category (This Month)
-          </h2>
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold text-foreground">
+              Income by Category
+            </h2>
+            <div className="flex items-center gap-3 mt-1 text-xs text-foreground-muted">
+              <span>
+                {format(viewDate, "MMMM yyyy")} · {nivoPieData.length} sources
+              </span>
+              {nivoPieData.length > 0 && (
+                <span>
+                  Top:{" "}
+                  <span className="text-foreground font-medium">
+                    {
+                      [...nivoPieData].sort(
+                        (a: any, b: any) => b.value - a.value,
+                      )[0]?.label
+                    }
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
           <div className="h-[400px]">
             <ResponsivePie
               data={nivoPieData}
