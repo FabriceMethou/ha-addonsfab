@@ -1,6 +1,6 @@
 name: "MyLife360 Backend"
 description: "Mobile API backend for MyLife360 family tracking app"
-version: "1.0.1"
+version: "1.0.2"
 slug: "mylife360_backend"
 init: false
 arch:
