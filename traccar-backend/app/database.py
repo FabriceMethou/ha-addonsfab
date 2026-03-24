@@ -3,32 +3,81 @@ from app.config import settings
 
 _DB_PATH = settings.db_path
 
-CREATE_SCHEMA = """
+CREATE_SESSIONS = """
 CREATE TABLE IF NOT EXISTS device_sessions (
     token             TEXT PRIMARY KEY,
-    traccar_user_id   INTEGER NOT NULL,
     traccar_device_id INTEGER NOT NULL,
-    traccar_email     TEXT NOT NULL,
-    traccar_password  TEXT NOT NULL,
     display_name      TEXT NOT NULL,
     device_unique_id  TEXT NOT NULL UNIQUE,
     created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
+CREATE_GROUPS = """
+CREATE TABLE IF NOT EXISTS groups (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name  TEXT NOT NULL UNIQUE,
+    color TEXT NOT NULL DEFAULT '#4CAF50'
+);
+"""
+
+CREATE_DEVICE_GROUPS = """
+CREATE TABLE IF NOT EXISTS device_groups (
+    device_unique_id TEXT NOT NULL,
+    group_id         INTEGER NOT NULL,
+    PRIMARY KEY (device_unique_id, group_id),
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+);
+"""
+
 
 async def init_db() -> None:
     async with aiosqlite.connect(_DB_PATH) as db:
-        await db.execute(CREATE_SCHEMA)
+        await db.execute("PRAGMA foreign_keys = ON")
+
+        # ------------------------------------------------------------------ #
+        # Migration: detect old schema (has traccar_user_id, traccar_email,  #
+        # traccar_password columns) and migrate to new slimmer schema.        #
+        # ------------------------------------------------------------------ #
+        async with db.execute("PRAGMA table_info(device_sessions)") as cur:
+            columns = {row[1] async for row in cur}
+
+        if "traccar_user_id" in columns or "traccar_email" in columns:
+            # Create replacement table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS device_sessions_new (
+                    token             TEXT PRIMARY KEY,
+                    traccar_device_id INTEGER NOT NULL,
+                    display_name      TEXT NOT NULL,
+                    device_unique_id  TEXT NOT NULL UNIQUE,
+                    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+            # Copy rows that have the columns we still need
+            await db.execute("""
+                INSERT OR IGNORE INTO device_sessions_new
+                    (token, traccar_device_id, display_name, device_unique_id, created_at)
+                SELECT token, traccar_device_id, display_name, device_unique_id, created_at
+                FROM device_sessions
+            """)
+            await db.execute("DROP TABLE device_sessions")
+            await db.execute("ALTER TABLE device_sessions_new RENAME TO device_sessions")
+        else:
+            # Table doesn't exist yet — create it fresh
+            await db.execute(CREATE_SESSIONS)
+
+        await db.execute(CREATE_GROUPS)
+        await db.execute(CREATE_DEVICE_GROUPS)
         await db.commit()
 
 
+# ------------------------------------------------------------------
+# Session helpers
+# ------------------------------------------------------------------
+
 async def upsert_session(
     token: str,
-    traccar_user_id: int,
     traccar_device_id: int,
-    traccar_email: str,
-    traccar_password: str,
     display_name: str,
     device_unique_id: str,
 ) -> None:
@@ -36,19 +85,14 @@ async def upsert_session(
         await db.execute(
             """
             INSERT INTO device_sessions
-                (token, traccar_user_id, traccar_device_id, traccar_email,
-                 traccar_password, display_name, device_unique_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (token, traccar_device_id, display_name, device_unique_id)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(device_unique_id) DO UPDATE SET
                 token             = excluded.token,
-                traccar_user_id   = excluded.traccar_user_id,
                 traccar_device_id = excluded.traccar_device_id,
-                traccar_email     = excluded.traccar_email,
-                traccar_password  = excluded.traccar_password,
                 display_name      = excluded.display_name
             """,
-            (token, traccar_user_id, traccar_device_id, traccar_email,
-             traccar_password, display_name, device_unique_id),
+            (token, traccar_device_id, display_name, device_unique_id),
         )
         await db.commit()
 
@@ -61,3 +105,102 @@ async def get_session(token: str) -> dict | None:
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+
+# ------------------------------------------------------------------
+# Group helpers
+# ------------------------------------------------------------------
+
+async def list_groups() -> list[dict]:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM groups ORDER BY name") as cur:
+            return [dict(row) async for row in cur]
+
+
+async def get_group(group_id: int) -> dict | None:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM groups WHERE id = ?", (group_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def create_group(name: str, color: str) -> dict:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "INSERT INTO groups (name, color) VALUES (?, ?)", (name, color)
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT * FROM groups WHERE id = ?", (cur.lastrowid,)
+        ) as sel:
+            row = await sel.fetchone()
+            return dict(row)
+
+
+async def update_group(group_id: int, name: str, color: str) -> dict | None:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            "UPDATE groups SET name = ?, color = ? WHERE id = ?",
+            (name, color, group_id),
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT * FROM groups WHERE id = ?", (group_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def delete_group(group_id: int) -> bool:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM groups WHERE id = ?", (group_id,)
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def add_device_to_group(device_unique_id: str, group_id: int) -> None:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO device_groups (device_unique_id, group_id)
+            VALUES (?, ?)
+            """,
+            (device_unique_id, group_id),
+        )
+        await db.commit()
+
+
+async def remove_device_from_group(device_unique_id: str, group_id: int) -> None:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM device_groups WHERE device_unique_id = ? AND group_id = ?",
+            (device_unique_id, group_id),
+        )
+        await db.commit()
+
+
+async def get_groups_for_device(device_unique_id: str) -> list[int]:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        async with db.execute(
+            "SELECT group_id FROM device_groups WHERE device_unique_id = ?",
+            (device_unique_id,),
+        ) as cur:
+            return [row[0] async for row in cur]
+
+
+async def get_devices_in_group(group_id: int) -> list[str]:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        async with db.execute(
+            "SELECT device_unique_id FROM device_groups WHERE group_id = ?",
+            (group_id,),
+        ) as cur:
+            return [row[0] async for row in cur]

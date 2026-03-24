@@ -16,7 +16,7 @@ async def get_events(
     session: dict = Depends(require_session),
 ) -> list[dict[str, Any]]:
     try:
-        client = await traccar.user_session(session["traccar_email"], session["traccar_password"])
+        client = await traccar.admin_session()
         try:
             devices = await traccar.get_devices(client)
             device_ids = [d["id"] for d in devices]

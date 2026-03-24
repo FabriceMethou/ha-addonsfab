@@ -13,7 +13,7 @@ router = APIRouter()
 @router.get("/places")
 async def get_places(session: dict = Depends(require_session)) -> list[dict[str, Any]]:
     try:
-        client = await traccar.user_session(session["traccar_email"], session["traccar_password"])
+        client = await traccar.admin_session()
         try:
             geofences = await traccar.get_geofences(client)
         finally:
