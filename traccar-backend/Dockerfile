@@ -24,4 +24,4 @@ LABEL \
     io.hass.description="Mobile API backend for MyLife360 family tracking" \
     io.hass.arch="aarch64|amd64" \
     io.hass.type="addon" \
-    io.hass.version="1.0.2"
+    io.hass.version="1.0.3"
