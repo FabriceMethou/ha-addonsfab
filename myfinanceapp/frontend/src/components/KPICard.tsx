@@ -1,5 +1,6 @@
-import { TrendingUp, TrendingDown } from 'lucide-react';
-import { Card, Spinner } from './shadcn';
+import { TrendingUp, TrendingDown } from "lucide-react";
+import Card from "./shadcn/Card";
+import Spinner from "./shadcn/Spinner";
 
 interface KPICardProps {
   title: string;
@@ -25,7 +26,7 @@ export default function KPICard({
   iconColor,
   loading,
   primary = false,
-  className = '',
+  className = "",
 }: KPICardProps) {
   const isPositive = change !== undefined && change > 0;
   const isNegative = change !== undefined && change < 0;
@@ -33,9 +34,7 @@ export default function KPICard({
   return (
     <Card
       className={`relative overflow-hidden p-4 sm:p-6 rounded-xl border bg-card/70 backdrop-blur-sm ${
-        primary
-          ? 'border-t-2 border-border shadow-md'
-          : 'border-border'
+        primary ? "border-t-2 border-border shadow-md" : "border-border"
       } ${className}`}
     >
       {/* Background glow circle */}
@@ -54,16 +53,18 @@ export default function KPICard({
             <div
               className={`flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md text-[10px] sm:text-xs font-medium ${
                 isPositive
-                  ? 'bg-success/10 text-success'
+                  ? "bg-success/10 text-success"
                   : isNegative
-                    ? 'bg-error/10 text-error'
-                    : 'bg-foreground-muted/10 text-foreground-muted'
+                    ? "bg-error/10 text-error"
+                    : "bg-foreground-muted/10 text-foreground-muted"
               }`}
             >
               {isPositive && <TrendingUp size={10} className="sm:w-3 sm:h-3" />}
-              {isNegative && <TrendingDown size={10} className="sm:w-3 sm:h-3" />}
+              {isNegative && (
+                <TrendingDown size={10} className="sm:w-3 sm:h-3" />
+              )}
               <span>
-                {change > 0 ? '+' : ''}
+                {change > 0 ? "+" : ""}
                 {change.toFixed(1)}%
               </span>
             </div>
