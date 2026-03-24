@@ -1,5 +1,6 @@
 // Reports Page - Financial Analytics with Modern Design
 import React, { useState, useMemo } from "react";
+import PageHeader from "../components/PageHeader";
 import { useIsMobile } from "../hooks/useBreakpoint";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -642,7 +643,11 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-foreground">Financial Reports</h1>
+      <PageHeader
+        title="Reports"
+        description="Financial analytics and trends"
+        accentColor="border-l-cyan-500"
+      />
 
       <Tabs
         value={currentTab}

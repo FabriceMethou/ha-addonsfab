@@ -30,16 +30,10 @@ class TraccarClient:
     async def admin_session(self) -> httpx.AsyncClient:
         """Return an httpx client authenticated as the Traccar admin."""
         client = httpx.AsyncClient(base_url=self._base, timeout=_TIMEOUT)
-        # Establish a cookie-based session (required for write operations)
-        resp = await client.post(
-            "/api/session",
-            json={"token": self._admin_token},
-            headers={"Authorization": f"Bearer {self._admin_token}"},
-        )
+        resp = await client.get("/api/session", params={"token": self._admin_token})
         if resp.status_code not in (200, 201):
             await client.aclose()
             raise TraccarError(f"Admin session failed: {resp.status_code} {resp.text}")
-        # Re-attach the Bearer header for all subsequent requests
         client.headers.update({"Authorization": f"Bearer {self._admin_token}"})
         return client
 

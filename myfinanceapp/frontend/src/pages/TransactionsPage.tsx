@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import PageHeader from "../components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -745,15 +746,11 @@ export default function TransactionsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold text-foreground mb-2">
-          Transactions
-        </h1>
-        <p className="text-foreground-muted">
-          {totalTransactions} transaction{totalTransactions !== 1 ? "s" : ""} •
-          Track your financial activity
-        </p>
-      </div>
+      <PageHeader
+        title="Transactions"
+        description="All your financial transactions"
+        accentColor="border-l-rose-500"
+      />
 
       {/* Summary KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6">
