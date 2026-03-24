@@ -25,7 +25,8 @@ async def stream(
     session: dict = Depends(require_session),
 ) -> EventSourceResponse:
     return EventSourceResponse(
-        _event_generator(request, session["traccar_email"], session["traccar_password"])
+        _event_generator(request, session["traccar_email"], session["traccar_password"]),
+        headers={"X-Accel-Buffering": "no"},
     )
 
 
