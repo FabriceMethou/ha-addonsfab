@@ -132,7 +132,7 @@ function QuickAddDialog({
   });
 
   const { data: categories } = useQuery({
-    queryKey: ["categories"],
+    queryKey: ["transaction-types-quick"],
     queryFn: async () => {
       const r = await categoriesAPI.getTypes();
       return r.data.types || [];
