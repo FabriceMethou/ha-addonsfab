@@ -85,6 +85,20 @@ class TraccarClient:
         _raise_for_traccar(resp)
         return resp.json()
 
+    async def get_positions_history(
+        self,
+        client: httpx.AsyncClient,
+        device_id: int,
+        from_dt: str,
+        to_dt: str,
+    ) -> list[dict]:
+        resp = await client.get(
+            "/api/positions",
+            params={"deviceId": device_id, "from": from_dt, "to": to_dt},
+        )
+        _raise_for_traccar(resp)
+        return resp.json()
+
     async def get_users(self, client: httpx.AsyncClient) -> list[dict]:
         resp = await client.get("/api/users")
         _raise_for_traccar(resp)
