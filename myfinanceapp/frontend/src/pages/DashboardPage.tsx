@@ -974,35 +974,33 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {/* Spending Prediction - Kept from original */}
+      {/* Spending Prediction */}
       {spendingPrediction && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-5">
             <Lightbulb className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold text-foreground">
               Next Month Prediction
             </h2>
           </div>
-          <div className="flex flex-wrap items-center gap-6">
+
+          {/* Top row: total + meta badges */}
+          <div className="flex flex-wrap items-end gap-6 mb-5">
             <div>
-              <p className="text-3xl font-bold text-primary mb-2">
+              <p className="text-3xl font-bold text-primary">
                 {formatCurrency(spendingPrediction.predicted || 0)}
               </p>
-              <p className="text-sm text-foreground-muted">
-                Predicted spending for next month
+              <p className="text-xs text-foreground-muted mt-1">
+                {spendingPrediction.trend === "increasing"
+                  ? "↑ Trend: spending is increasing"
+                  : spendingPrediction.trend === "decreasing"
+                    ? "↓ Trend: spending is decreasing"
+                    : "→ Trend: stable"}
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 pb-1">
               <Badge variant="outline">
                 Base: {formatCurrency(spendingPrediction.base_prediction || 0)}
-              </Badge>
-              <Badge
-                variant={
-                  spendingPrediction.confidence > 0.7 ? "success" : "warning"
-                }
-              >
-                Confidence:{" "}
-                {Math.round((spendingPrediction.confidence || 0) * 100)}%
               </Badge>
               {spendingPrediction.recurring_amount > 0 && (
                 <Badge variant="outline">
@@ -1010,8 +1008,83 @@ export default function DashboardPage() {
                   {formatCurrency(spendingPrediction.recurring_amount)}
                 </Badge>
               )}
+              <Badge
+                variant={
+                  spendingPrediction.confidence > 0.7 ? "success" : "warning"
+                }
+              >
+                {Math.round((spendingPrediction.confidence || 0) * 100)}%
+                confidence
+              </Badge>
             </div>
           </div>
+
+          {/* Budget comparison */}
+          {spendingPrediction.budget_comparison?.has_budget && (
+            <div
+              className={`flex items-center justify-between px-4 py-3 rounded-lg mb-5 ${
+                spendingPrediction.budget_comparison.over_budget
+                  ? "bg-error/10 border border-error/20"
+                  : "bg-success/10 border border-success/20"
+              }`}
+            >
+              <span className="text-sm text-foreground">
+                {spendingPrediction.budget_comparison.over_budget
+                  ? `Over budget by ${formatCurrency(Math.abs(spendingPrediction.budget_comparison.difference))}`
+                  : `Within budget — ${formatCurrency(Math.abs(spendingPrediction.budget_comparison.difference))} to spare`}
+              </span>
+              <span
+                className={`text-sm font-semibold ${
+                  spendingPrediction.budget_comparison.over_budget
+                    ? "text-error"
+                    : "text-success"
+                }`}
+              >
+                {Math.round(
+                  spendingPrediction.budget_comparison.percentage || 0,
+                )}
+                % of budget
+              </span>
+            </div>
+          )}
+
+          {/* Category breakdown */}
+          {spendingPrediction.category_breakdown?.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-foreground-muted uppercase tracking-wide mb-3">
+                By category
+              </p>
+              <div className="space-y-2">
+                {spendingPrediction.category_breakdown
+                  .slice(0, 5)
+                  .map((cat: any) => {
+                    const pct =
+                      spendingPrediction.predicted > 0
+                        ? (cat.predicted / spendingPrediction.predicted) * 100
+                        : 0;
+                    return (
+                      <div
+                        key={cat.category}
+                        className="flex items-center gap-3"
+                      >
+                        <span className="text-sm text-foreground-muted w-28 truncate shrink-0">
+                          {cat.category}
+                        </span>
+                        <div className="flex-1 h-1.5 bg-surface rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-primary/60 rounded-full"
+                            style={{ width: `${Math.min(100, pct)}%` }}
+                          />
+                        </div>
+                        <span className="text-sm text-foreground w-20 text-right shrink-0">
+                          {formatCurrency(cat.predicted)}
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
         </Card>
       )}
 

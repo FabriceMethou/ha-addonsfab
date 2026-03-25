@@ -176,6 +176,9 @@ export default function TransactionsPage() {
   const formData = watch();
   const [autoCategorizingDescription, setAutoCategorizingDescription] =
     useState(false);
+  const [autoCategorizerConfidence, setAutoCategorizerConfidence] = useState<
+    number | null
+  >(null);
 
   const queryClient = useQueryClient();
 
@@ -342,6 +345,7 @@ export default function TransactionsPage() {
       queryClient.invalidateQueries({ queryKey: ["transactions-summary"] });
       queryClient.invalidateQueries({ queryKey: ["recipients"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
+      queryClient.invalidateQueries({ queryKey: ["spending-prediction"] });
     },
   });
 
@@ -428,6 +432,7 @@ export default function TransactionsPage() {
       queryClient.invalidateQueries({ queryKey: ["transactions-summary"] });
       queryClient.invalidateQueries({ queryKey: ["recipients"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
+      queryClient.invalidateQueries({ queryKey: ["spending-prediction"] });
     },
   });
 
@@ -482,6 +487,7 @@ export default function TransactionsPage() {
       queryClient.invalidateQueries({ queryKey: ["transactions"] });
       queryClient.invalidateQueries({ queryKey: ["accounts-summary"] });
       queryClient.invalidateQueries({ queryKey: ["transactions-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["spending-prediction"] });
     },
   });
 
@@ -502,6 +508,7 @@ export default function TransactionsPage() {
       transfer_amount: "",
       tags: currentValues.tags,
     });
+    setAutoCategorizerConfidence(null);
   };
 
   const resetFormCompletely = () => {
@@ -518,6 +525,7 @@ export default function TransactionsPage() {
       transfer_amount: "",
       tags: "",
     });
+    setAutoCategorizerConfidence(null);
   };
 
   const clearFilters = () => {
@@ -582,6 +590,7 @@ export default function TransactionsPage() {
     if (!textToAnalyze) return;
 
     setAutoCategorizingDescription(true);
+    setAutoCategorizerConfidence(null);
     try {
       const response = await transactionsAPI.autoCategorize(textToAnalyze);
       const data = response.data;
@@ -592,8 +601,8 @@ export default function TransactionsPage() {
           "subtype_id",
           data.subtype_id ? data.subtype_id.toString() : "",
         );
-        // Trigger validation after setting values
         trigger(["type_id", "subtype_id"]);
+        setAutoCategorizerConfidence(data.confidence ?? null);
       }
     } catch (error) {
       console.error("Auto-categorization failed:", error);
@@ -1482,6 +1491,25 @@ export default function TransactionsPage() {
                 </FormField>
               )}
 
+              {/* Auto-categorizer confidence feedback */}
+              {autoCategorizerConfidence !== null && (
+                <div className="sm:col-span-2 flex items-center gap-2 text-xs">
+                  <span className="text-foreground-muted">AI confidence:</span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full font-medium ${
+                      autoCategorizerConfidence >= 0.7
+                        ? "bg-success/15 text-success"
+                        : autoCategorizerConfidence >= 0.4
+                          ? "bg-warning/15 text-warning"
+                          : "bg-error/15 text-error"
+                    }`}
+                  >
+                    {Math.round(autoCategorizerConfidence * 100)}%
+                    {autoCategorizerConfidence < 0.4 && " — verify manually"}
+                  </span>
+                </div>
+              )}
+
               {/* Transfer Destination Account */}
               {isTransfer && (
                 <FormField
@@ -1564,7 +1592,8 @@ export default function TransactionsPage() {
                       variant="outline"
                       onClick={handleAutoCategorize}
                       disabled={
-                        !formData.recipient?.trim() ||
+                        (!formData.recipient?.trim() &&
+                          !formData.description?.trim()) ||
                         autoCategorizingDescription
                       }
                       className="shrink-0"

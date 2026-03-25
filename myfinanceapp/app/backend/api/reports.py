@@ -156,6 +156,63 @@ async def income_vs_expenses(
         "owner_id": owner_id
     }
 
+def _get_future_recurring_expenses(months_ahead: int = 1) -> list:
+    """Estimate recurring expense amounts expected in the target month."""
+    try:
+        from datetime import datetime
+        from dateutil.relativedelta import relativedelta
+
+        templates = db.get_recurring_templates(include_inactive=False)
+        target_start = (datetime.now() + relativedelta(months=months_ahead)).replace(day=1)
+        target_end = target_start + relativedelta(months=1) - relativedelta(days=1)
+
+        future = []
+        for t in templates:
+            if t.get('category') != 'expense':
+                continue
+
+            # Skip templates not active during target month
+            raw_start = t.get('start_date')
+            raw_end = t.get('end_date')
+            if raw_start:
+                try:
+                    if datetime.strptime(raw_start, '%Y-%m-%d') > target_end:
+                        continue
+                except ValueError:
+                    pass
+            if raw_end:
+                try:
+                    if datetime.strptime(raw_end, '%Y-%m-%d') < target_start:
+                        continue
+                except ValueError:
+                    pass
+
+            # Estimate how many times this template fires in one month
+            pattern = (t.get('recurrence_pattern') or 'monthly').lower()
+            interval = max(1, t.get('recurrence_interval') or 1)
+            amount = abs(t.get('amount') or 0)
+
+            occurrences_per_month = {
+                'daily': 30.44,
+                'weekly': 4.33,
+                'bi-weekly': 2.17,
+                'biweekly': 2.17,
+                'monthly': 1.0,
+                'quarterly': 1 / 3,
+                'yearly': 1 / 12,
+            }.get(pattern, 1.0) / interval
+
+            future.append({
+                'amount': amount * occurrences_per_month,
+                'category': 'expense',
+                'name': t.get('name', ''),
+            })
+
+        return future
+    except Exception:
+        return []
+
+
 @router.get("/spending-prediction")
 async def spending_prediction(
     months_ahead: int = 1,
@@ -163,14 +220,18 @@ async def spending_prediction(
 ):
     """Predict spending for upcoming months"""
     try:
-        # Get historical transactions
-        transactions = db.get_transactions()
+        # Use display currency to avoid mixing currencies in regression
+        display_currency = db.get_preference('display_currency', 'EUR')
 
-        # Get pending and future recurring transactions
+        # Use prediction-specific query: LEFT JOIN (includes transactions without subtype),
+        # filtered to display currency so amounts are comparable
+        transactions = db.get_transactions_for_prediction(months=24, currency=display_currency)
+
+        # Get pending transactions
         pending = db.get_pending_transactions()
 
-        # Get future recurring transactions (simplified - would need actual implementation)
-        future_recurring = []
+        # Get future recurring expenses estimated for the target month
+        future_recurring = _get_future_recurring_expenses(months_ahead)
 
         # Get active budgets
         budgets = db.get_budgets(include_inactive=False)
@@ -184,10 +245,11 @@ async def spending_prediction(
         )
 
         prediction = predictor.predict_monthly_spending(months_ahead=months_ahead)
+        category_breakdown = predictor.predict_category_spending()
 
         return {
             "months_ahead": months_ahead,
-            "prediction": prediction
+            "prediction": {**prediction, "category_breakdown": category_breakdown},
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")

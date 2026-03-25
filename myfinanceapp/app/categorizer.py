@@ -47,21 +47,39 @@ class TransactionCategorizer:
         y = []
 
         for txn in transactions:
-            if txn.get('type_id') and txn.get('description'):
-                X.append(self.preprocess_text(txn['description']))
-                # Create composite label: type_id:subtype_id
-                label = f"{txn['type_id']}:{txn.get('subtype_id', 0)}"
-                y.append(label)
+            if not txn.get('type_id'):
+                continue
+            # Combine recipient (destinataire) and description — recipient is the
+            # primary signal (merchant name); description is fallback/extra context.
+            # This matches exactly what the frontend sends to predict().
+            recipient = (txn.get('destinataire') or '').strip()
+            description = (txn.get('description') or '').strip()
+            text = f"{recipient} {description}".strip()
+            if not text:
+                continue
+            X.append(self.preprocess_text(text))
+            label = f"{txn['type_id']}:{txn.get('subtype_id', 0)}"
+            y.append(label)
 
-        if len(set(y)) < 2:
-            raise ValueError("Need at least 2 different categories to train")
+        unique_categories = set(y)
+        if len(unique_categories) < 2:
+            cat_list = ', '.join(unique_categories) if unique_categories else 'none'
+            raise ValueError(
+                f"Need at least 2 different categories to train. "
+                f"Found 1: {cat_list}. Add transactions with varied categories."
+            )
+
+        # min_df scales with dataset size: require a term to appear in at least
+        # 5% of documents (but minimum 1, maximum 5) so small datasets don't
+        # discard all merchant names while large datasets still filter noise.
+        adaptive_min_df = max(1, min(5, int(len(X) * 0.05)))
 
         # Build pipeline
         self.model = Pipeline([
             ('tfidf', TfidfVectorizer(
                 max_features=1000,
                 ngram_range=(1, 2),
-                min_df=2
+                min_df=adaptive_min_df
             )),
             ('clf', MultinomialNB(alpha=0.1))
         ])

@@ -21,10 +21,15 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
 DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 db = FinanceDatabase(db_path=DB_PATH)
-categorizer = TransactionCategorizer()
+CATEGORIZER_MODEL_PATH = os.path.join(PROJECT_ROOT, "data", "categorizer_model.pkl")
+categorizer = TransactionCategorizer(model_path=CATEGORIZER_MODEL_PATH)
+
+import threading
+# Prevents concurrent requests from training the categorizer simultaneously,
+# which would cause partial model file writes and potential corruption.
+_categorizer_train_lock = threading.Lock()
 
 # Alert deduplication: track sent alerts to avoid sending the same alert multiple times per day
-import threading
 _alert_lock = threading.Lock()
 _sent_alerts: set = set()
 
@@ -670,13 +675,14 @@ async def auto_categorize_transaction(
 ):
     """Auto-categorize a transaction based on description"""
     try:
-        # Train categorizer if not already trained
-        model_info = categorizer.get_model_info()
-        is_trained = model_info.get('trained', False)
-        if not is_trained:
-            transactions = db.get_transactions()  # Fixed: get_all_transactions doesn't exist
-            if len(transactions) > 10:  # Need minimum transactions to train
-                categorizer.train_model(transactions)
+        # Train categorizer if not already trained (lock prevents concurrent training)
+        if not categorizer.get_model_info().get('trained', False):
+            with _categorizer_train_lock:
+                # Re-check inside lock: another thread may have just finished training
+                if not categorizer.get_model_info().get('trained', False):
+                    transactions = db.get_transactions_for_prediction(months=0)
+                    if len(transactions) > 10:
+                        categorizer.train_model(transactions)
 
         # Predict category - returns (type_id, subtype_id, confidence)
         type_id, subtype_id, confidence = categorizer.predict(request.description)
@@ -721,21 +727,31 @@ async def auto_categorize_transaction(
 async def get_categorizer_status(current_user: User = Depends(get_current_user)):
     """Get categorizer model status and statistics"""
     try:
-        transactions = db.get_transactions()  # Fixed: get_all_transactions doesn't exist
-        categorized_txns = [t for t in transactions if t.get('type_id') and t.get('description')]
+        transactions = db.get_transactions_for_prediction(months=0)
+        categorized_txns = [
+            t for t in transactions
+            if t.get('type_id') and (t.get('destinataire') or t.get('description'))
+        ]
 
-        # Check if model file exists and get last modified time
-        import os
-        model_path = "data/categorizer_model.pkl"
-        model_exists = os.path.exists(model_path)
+        model_exists = os.path.exists(CATEGORIZER_MODEL_PATH)
         last_trained = None
+        new_since_training = 0
 
         if model_exists:
-            import time
-            mtime = os.path.getmtime(model_path)
+            mtime = os.path.getmtime(CATEGORIZER_MODEL_PATH)
             last_trained = datetime.fromtimestamp(mtime).isoformat()
+            # Count categorized transactions created after the model was last trained
+            trained_dt = datetime.fromtimestamp(mtime)
+            for t in categorized_txns:
+                raw_created = t.get('created_at')
+                if raw_created:
+                    try:
+                        created_dt = datetime.fromisoformat(str(raw_created).replace(' ', 'T'))
+                        if created_dt > trained_dt:
+                            new_since_training += 1
+                    except (ValueError, TypeError):
+                        pass
 
-        # Fixed: is_trained() method doesn't exist, use get_model_info() instead
         model_info = categorizer.get_model_info()
         is_trained = model_info.get('trained', False)
 
@@ -746,7 +762,8 @@ async def get_categorizer_status(current_user: User = Depends(get_current_user))
             "total_transactions": len(transactions),
             "categorized_transactions": len(categorized_txns),
             "ready_to_train": len(categorized_txns) >= 10,
-            "ml_available": categorizer.model is not None or model_exists
+            "ml_available": categorizer.model is not None or model_exists,
+            "new_since_training": new_since_training,
         }
     except Exception as e:
         raise HTTPException(
@@ -758,7 +775,8 @@ async def get_categorizer_status(current_user: User = Depends(get_current_user))
 async def train_categorizer(current_user: User = Depends(get_current_user)):
     """Train the transaction categorizer with existing data"""
     try:
-        transactions = db.get_transactions()  # Fixed: get_all_transactions doesn't exist
+        # Use prediction query: LEFT JOIN (includes all transactions) + destinataire field
+        transactions = db.get_transactions_for_prediction(months=0)
 
         if len(transactions) < 10:
             raise HTTPException(
@@ -766,8 +784,11 @@ async def train_categorizer(current_user: User = Depends(get_current_user)):
                 detail="Not enough transactions to train categorizer (minimum 10 required)"
             )
 
-        # Filter transactions with categories
-        categorized_txns = [t for t in transactions if t.get('type_id') and t.get('description')]
+        # Filter to transactions that have a category AND at least one text field
+        categorized_txns = [
+            t for t in transactions
+            if t.get('type_id') and (t.get('destinataire') or t.get('description'))
+        ]
 
         if len(categorized_txns) < 10:
             raise HTTPException(

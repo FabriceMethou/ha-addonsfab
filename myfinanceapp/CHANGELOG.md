@@ -1,7 +1,30 @@
 # Changelog
 
 ## 2.0.29
-- Improvement investment to name
+- Improvement investment allocation chart: display by name instead of symbol, labels shown directly on slices with leader lines (legend removed)
+
+### Auto-Categorize fixes
+- Training now uses `destinataire + description` concatenated — matches what the frontend sends at prediction time (was training on description only, predicting on recipient: field mismatch)
+- Training now uses `get_transactions_for_prediction()` (LEFT JOIN on subtypes) instead of `get_transactions()` (INNER JOIN) — transactions without a subcategory were silently excluded from training
+- `type_id` and `subtype_id` added to `get_transactions_for_prediction()` SELECT — were missing, causing all training rows to be skipped silently
+- Fixed `months=0` option to retrieve full transaction history for training (previously always limited to 6 months)
+- Added threading lock around lazy training to prevent race condition and model file corruption under concurrent requests
+- Adaptive `min_df` in TfidfVectorizer (5% of corpus, capped 1–5) — fixed-value `min_df=2` was discarding most merchant names in small datasets
+- Model path now uses absolute `PROJECT_ROOT` path instead of relative `"data/categorizer_model.pkl"`
+- Categorizer status endpoint now returns `new_since_training` count; Settings page shows a staleness warning when >50 new categorized transactions have been added since last training
+- Auto-categorize button now enables when recipient OR description is filled (was requiring recipient only)
+- Confidence badge displayed after auto-categorize fills category fields (green ≥70%, amber ≥40%, red <40%)
+- All transaction mutations (create, update, delete) now invalidate the `spending-prediction` cache
+
+### Spending Prediction fixes
+- Fixed critical sign bug: expenses stored as negative amounts were hitting `max(0, base_prediction)` and returning 0 — switched to `abs()` throughout (`predict_monthly_spending`, `predict_category_spending`, `detect_anomalies`, `get_spending_forecast`)
+- `future_recurring` was hardcoded `[]` — now queries active recurring expense templates and estimates next-month amounts by recurrence pattern (daily/weekly/bi-weekly/monthly/quarterly/yearly)
+- Prediction now filters to display currency before regression — was mixing EUR/DKK/etc amounts as raw numbers
+- Division-by-zero guard added to linear regression denominator
+- Explicit low-confidence values for 1-month (0.1) and 2-month (0.2) datasets instead of implicit 0.3
+- Budget comparison `percentage` returns `null` when total_budget is 0 (was returning contradictory `over_budget: true` + `percentage: 0`)
+- Dashboard prediction card now shows trend direction, budget comparison bar (green/red), and top-5 category breakdown with progress bars
+- Category breakdown (`predict_category_spending`) now included in prediction API response
 
 ## 2.0.28
 - UI improvements: sidebar navigation grouping, notification bell in header, global quick-add transaction button, dashboard month navigator, shared components (KPICard, PageHeader, EmptyState, QueryError), chart context stats, stronger card contrast, locale-aware currency formatting
