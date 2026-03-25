@@ -2,7 +2,7 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.config import settings
@@ -24,10 +24,32 @@ class ProvisionResponse(BaseModel):
 
 
 @router.post("/provision", response_model=ProvisionResponse, status_code=201)
-async def provision(req: ProvisionRequest) -> ProvisionResponse:
+async def provision(req: ProvisionRequest, request: Request) -> ProvisionResponse:
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
+    logger.info(
+        "PROVISION REQUEST — name=%r  device_id=%r  ip=%s",
+        req.display_name,
+        req.device_unique_id,
+        client_ip,
+    )
     try:
-        return await _provision(req.display_name, req.device_unique_id)
+        response = await _provision(req.display_name, req.device_unique_id)
+        logger.info(
+            "PROVISION OK — name=%r  device_id=%r  ip=%s  token=%s",
+            req.display_name,
+            req.device_unique_id,
+            client_ip,
+            response.device_token,
+        )
+        return response
     except TraccarError as exc:
+        logger.warning(
+            "PROVISION FAILED — name=%r  device_id=%r  ip=%s  error=%s",
+            req.display_name,
+            req.device_unique_id,
+            client_ip,
+            exc,
+        )
         _http_error_from_traccar(exc)
 
 

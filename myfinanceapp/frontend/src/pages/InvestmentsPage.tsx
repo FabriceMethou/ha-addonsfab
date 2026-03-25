@@ -1085,14 +1085,14 @@ export default function InvestmentsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
             <h2 className="text-lg font-semibold text-foreground mb-4">
-              Allocation by Symbol
+              Allocation by Name
             </h2>
-            <ResponsiveContainer width="100%" height={350}>
-              <PieChart>
+            <ResponsiveContainer width="100%" height={420}>
+              <PieChart margin={{ top: 20, right: 60, bottom: 20, left: 60 }}>
                 <Pie
                   data={holdingsData.map((holding: any, index: number) => ({
                     key: `pie-data-${index}`,
-                    name: holding.symbol,
+                    name: holding.name || holding.symbol,
                     value:
                       holding.current_value ||
                       holding.quantity *
@@ -1102,10 +1102,11 @@ export default function InvestmentsPage() {
                   nameKey="name"
                   cx="50%"
                   cy="50%"
-                  outerRadius={100}
+                  outerRadius={110}
                   label={(entry) =>
-                    `${entry.name}: ${percentOf(entry.value, totalValue)}%`
+                    `${entry.name} ${percentOf(entry.value, totalValue)}%`
                   }
+                  labelLine={true}
                 >
                   {holdingsData.map((_holding: any, index: number) => (
                     <Cell
@@ -1114,8 +1115,12 @@ export default function InvestmentsPage() {
                     />
                   ))}
                 </Pie>
-                <Tooltip formatter={(value: any) => formatCurrency(value)} />
-                <Legend />
+                <Tooltip
+                  formatter={(value: any, name: string) => [
+                    `${formatCurrency(value)} (${percentOf(value, totalValue)}%)`,
+                    name,
+                  ]}
+                />
               </PieChart>
             </ResponsiveContainer>
           </Card>
