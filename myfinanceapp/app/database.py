@@ -6004,11 +6004,11 @@ class FinanceDatabase:
         conn.close()
         return data
     # ==================== Machine Learning====================
-    def get_transactions_for_prediction(self, months: int = 6, currency: str = None) -> List[Dict]:
+    def get_transactions_for_prediction(self, months: int = 24, currency: str = None) -> List[Dict]:
         """Get transactions with full details for prediction analysis.
 
         Args:
-            months: Number of months of history to retrieve
+            months: Number of months of history to retrieve. 0 or None = all history.
             currency: Filter transactions by currency (e.g., 'EUR', 'DKK'). If None, returns all currencies.
         """
         conn = self._get_connection()
@@ -6020,16 +6020,24 @@ class FinanceDatabase:
                 t.amount,
                 t.currency,
                 t.description,
+                t.destinataire,
+                t.created_at,
+                t.type_id,
+                t.subtype_id,
                 tt.name as type_name,
                 tt.category,
                 ts.name as subtype_name
             FROM transactions t
             JOIN transaction_types tt ON t.type_id = tt.id
             LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
-            WHERE transaction_date >= date('now', ?)
+            WHERE 1=1
         """
 
-        params = [f'-{months} months']
+        params = []
+
+        if months:
+            query += " AND transaction_date >= date('now', ?)"
+            params.append(f'-{months} months')
 
         # Filter by currency if specified
         if currency:
