@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS device_groups (
 );
 """
 
+CREATE_WIFI_MAPPINGS = """
+CREATE TABLE IF NOT EXISTS wifi_mappings (
+    ssid     TEXT PRIMARY KEY,
+    place_id INTEGER NOT NULL
+);
+"""
+
 
 async def init_db() -> None:
     async with aiosqlite.connect(_DB_PATH) as db:
@@ -68,6 +75,7 @@ async def init_db() -> None:
 
         await db.execute(CREATE_GROUPS)
         await db.execute(CREATE_DEVICE_GROUPS)
+        await db.execute(CREATE_WIFI_MAPPINGS)
         await db.commit()
 
 
@@ -204,3 +212,35 @@ async def get_devices_in_group(group_id: int) -> list[str]:
             (group_id,),
         ) as cur:
             return [row[0] async for row in cur]
+
+
+# ------------------------------------------------------------------
+# WiFi-to-place mapping helpers
+# ------------------------------------------------------------------
+
+async def list_wifi_mappings() -> list[dict]:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT ssid, place_id FROM wifi_mappings") as cur:
+            return [dict(row) async for row in cur]
+
+
+async def upsert_wifi_mapping(ssid: str, place_id: int) -> None:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO wifi_mappings (ssid, place_id) VALUES (?, ?)
+            ON CONFLICT(ssid) DO UPDATE SET place_id = excluded.place_id
+            """,
+            (ssid, place_id),
+        )
+        await db.commit()
+
+
+async def delete_wifi_mapping(ssid: str) -> bool:
+    async with aiosqlite.connect(_DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM wifi_mappings WHERE ssid = ?", (ssid,)
+        )
+        await db.commit()
+        return cur.rowcount > 0
