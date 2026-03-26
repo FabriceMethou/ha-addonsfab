@@ -1,6 +1,6 @@
 name: "MyLife360 Backend"
 description: "Mobile API backend for MyLife360 family tracking app"
-version: "1.0.6"
+version: "1.0.7"
 slug: "mylife360_backend"
 init: false
 arch:
@@ -17,11 +17,13 @@ panel_icon: mdi:map-marker-account
 panel_title: "MyLife360"
 options:
   traccar_url: "http://192.168.2.243:30206"
+  traccar_osmand_url: "https://mm3fr1f5g4jsm9ha7f679da9g1osmand.holostorage.net"
   traccar_admin_token: ""
   traccar_admin_user_id: 1
   log_level: "info"
 schema:
   traccar_url: str
+  traccar_osmand_url: str
   traccar_admin_token: str
   traccar_admin_user_id: int
   log_level: "list(debug|info|warning|error)"
