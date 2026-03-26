@@ -92,7 +92,8 @@ async def _run_provision(
         device_unique_id=device_unique_id,
     )
 
-    return ProvisionResponse(device_token=token, tracking_url=settings.traccar_url)
+    tracking_url = settings.traccar_osmand_url or settings.traccar_url
+    return ProvisionResponse(device_token=token, tracking_url=tracking_url)
 
 
 def _find_by_unique_id(devices: list[dict], unique_id: str) -> dict | None:
