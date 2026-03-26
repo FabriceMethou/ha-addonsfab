@@ -78,6 +78,14 @@ async def ws_reader_loop() -> None:
                     pass
 
 
+@router.post("/request-status", status_code=204)
+async def request_status(session: dict = Depends(require_session)) -> None:
+    """Broadcasts a status_request to all SSE-connected devices.
+    Called when a device opens the app so every other device immediately
+    reports its current position and battery level."""
+    await bus.publish(json.dumps({"type": "status_request"}))
+
+
 @router.get("/stream")
 async def stream(
     request: Request,
