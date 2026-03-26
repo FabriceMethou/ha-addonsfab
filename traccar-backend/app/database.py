@@ -214,6 +214,21 @@ async def get_devices_in_group(group_id: int) -> list[str]:
             return [row[0] async for row in cur]
 
 
+async def get_traccar_ids_for_unique_ids(unique_ids: list[str]) -> list[int]:
+    """Resolves device_unique_ids → traccar_device_id via the device_sessions table."""
+    if not unique_ids:
+        return []
+    async with aiosqlite.connect(_DB_PATH) as db:
+        placeholders = ",".join("?" for _ in unique_ids)
+        async with db.execute(
+            f"SELECT device_unique_id, traccar_device_id FROM device_sessions"
+            f" WHERE device_unique_id IN ({placeholders})",
+            unique_ids,
+        ) as cur:
+            id_map = {row[0]: row[1] async for row in cur}
+    return [id_map[uid] for uid in unique_ids if uid in id_map]
+
+
 # ------------------------------------------------------------------
 # WiFi-to-place mapping helpers
 # ------------------------------------------------------------------

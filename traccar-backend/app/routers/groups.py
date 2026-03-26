@@ -45,7 +45,14 @@ async def delete_group(group_id: int, session: dict = Depends(require_session)):
 
 @router.get("/{group_id}/members")
 async def list_members(group_id: int, session: dict = Depends(require_session)):
-    return {"device_unique_ids": await db.get_devices_in_group(group_id)}
+    unique_ids = await db.get_devices_in_group(group_id)
+    traccar_ids = await db.get_traccar_ids_for_unique_ids(unique_ids)
+    # device_ids returned as strings for compatibility with the app's
+    # Map<String, List<String>> response type.
+    return {
+        "device_unique_ids": unique_ids,
+        "device_ids": [str(tid) for tid in traccar_ids],
+    }
 
 
 @router.post("/{group_id}/members", status_code=204)
