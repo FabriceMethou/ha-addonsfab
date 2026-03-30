@@ -576,12 +576,6 @@ export default function TransactionsPage() {
   );
   const isTransfer = selectedType?.category === "transfer";
 
-  // Accounts filtered by selected owner in the form
-  const filteredFormAccounts = selectedFormOwner
-    ? accountsData?.filter(
-        (a: any) => a.owner_id.toString() === selectedFormOwner,
-      )
-    : accountsData;
 
   const sourceAccount = accountsData?.find(
     (a: any) => a.id === parseInt(formData.account_id || "0"),
@@ -1379,28 +1373,13 @@ export default function TransactionsPage() {
               <FormField label="Owner" className="sm:col-span-1">
                 <Select
                   value={selectedFormOwner}
-                  onValueChange={(value) => {
-                    setSelectedFormOwner(value);
-                    // Clear account if it doesn't belong to the new owner
-                    const currentAccountId = parseInt(watch("account_id") || "0");
-                    if (currentAccountId) {
-                      const currentAccount = accountsData?.find(
-                        (a: any) => a.id === currentAccountId,
-                      );
-                      if (
-                        value &&
-                        currentAccount?.owner_id?.toString() !== value
-                      ) {
-                        setValue("account_id", "");
-                      }
-                    }
-                  }}
+                  onValueChange={setSelectedFormOwner}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="All owners" />
+                    <SelectValue placeholder="Select owner" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All owners</SelectItem>
+                    <SelectItem value="">None (account's owner)</SelectItem>
                     {ownersData?.map((owner: any) => (
                       <SelectItem key={owner.id} value={owner.id.toString()}>
                         {owner.name}
@@ -1428,7 +1407,7 @@ export default function TransactionsPage() {
                         <SelectValue placeholder="Select account" />
                       </SelectTrigger>
                       <SelectContent>
-                        {filteredFormAccounts?.map((account: any) => (
+                        {accountsData?.map((account: any) => (
                           <SelectItem
                             key={account.id}
                             value={account.id.toString()}
