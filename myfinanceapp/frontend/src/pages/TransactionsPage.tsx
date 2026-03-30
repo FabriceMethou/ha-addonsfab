@@ -550,9 +550,9 @@ export default function TransactionsPage() {
 
   const handleEdit = (transaction: any) => {
     setEditingTransaction(transaction);
-    // Pre-select the owner based on the transaction's account
-    const account = accountsData?.find((a: any) => a.id === transaction.account_id);
-    setSelectedFormOwner(account?.owner_id?.toString() || "");
+    // Pre-select the owner: prefer explicit transaction owner_id, fall back to account's owner
+    const effectiveOwnerId = transaction.owner_id ?? transaction.effective_owner_id;
+    setSelectedFormOwner(effectiveOwnerId?.toString() || "");
     resetForm({
       account_id: transaction.account_id.toString(),
       date: transaction.date || format(new Date(), "yyyy-MM-dd"),
@@ -645,6 +645,7 @@ export default function TransactionsPage() {
           : null,
       is_pending: false,
       tags: formValues.tags || null,
+      owner_id: selectedFormOwner ? parseInt(selectedFormOwner) : null,
     };
 
     if (editingTransaction) {

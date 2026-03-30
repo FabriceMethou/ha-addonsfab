@@ -65,6 +65,7 @@ class TransactionCreate(BaseModel):
     transfer_amount: Optional[float] = None
     is_pending: bool = False
     tags: Optional[str] = None
+    owner_id: Optional[int] = None  # Override owner; None = inherit from account
 
 class TransactionUpdate(BaseModel):
     account_id: Optional[int] = None
@@ -79,6 +80,7 @@ class TransactionUpdate(BaseModel):
     transfer_amount: Optional[float] = None
     is_pending: Optional[bool] = None
     tags: Optional[str] = None
+    owner_id: Optional[int] = None  # Override owner; None = inherit from account
 
 class TransactionFilter(BaseModel):
     account_id: Optional[int] = None
@@ -241,6 +243,7 @@ async def create_transaction(
             'is_transfer': is_transfer,  # Auto-detected: True when it's a transfer with destination
             'confirmed': not transaction.is_pending,  # Inverted: pending=True means confirmed=False
             'tags': transaction.tags,
+            'owner_id': transaction.owner_id,  # None = inherit from account
         }
         transaction_id = db.add_transaction(transaction_data)
 
@@ -398,6 +401,7 @@ async def create_transactions_bulk(
                 'is_transfer': is_transfer,  # Auto-detected: True when it's a transfer with destination
                 'confirmed': not transaction.is_pending,  # Inverted: pending=True means confirmed=False
                 'tags': transaction.tags,
+                'owner_id': transaction.owner_id,  # None = inherit from account
             }
             transaction_id = db.add_transaction(transaction_data)
 
