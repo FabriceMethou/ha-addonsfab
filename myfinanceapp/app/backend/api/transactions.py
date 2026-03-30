@@ -624,7 +624,7 @@ async def get_transaction_summary_by_owner(
             SUM(CASE WHEN t.amount < 0 AND tt.category != 'transfer' THEN ABS(t.amount) ELSE 0 END) as expense
         FROM transactions t
         JOIN accounts a ON t.account_id = a.id
-        JOIN owners o ON a.owner_id = o.id
+        JOIN owners o ON COALESCE(t.owner_id, a.owner_id) = o.id
         JOIN transaction_types tt ON t.type_id = tt.id
         WHERE t.confirmed = 1
     """
