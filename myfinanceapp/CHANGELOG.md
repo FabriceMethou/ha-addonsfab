@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.30
+- Transaction form: added Owner selector above the Account dropdown — selecting an owner filters the account list to only show accounts belonging to that owner; clears the account field if the selected account no longer matches the chosen owner; pre-fills the owner when editing an existing transaction
+
 ## 2.0.29
 - Improvement investment allocation chart: display by name instead of symbol, labels shown directly on slices with leader lines (legend removed)
 

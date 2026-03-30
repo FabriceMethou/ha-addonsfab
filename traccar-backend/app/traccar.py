@@ -162,6 +162,25 @@ class TraccarClient:
         _raise_for_traccar(resp)
         return resp.json()
 
+    async def create_geofence(
+        self,
+        client: httpx.AsyncClient,
+        name: str,
+        area: str,
+    ) -> dict:
+        """Create a geofence on Traccar. area should be a WKT string, e.g. CIRCLE(lat lon, radius)."""
+        resp = await client.post("/api/geofences", json={"name": name, "area": area})
+        _raise_for_traccar(resp)
+        return resp.json()
+
+    async def delete_geofence(
+        self,
+        client: httpx.AsyncClient,
+        geofence_id: int,
+    ) -> None:
+        resp = await client.delete(f"/api/geofences/{geofence_id}")
+        _raise_for_traccar(resp)
+
     async def link_permission(
         self,
         client: httpx.AsyncClient,

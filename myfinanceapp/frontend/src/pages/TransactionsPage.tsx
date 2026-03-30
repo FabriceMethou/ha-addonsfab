@@ -104,6 +104,7 @@ export default function TransactionsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  const [selectedFormOwner, setSelectedFormOwner] = useState<string>("");
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -525,6 +526,7 @@ export default function TransactionsPage() {
       transfer_amount: "",
       tags: "",
     });
+    setSelectedFormOwner("");
     setAutoCategorizerConfidence(null);
   };
 
@@ -548,6 +550,9 @@ export default function TransactionsPage() {
 
   const handleEdit = (transaction: any) => {
     setEditingTransaction(transaction);
+    // Pre-select the owner based on the transaction's account
+    const account = accountsData?.find((a: any) => a.id === transaction.account_id);
+    setSelectedFormOwner(account?.owner_id?.toString() || "");
     resetForm({
       account_id: transaction.account_id.toString(),
       date: transaction.date || format(new Date(), "yyyy-MM-dd"),
@@ -570,6 +575,13 @@ export default function TransactionsPage() {
     (c: any) => c.id === parseInt(formData.type_id || "0"),
   );
   const isTransfer = selectedType?.category === "transfer";
+
+  // Accounts filtered by selected owner in the form
+  const filteredFormAccounts = selectedFormOwner
+    ? accountsData?.filter(
+        (a: any) => a.owner_id.toString() === selectedFormOwner,
+      )
+    : accountsData;
 
   const sourceAccount = accountsData?.find(
     (a: any) => a.id === parseInt(formData.account_id || "0"),
@@ -1362,12 +1374,47 @@ export default function TransactionsPage() {
           </DialogHeader>
           <form onSubmit={handleFormSubmit(onSubmit)}>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
+              {/* Owner Field */}
+              <FormField label="Owner" className="sm:col-span-1">
+                <Select
+                  value={selectedFormOwner}
+                  onValueChange={(value) => {
+                    setSelectedFormOwner(value);
+                    // Clear account if it doesn't belong to the new owner
+                    const currentAccountId = parseInt(watch("account_id") || "0");
+                    if (currentAccountId) {
+                      const currentAccount = accountsData?.find(
+                        (a: any) => a.id === currentAccountId,
+                      );
+                      if (
+                        value &&
+                        currentAccount?.owner_id?.toString() !== value
+                      ) {
+                        setValue("account_id", "");
+                      }
+                    }
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="All owners" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">All owners</SelectItem>
+                    {ownersData?.map((owner: any) => (
+                      <SelectItem key={owner.id} value={owner.id.toString()}>
+                        {owner.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FormField>
+
               {/* Account Field */}
               <FormField
                 label="Account"
                 required
                 error={errors.account_id?.message}
-                className="sm:col-span-2"
+                className="sm:col-span-1"
               >
                 <Controller
                   name="account_id"
@@ -1380,7 +1427,7 @@ export default function TransactionsPage() {
                         <SelectValue placeholder="Select account" />
                       </SelectTrigger>
                       <SelectContent>
-                        {accountsData?.map((account: any) => (
+                        {filteredFormAccounts?.map((account: any) => (
                           <SelectItem
                             key={account.id}
                             value={account.id.toString()}
