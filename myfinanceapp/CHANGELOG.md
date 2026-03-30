@@ -1,7 +1,10 @@
 # Changelog
 
-## 2.0.30
-- Transaction form: added Owner selector above the Account dropdown — selecting an owner filters the account list to only show accounts belonging to that owner; clears the account field if the selected account no longer matches the chosen owner; pre-fills the owner when editing an existing transaction
+## 2.0.31
+- Transaction form: added Owner selector — transactions can now be assigned to any owner independently of the account's owner; the owner selector filters the account list for convenience but is not restricted by it
+- Database: added nullable `owner_id` column to `transactions` table (auto-migrated on startup); existing transactions inherit their owner from the account via `COALESCE(t.owner_id, a.owner_id)`
+- API: `TransactionCreate` and `TransactionUpdate` now accept an optional `owner_id` field; `GET /transactions` owner filter now matches on the effective owner (transaction's own or account's)
+- Frontend: owner selector in the create/edit form is independent — selecting an owner filters the account dropdown but does not prevent choosing an account from a different owner; pre-fills correctly when editing
 
 ## 2.0.29
 - Improvement investment allocation chart: display by name instead of symbol, labels shown directly on slices with leader lines (legend removed)

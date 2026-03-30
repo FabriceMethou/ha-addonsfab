@@ -909,6 +909,14 @@ class FinanceDatabase:
                 cursor.execute("ALTER TABLE debt_payments ADD COLUMN notes TEXT")
                 logger.info("Added notes column to debt_payments table")
 
+            # Migration: Add owner_id column to transactions if missing
+            # Nullable — NULL means the transaction inherits the owner of its account
+            cursor.execute("PRAGMA table_info(transactions)")
+            t_columns = [col[1] for col in cursor.fetchall()]
+            if 'owner_id' not in t_columns:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN owner_id INTEGER REFERENCES owners(id)")
+                logger.info("Added owner_id column to transactions table")
+
             # Migration: Reclassify 'Investments' transaction type from 'expense' to 'transfer'.
             # Investment purchases are wealth conversion (cash → securities), not consumption.
             # This prevents buy transactions from inflating Monthly Expenses on the dashboard.
@@ -2392,8 +2400,8 @@ class FinanceDatabase:
             INSERT INTO transactions
             (account_id, transaction_date, due_date, amount, currency, description,
              destinataire, type_id, subtype_id, tags, transfer_account_id,
-             is_transfer, linked_transfer_id, is_duplicate_flag, recurring_template_id, confirmed, is_historical, transfer_amount)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             is_transfer, linked_transfer_id, is_duplicate_flag, recurring_template_id, confirmed, is_historical, transfer_amount, owner_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             transaction_data['account_id'],
             transaction_data['transaction_date'],
@@ -2412,7 +2420,8 @@ class FinanceDatabase:
             transaction_data.get('recurring_template_id'),
             transaction_data.get('confirmed', True),
             is_historical,
-            transaction_data.get('transfer_amount')
+            transaction_data.get('transfer_amount'),
+            transaction_data.get('owner_id')
         ))
 
         transaction_id = cursor.lastrowid
@@ -2519,7 +2528,8 @@ class FinanceDatabase:
                    ts.name as subtype_name,
                    a.name as account_name, a.account_type, a.currency as account_currency,
                    b.name as bank_name,
-                   o.name as owner_name,
+                   COALESCE(t.owner_id, a.owner_id) as effective_owner_id,
+                   COALESCE(ot.name, o.name) as owner_name,
                    ta.name as transfer_account_name, ta.account_type as transfer_account_type,
                    tb.name as transfer_bank_name
             FROM transactions t
@@ -2528,6 +2538,7 @@ class FinanceDatabase:
             JOIN accounts a ON t.account_id = a.id
             LEFT JOIN banks b ON a.bank_id = b.id
             JOIN owners o ON a.owner_id = o.id
+            LEFT JOIN owners ot ON t.owner_id = ot.id
             LEFT JOIN accounts ta ON t.transfer_account_id = ta.id
             LEFT JOIN banks tb ON ta.bank_id = tb.id
             WHERE 1=1
@@ -2554,7 +2565,7 @@ class FinanceDatabase:
                 query += " AND t.tags LIKE ?"
                 params.append(f"%{filters['tags']}%")
             if 'owner_id' in filters:
-                query += " AND a.owner_id = ?"
+                query += " AND COALESCE(t.owner_id, a.owner_id) = ?"
                 params.append(filters['owner_id'])
             if 'transfer_account_id' in filters:
                 query += " AND t.transfer_account_id = ?"
@@ -2598,7 +2609,7 @@ class FinanceDatabase:
                 query += " AND t.type_id = ?"
                 params.append(filters['type_id'])
             if 'owner_id' in filters:
-                query += " AND a.owner_id = ?"
+                query += " AND COALESCE(t.owner_id, a.owner_id) = ?"
                 params.append(filters['owner_id'])
             if 'destinataire' in filters:
                 query += " AND t.destinataire = ?"
@@ -2623,7 +2634,8 @@ class FinanceDatabase:
                    ts.name as subtype_name,
                    a.name as account_name, a.account_type, a.currency as account_currency,
                    b.name as bank_name,
-                   o.name as owner_name,
+                   COALESCE(t.owner_id, a.owner_id) as effective_owner_id,
+                   COALESCE(ot.name, o.name) as owner_name,
                    ta.name as transfer_account_name, ta.account_type as transfer_account_type,
                    tb.name as transfer_bank_name
             FROM transactions t
@@ -2632,6 +2644,7 @@ class FinanceDatabase:
             JOIN accounts a ON t.account_id = a.id
             LEFT JOIN banks b ON a.bank_id = b.id
             JOIN owners o ON a.owner_id = o.id
+            LEFT JOIN owners ot ON t.owner_id = ot.id
             LEFT JOIN accounts ta ON t.transfer_account_id = ta.id
             LEFT JOIN banks tb ON ta.bank_id = tb.id
             WHERE t.id = ?
@@ -2668,7 +2681,7 @@ class FinanceDatabase:
             'account_id', 'transaction_date', 'due_date', 'amount', 'type_id', 'subtype_id',
             'description', 'destinataire', 'tags', 'confirmed', 'is_transfer',
             'transfer_account_id', 'transfer_amount', 'linked_transfer_id', 'is_historical', 'notes',
-            'currency', 'original_amount', 'original_currency', 'exchange_rate'
+            'currency', 'original_amount', 'original_currency', 'exchange_rate', 'owner_id'
         }
         updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
         if not updates:
