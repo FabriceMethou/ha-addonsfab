@@ -873,7 +873,7 @@ async def get_all_tags(
 
 @router.get("/recipients/all")
 async def get_all_recipients(
-    limit: int = Query(100, le=500),
+    limit: int = Query(500, le=1000),
     current_user: User = Depends(get_current_user)
 ):
     """Get all distinct recipients/payers from transactions"""
