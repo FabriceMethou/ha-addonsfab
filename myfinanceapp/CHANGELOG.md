@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.34
+- Moved the user management to the security page
+
+
 ## 2.0.33
 - Fix Bugs
 
