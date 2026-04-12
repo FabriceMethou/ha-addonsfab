@@ -1,7 +1,7 @@
 // Security Page - MFA, User Management, and Audit Logs
-import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useToast } from '../contexts/ToastContext';
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "../contexts/ToastContext";
 import {
   Card,
   Button,
@@ -24,7 +24,7 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
-} from '../components/shadcn';
+} from "../components/shadcn";
 import {
   Shield,
   KeyRound,
@@ -33,48 +33,47 @@ import {
   History,
   UserPlus,
   Trash2,
-} from 'lucide-react';
-import { authAPI } from '../services/api';
-import { useAuth } from '../contexts/AuthContext';
-import { format } from 'date-fns';
+} from "lucide-react";
+import { authAPI } from "../services/api";
+import { useAuth } from "../contexts/AuthContext";
+import { format } from "date-fns";
 
 export default function SecurityPage() {
   const { user } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [tabValue, setTabValue] = useState('mfa');
+  const [tabValue, setTabValue] = useState("mfa");
 
   // MFA State
   const [mfaSetupDialog, setMfaSetupDialog] = useState(false);
-  const [mfaSecret, setMfaSecret] = useState('');
-  const [mfaQRCode, setMfaQRCode] = useState('');
-  const [mfaVerifyToken, setMfaVerifyToken] = useState('');
+  const [mfaSecret, setMfaSecret] = useState("");
+  const [mfaQRCode, setMfaQRCode] = useState("");
+  const [mfaVerifyToken, setMfaVerifyToken] = useState("");
   const [disableMfaConfirm, setDisableMfaConfirm] = useState(false);
 
   // User Management State
   const [userDialog, setUserDialog] = useState(false);
   const [newUserForm, setNewUserForm] = useState({
-    username: '',
-    password: '',
+    username: "",
+    password: "",
     is_admin: false,
   });
   const [, setDeleteUserConfirm] = useState<any>(null);
 
   // Fetch users (admin only)
-  const { data: usersData = { users: [] } } = useQuery({
-    queryKey: ['users'],
+  const { data: usersData = [] } = useQuery({
+    queryKey: ["users"],
     queryFn: async () => {
-      if (!user?.is_admin) return { users: [] };
+      if (!user?.is_admin) return [];
       const response = await authAPI.listUsers();
-      return { users: response.data.users || [] };
+      return response.data.users || [];
     },
     enabled: !!user?.is_admin,
-    initialData: { users: [] },
   });
 
   // Fetch login history
   const { data: loginHistoryData = [] } = useQuery({
-    queryKey: ['login-history'],
+    queryKey: ["login-history"],
     queryFn: async () => {
       const response = await authAPI.getLoginHistory();
       return response.data.history || [];
@@ -91,8 +90,9 @@ export default function SecurityPage() {
       setMfaSetupDialog(true);
     },
     onError: (error: any) => {
-      console.error('Failed to setup MFA:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to setup MFA:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to setup MFA: ${errorMessage}`);
     },
   });
@@ -101,14 +101,17 @@ export default function SecurityPage() {
   const enableMFAMutation = useMutation({
     mutationFn: (token: string) => authAPI.enableMFA(token),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['current-user'] });
+      queryClient.invalidateQueries({ queryKey: ["current-user"] });
       setMfaSetupDialog(false);
-      setMfaVerifyToken('');
-      toast.success('MFA enabled successfully!');
+      setMfaVerifyToken("");
+      toast.success("MFA enabled successfully!");
     },
     onError: (error: any) => {
-      console.error('Failed to enable MFA:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Invalid verification code';
+      console.error("Failed to enable MFA:", error);
+      const errorMessage =
+        error.response?.data?.detail ||
+        error.message ||
+        "Invalid verification code";
       toast.error(`Failed to enable MFA: ${errorMessage}`);
     },
   });
@@ -117,12 +120,13 @@ export default function SecurityPage() {
   const disableMFAMutation = useMutation({
     mutationFn: () => authAPI.disableMFA(),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['current-user'] });
-      toast.success('MFA disabled successfully');
+      queryClient.invalidateQueries({ queryKey: ["current-user"] });
+      toast.success("MFA disabled successfully");
     },
     onError: (error: any) => {
-      console.error('Failed to disable MFA:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to disable MFA:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to disable MFA: ${errorMessage}`);
     },
   });
@@ -131,14 +135,15 @@ export default function SecurityPage() {
   const createUserMutation = useMutation({
     mutationFn: (data: any) => authAPI.registerUser(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
       setUserDialog(false);
-      setNewUserForm({ username: '', password: '', is_admin: false });
-      toast.success('User created successfully!');
+      setNewUserForm({ username: "", password: "", is_admin: false });
+      toast.success("User created successfully!");
     },
     onError: (error: any) => {
-      console.error('Failed to create user:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Unknown error';
+      console.error("Failed to create user:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
       toast.error(`Failed to create user: ${errorMessage}`);
     },
   });
@@ -164,40 +169,48 @@ export default function SecurityPage() {
 
   const handleCreateUser = () => {
     if (!newUserForm.username || !newUserForm.password) {
-      toast.error('Username and password are required');
+      toast.error("Username and password are required");
       return;
     }
     if (newUserForm.password.length < 6) {
-      toast.error('Password must be at least 6 characters');
+      toast.error("Password must be at least 6 characters");
       return;
     }
     createUserMutation.mutate(newUserForm);
   };
 
   // Calculate KPI metrics
-  const totalUsers = usersData?.users?.length || 0;
-  const mfaEnabledUsers = usersData?.users?.filter((u: any) => u.mfa_enabled).length || 0;
-  const recentLogins = loginHistoryData?.filter((log: any) => {
-    const logDate = new Date(log.timestamp);
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    return logDate >= yesterday;
-  }).length || 0;
-  const failedLogins = loginHistoryData?.filter((log: any) => !log.success).length || 0;
+  const totalUsers = usersData?.length || 0;
+  const mfaEnabledUsers =
+    usersData?.filter((u: any) => u.mfa_enabled).length || 0;
+  const recentLogins =
+    loginHistoryData?.filter((log: any) => {
+      const logDate = new Date(log.timestamp);
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      return logDate >= yesterday;
+    }).length || 0;
+  const failedLogins =
+    loginHistoryData?.filter((log: any) => !log.success).length || 0;
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex justify-between items-start">
         <div>
-          <h1 className="text-3xl font-bold text-foreground mb-2">Security & Access Control</h1>
+          <h1 className="text-3xl font-bold text-foreground mb-2">
+            Security & Access Control
+          </h1>
           <p className="text-foreground-muted">
             Manage authentication, user access, and security settings
           </p>
         </div>
-        <Badge variant={user?.is_admin ? 'default' : 'outline'} className="flex items-center gap-1">
+        <Badge
+          variant={user?.is_admin ? "default" : "outline"}
+          className="flex items-center gap-1"
+        >
           <Shield className="w-3 h-3" />
-          {user?.is_admin ? 'Administrator' : 'User'}
+          {user?.is_admin ? "Administrator" : "User"}
         </Badge>
       </div>
 
@@ -214,8 +227,12 @@ export default function SecurityPage() {
                 </div>
               </div>
               <div>
-                <p className="text-sm text-foreground-muted mb-1">Total Users</p>
-                <p className="text-2xl font-bold text-foreground">{totalUsers}</p>
+                <p className="text-sm text-foreground-muted mb-1">
+                  Total Users
+                </p>
+                <p className="text-2xl font-bold text-foreground">
+                  {totalUsers}
+                </p>
               </div>
             </div>
           </Card>
@@ -230,8 +247,12 @@ export default function SecurityPage() {
                 </div>
               </div>
               <div>
-                <p className="text-sm text-foreground-muted mb-1">MFA Enabled</p>
-                <p className="text-2xl font-bold text-foreground">{mfaEnabledUsers}/{totalUsers}</p>
+                <p className="text-sm text-foreground-muted mb-1">
+                  MFA Enabled
+                </p>
+                <p className="text-2xl font-bold text-foreground">
+                  {mfaEnabledUsers}/{totalUsers}
+                </p>
               </div>
             </div>
           </Card>
@@ -246,8 +267,12 @@ export default function SecurityPage() {
                 </div>
               </div>
               <div>
-                <p className="text-sm text-foreground-muted mb-1">Last 24h Logins</p>
-                <p className="text-2xl font-bold text-foreground">{recentLogins}</p>
+                <p className="text-sm text-foreground-muted mb-1">
+                  Last 24h Logins
+                </p>
+                <p className="text-2xl font-bold text-foreground">
+                  {recentLogins}
+                </p>
               </div>
             </div>
           </Card>
@@ -262,8 +287,12 @@ export default function SecurityPage() {
                 </div>
               </div>
               <div>
-                <p className="text-sm text-foreground-muted mb-1">Failed Logins</p>
-                <p className="text-2xl font-bold text-foreground">{failedLogins}</p>
+                <p className="text-sm text-foreground-muted mb-1">
+                  Failed Logins
+                </p>
+                <p className="text-2xl font-bold text-foreground">
+                  {failedLogins}
+                </p>
               </div>
             </div>
           </Card>
@@ -271,7 +300,10 @@ export default function SecurityPage() {
       )}
 
       <Card>
-        <Tabs value={tabValue} onValueChange={(value) => setTabValue(value as string)}>
+        <Tabs
+          value={tabValue}
+          onValueChange={(value) => setTabValue(value as string)}
+        >
           <div className="border-b border-border p-2">
             <TabsList>
               <TabsTrigger value="mfa" className="flex items-center gap-2">
@@ -295,42 +327,52 @@ export default function SecurityPage() {
           <TabsContent value="mfa" className="p-6">
             <div className="flex items-center gap-2 mb-4">
               <KeyRound className="w-5 h-5 text-primary" />
-              <h2 className="text-lg font-semibold text-foreground">Two-Factor Authentication (2FA)</h2>
+              <h2 className="text-lg font-semibold text-foreground">
+                Two-Factor Authentication (2FA)
+              </h2>
             </div>
 
             {setupMFAMutation.isSuccess && (
               <div className="mb-4 p-4 rounded-lg bg-success/10 border border-success/20">
-                <p className="text-success">MFA setup successful! Scan the QR code with your authenticator app.</p>
+                <p className="text-success">
+                  MFA setup successful! Scan the QR code with your authenticator
+                  app.
+                </p>
               </div>
             )}
 
             {enableMFAMutation.isSuccess && (
               <div className="mb-4 p-4 rounded-lg bg-success/10 border border-success/20">
-                <p className="text-success">Two-Factor Authentication is now enabled for your account!</p>
+                <p className="text-success">
+                  Two-Factor Authentication is now enabled for your account!
+                </p>
               </div>
             )}
 
             {disableMFAMutation.isSuccess && (
               <div className="mb-4 p-4 rounded-lg bg-warning/10 border border-warning/20">
-                <p className="text-warning">Two-Factor Authentication has been disabled.</p>
+                <p className="text-warning">
+                  Two-Factor Authentication has been disabled.
+                </p>
               </div>
             )}
 
             <p className="text-sm text-foreground-muted mb-6">
-              Two-factor authentication adds an extra layer of security to your account by
-              requiring a verification code from your mobile device in addition to your password.
+              Two-factor authentication adds an extra layer of security to your
+              account by requiring a verification code from your mobile device
+              in addition to your password.
             </p>
 
             <Card className="p-4 border border-border">
               <div className="flex justify-between items-center">
                 <div>
                   <p className="font-semibold text-foreground">
-                    Status: {user?.mfa_enabled ? 'Enabled' : 'Disabled'}
+                    Status: {user?.mfa_enabled ? "Enabled" : "Disabled"}
                   </p>
                   <p className="text-sm text-foreground-muted">
                     {user?.mfa_enabled
-                      ? 'Your account is protected with 2FA'
-                      : 'Enable 2FA to secure your account'}
+                      ? "Your account is protected with 2FA"
+                      : "Enable 2FA to secure your account"}
                   </p>
                 </div>
                 <div>
@@ -372,7 +414,9 @@ export default function SecurityPage() {
           <TabsContent value="history" className="p-6">
             <div className="flex items-center gap-2 mb-4">
               <History className="w-5 h-5 text-primary" />
-              <h2 className="text-lg font-semibold text-foreground">Login History</h2>
+              <h2 className="text-lg font-semibold text-foreground">
+                Login History
+              </h2>
             </div>
 
             <p className="text-sm text-foreground-muted mb-4">
@@ -392,31 +436,40 @@ export default function SecurityPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {Array.isArray(loginHistoryData) && loginHistoryData.map((log: any, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          {format(new Date(log.timestamp), 'MMM dd, yyyy HH:mm:ss')}
-                        </TableCell>
-                        <TableCell>{log.username}</TableCell>
-                        <TableCell>
-                          <Badge variant={log.success ? 'success' : 'error'} size="sm">
-                            {log.success ? 'Success' : 'Failed'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{log.ip_address || 'N/A'}</TableCell>
-                        <TableCell>
-                          <span className="text-xs text-foreground-muted">
-                            {log.failure_reason || log.user_agent || '-'}
-                          </span>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {Array.isArray(loginHistoryData) &&
+                      loginHistoryData.map((log: any, index: number) => (
+                        <TableRow key={index}>
+                          <TableCell>
+                            {format(
+                              new Date(log.timestamp),
+                              "MMM dd, yyyy HH:mm:ss",
+                            )}
+                          </TableCell>
+                          <TableCell>{log.username}</TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={log.success ? "success" : "error"}
+                              size="sm"
+                            >
+                              {log.success ? "Success" : "Failed"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{log.ip_address || "N/A"}</TableCell>
+                          <TableCell>
+                            <span className="text-xs text-foreground-muted">
+                              {log.failure_reason || log.user_agent || "-"}
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      ))}
                   </TableBody>
                 </Table>
               </Card>
             ) : (
               <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
-                <p className="text-foreground-muted">No login history available</p>
+                <p className="text-foreground-muted">
+                  No login history available
+                </p>
               </div>
             )}
           </TabsContent>
@@ -427,7 +480,9 @@ export default function SecurityPage() {
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <User className="w-5 h-5 text-primary" />
-                  <h2 className="text-lg font-semibold text-foreground">User Management</h2>
+                  <h2 className="text-lg font-semibold text-foreground">
+                    User Management
+                  </h2>
                 </div>
                 <Button onClick={() => setUserDialog(true)}>
                   <UserPlus className="w-4 h-4 mr-2" />
@@ -445,7 +500,7 @@ export default function SecurityPage() {
                 Manage system users and their permissions
               </p>
 
-              {usersData && Array.isArray(usersData.users) && usersData.users.length > 0 ? (
+              {Array.isArray(usersData) && usersData.length > 0 ? (
                 <Card className="overflow-hidden border border-border">
                   <Table>
                     <TableHeader>
@@ -460,32 +515,45 @@ export default function SecurityPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {Array.isArray(usersData.users) && usersData.users.map((u: any) => (
+                      {usersData.map((u: any) => (
                         <TableRow key={u.id}>
-                          <TableCell className="font-semibold">{u.username}</TableCell>
+                          <TableCell className="font-semibold">
+                            {u.username}
+                          </TableCell>
                           <TableCell>{u.email}</TableCell>
                           <TableCell>
-                            <Badge variant={u.role === 'admin' ? 'default' : 'outline'} size="sm">
+                            <Badge
+                              variant={
+                                u.role === "admin" ? "default" : "outline"
+                              }
+                              size="sm"
+                            >
                               {u.role}
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={u.mfa_enabled ? 'success' : 'outline'} size="sm">
-                              {u.mfa_enabled ? 'Enabled' : 'Disabled'}
+                            <Badge
+                              variant={u.mfa_enabled ? "success" : "outline"}
+                              size="sm"
+                            >
+                              {u.mfa_enabled ? "Enabled" : "Disabled"}
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={u.is_active ? 'success' : 'outline'} size="sm">
-                              {u.is_active ? 'Active' : 'Inactive'}
+                            <Badge
+                              variant={u.is_active ? "success" : "outline"}
+                              size="sm"
+                            >
+                              {u.is_active ? "Active" : "Inactive"}
                             </Badge>
                           </TableCell>
                           <TableCell>
                             {u.last_login
-                              ? format(new Date(u.last_login), 'MMM dd, HH:mm')
-                              : 'Never'}
+                              ? format(new Date(u.last_login), "MMM dd, HH:mm")
+                              : "Never"}
                           </TableCell>
                           <TableCell className="text-right">
-                            {u.username !== 'admin' && (
+                            {u.username !== "admin" && (
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -513,22 +581,32 @@ export default function SecurityPage() {
       </Card>
 
       {/* MFA Setup Dialog */}
-      <Dialog open={mfaSetupDialog} onOpenChange={() => setMfaSetupDialog(false)}>
+      <Dialog
+        open={mfaSetupDialog}
+        onOpenChange={() => setMfaSetupDialog(false)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Setup Two-Factor Authentication</DialogTitle>
             <DialogDescription>
-              Add an extra layer of security to your account using an authenticator app.
+              Add an extra layer of security to your account using an
+              authenticator app.
             </DialogDescription>
           </DialogHeader>
 
           <div className="p-4 rounded-lg bg-primary/10 border border-primary/20 mb-4">
-            <p className="text-foreground">Scan this QR code with your authenticator app</p>
+            <p className="text-foreground">
+              Scan this QR code with your authenticator app
+            </p>
           </div>
 
           {mfaQRCode && (
             <div className="flex flex-col items-center gap-4">
-              <img src={mfaQRCode} alt="MFA QR Code" className="max-w-[250px]" />
+              <img
+                src={mfaQRCode}
+                alt="MFA QR Code"
+                className="max-w-[250px]"
+              />
 
               <div className="w-full flex items-center gap-4">
                 <div className="flex-1 h-px bg-border" />
@@ -537,7 +615,9 @@ export default function SecurityPage() {
               </div>
 
               <div className="w-full">
-                <label className="text-xs text-foreground-muted">Manual Entry Code:</label>
+                <label className="text-xs text-foreground-muted">
+                  Manual Entry Code:
+                </label>
                 <div className="mt-1 p-2 rounded-lg bg-surface border border-border text-center font-mono text-sm">
                   {mfaSecret}
                 </div>
@@ -549,7 +629,11 @@ export default function SecurityPage() {
                 </label>
                 <Input
                   value={mfaVerifyToken}
-                  onChange={(e) => setMfaVerifyToken(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  onChange={(e) =>
+                    setMfaVerifyToken(
+                      e.target.value.replace(/\D/g, "").slice(0, 6),
+                    )
+                  }
                   placeholder="Enter 6-digit code"
                   maxLength={6}
                 />
@@ -566,9 +650,11 @@ export default function SecurityPage() {
             </Button>
             <Button
               onClick={handleEnableMFA}
-              disabled={mfaVerifyToken.length !== 6 || enableMFAMutation.isPending}
+              disabled={
+                mfaVerifyToken.length !== 6 || enableMFAMutation.isPending
+              }
             >
-              {enableMFAMutation.isPending ? 'Verifying...' : 'Enable 2FA'}
+              {enableMFAMutation.isPending ? "Verifying..." : "Enable 2FA"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -586,33 +672,47 @@ export default function SecurityPage() {
 
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Username</label>
+              <label className="text-sm font-medium text-foreground mb-2 block">
+                Username
+              </label>
               <Input
                 value={newUserForm.username}
-                onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value })}
+                onChange={(e) =>
+                  setNewUserForm({ ...newUserForm, username: e.target.value })
+                }
                 placeholder="Enter username"
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-foreground mb-2 block">Password</label>
+              <label className="text-sm font-medium text-foreground mb-2 block">
+                Password
+              </label>
               <Input
                 type="password"
                 value={newUserForm.password}
-                onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                onChange={(e) =>
+                  setNewUserForm({ ...newUserForm, password: e.target.value })
+                }
                 placeholder="Enter password"
               />
-              <p className="text-xs text-foreground-muted mt-1">Minimum 6 characters</p>
+              <p className="text-xs text-foreground-muted mt-1">
+                Minimum 6 characters
+              </p>
             </div>
             <div className="flex items-center justify-between">
               <div>
-                <label className="text-sm font-medium text-foreground">Administrator Privileges</label>
+                <label className="text-sm font-medium text-foreground">
+                  Administrator Privileges
+                </label>
                 <p className="text-xs text-foreground-muted">
                   Administrators can manage users and access all system features
                 </p>
               </div>
               <Switch
                 checked={newUserForm.is_admin}
-                onChange={(checked: boolean) => setNewUserForm({ ...newUserForm, is_admin: checked })}
+                onChange={(checked: boolean) =>
+                  setNewUserForm({ ...newUserForm, is_admin: checked })
+                }
               />
             </div>
           </div>
@@ -632,7 +732,10 @@ export default function SecurityPage() {
       </Dialog>
 
       {/* Disable MFA Confirmation Dialog */}
-      <Dialog open={disableMfaConfirm} onOpenChange={() => setDisableMfaConfirm(false)}>
+      <Dialog
+        open={disableMfaConfirm}
+        onOpenChange={() => setDisableMfaConfirm(false)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Disable Two-Factor Authentication</DialogTitle>
@@ -643,12 +746,16 @@ export default function SecurityPage() {
 
           <div className="py-4">
             <p className="text-foreground-muted">
-              Are you sure you want to disable Two-Factor Authentication? This will make your account less secure.
+              Are you sure you want to disable Two-Factor Authentication? This
+              will make your account less secure.
             </p>
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDisableMfaConfirm(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setDisableMfaConfirm(false)}
+            >
               Cancel
             </Button>
             <Button
@@ -656,7 +763,7 @@ export default function SecurityPage() {
               onClick={confirmDisableMFA}
               disabled={disableMFAMutation.isPending}
             >
-              {disableMFAMutation.isPending ? 'Disabling...' : 'Disable 2FA'}
+              {disableMFAMutation.isPending ? "Disabling..." : "Disable 2FA"}
             </Button>
           </DialogFooter>
         </DialogContent>
