@@ -119,14 +119,13 @@ export default function SettingsPage() {
     }
   }, [settings]);
 
-  // Fetch currencies
+  // Fetch currencies (all including inactive for management)
   const { data: currenciesData = [], isLoading: currenciesLoading } = useQuery({
-    queryKey: ["currencies"],
+    queryKey: ["currencies", { active_only: false }],
     queryFn: async () => {
-      const response = await currenciesAPI.getAll(false); // Get all including inactive
+      const response = await currenciesAPI.getAll(false);
       return response.data.currencies || [];
     },
-    initialData: [],
     staleTime: 30 * 60 * 1000,
   });
 

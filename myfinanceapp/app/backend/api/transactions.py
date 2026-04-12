@@ -877,15 +877,18 @@ async def get_all_recipients(
     current_user: User = Depends(get_current_user)
 ):
     """Get all distinct recipients/payers from transactions"""
-    transactions = db.get_transactions()
-
-    # Collect all unique recipients
-    recipients_set = set()
-    for t in transactions:
-        if t.get('destinataire'):
-            recipients_set.add(t['destinataire'].strip())
-
-    # Convert to list and sort
-    recipients = sorted(list(recipients_set))[:limit]
+    # Use a direct query with LEFT JOIN so transactions without a subtype
+    # are included — db.get_transactions() uses INNER JOIN and misses them.
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT DISTINCT TRIM(destinataire) AS recipient
+        FROM transactions
+        WHERE destinataire IS NOT NULL AND TRIM(destinataire) != ''
+        ORDER BY recipient
+        LIMIT ?
+    """, (limit,))
+    recipients = [row['recipient'] for row in cursor.fetchall()]
+    conn.close()
 
     return {"recipients": recipients, "count": len(recipients)}
