@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.32
+
+- Fix Bugs
+
 ## 2.0.31
 - Transaction form: added Owner selector — transactions can now be assigned to any owner independently of the account's owner; the owner selector filters the account list for convenience but is not restricted by it
 - Database: added nullable `owner_id` column to `transactions` table (auto-migrated on startup); existing transactions inherit their owner from the account via `COALESCE(t.owner_id, a.owner_id)`
