@@ -1,7 +1,9 @@
 # Changelog
 
-## 2.0.32
+## 2.0.33
+- Fix Bugs
 
+## 2.0.32
 - Fix Bugs
 
 ## 2.0.31

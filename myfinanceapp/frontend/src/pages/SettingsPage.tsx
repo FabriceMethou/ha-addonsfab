@@ -575,7 +575,11 @@ export default function SettingsPage() {
                 {currenciesData
                   .filter((c: any) => c.is_active)
                   .map((currency: any) => (
-                    <option key={currency.code} value={currency.code}>
+                    <option
+                      key={currency.code}
+                      value={currency.code}
+                      className="bg-surface text-foreground"
+                    >
                       {currency.code} - {currency.name}{" "}
                       {currency.symbol ? `(${currency.symbol})` : ""}
                     </option>
