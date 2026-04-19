@@ -68,6 +68,10 @@ class PasswordChange(BaseModel):
     old_password: str
     new_password: str
 
+class AdminPasswordReset(BaseModel):
+    new_password: str
+    require_change_on_login: bool = True
+
 class MFASetup(BaseModel):
     secret: str
     qr_code: str
@@ -474,6 +478,63 @@ async def update_user(
         )
 
     return {"message": "User updated successfully"}
+
+@router.post("/users/{user_id}/reset-password")
+async def admin_reset_password(
+    user_id: int,
+    password_data: AdminPasswordReset,
+    current_user: User = Depends(get_current_user)
+):
+    """Reset a user's password (admin only).
+
+    Bypasses the old-password check so an administrator can unblock a user
+    who has lost access. Also clears any active lockout / failed-attempt
+    counters so the user can log in immediately with the new password.
+    """
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can reset user passwords"
+        )
+
+    target = auth_mgr.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    success, message = auth_mgr.update_user_password(
+        user_id,
+        password_data.new_password,
+        clear_password_change_requirement=not password_data.require_change_on_login
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=message
+        )
+
+    # When require_change_on_login=True, update_user_password leaves the flag
+    # untouched — force it to 1 so the user is prompted on next login.
+    if password_data.require_change_on_login:
+        import sqlite3
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute(
+                "UPDATE users SET requires_password_change = 1, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (user_id,)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # Clear lockout / failed attempts so the user can sign in right away.
+    auth_mgr._reset_failed_attempts(user_id)
+
+    return {"message": "Password reset successfully"}
 
 @router.delete("/users/{user_id}")
 async def delete_user(

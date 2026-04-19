@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.35
+- Admin user management: added ability for administrators to reset another user's password from Security > User Management (key icon in the row); optional "require change on next login" toggle; resetting clears account lockout and failed-attempt counters so the user can sign in immediately
+
 ## 2.0.34
 - Moved the user management to the security page
 
