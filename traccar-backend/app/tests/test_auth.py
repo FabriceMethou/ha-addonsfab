@@ -13,7 +13,7 @@ async def test_valid_token_passes(client):
     token = await seed_session()
 
     # Mock user session + devices + positions
-    respx.post(f"{TRACCAR}/api/session").mock(
+    respx.get(f"{TRACCAR}/api/session").mock(
         return_value=httpx.Response(200, json={"id": 42})
     )
     respx.get(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(200, json=[]))

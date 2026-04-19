@@ -2,11 +2,13 @@ import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from app.config import settings
 from app.database import upsert_session
+from app.errors import http_error_from_traccar
+from app.rate_limit import provision_limiter
 from app.traccar import TraccarError, traccar
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,7 @@ class ProvisionResponse(BaseModel):
     tracking_url: str
 
 
-@router.post("/provision", response_model=ProvisionResponse, status_code=201)
+@router.post("/provision", response_model=ProvisionResponse, status_code=201, dependencies=[Depends(provision_limiter)])
 async def provision(req: ProvisionRequest, request: Request) -> ProvisionResponse:
     client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
     logger.info(
@@ -50,7 +52,7 @@ async def provision(req: ProvisionRequest, request: Request) -> ProvisionRespons
             client_ip,
             exc,
         )
-        _http_error_from_traccar(exc)
+        http_error_from_traccar(exc)
 
 
 async def _provision(display_name: str, device_unique_id: str) -> ProvisionResponse:
@@ -100,8 +102,3 @@ def _find_by_unique_id(devices: list[dict], unique_id: str) -> dict | None:
     return next((d for d in devices if d.get("uniqueId") == unique_id), None)
 
 
-def _http_error_from_traccar(exc: TraccarError) -> None:
-    msg = str(exc)
-    if "client error" in msg:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=msg)
-    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg)

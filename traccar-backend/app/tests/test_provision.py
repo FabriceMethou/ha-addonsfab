@@ -38,7 +38,7 @@ async def test_provision_new_device_and_user(client):
     unique_id = "ml360-newdev001"
     email = f"{unique_id}@mylife360.local"
 
-    respx.post(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
     respx.get(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(200, json=[]))
     respx.get(f"{TRACCAR}/api/users").mock(return_value=httpx.Response(200, json=[]))
     respx.post(f"{TRACCAR}/api/users").mock(
@@ -66,7 +66,7 @@ async def test_provision_existing_device_same_uuid(client):
     unique_id = "ml360-existing"
     email = f"{unique_id}@mylife360.local"
 
-    respx.post(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
     respx.get(f"{TRACCAR}/api/devices").mock(
         return_value=httpx.Response(200, json=[_device(3, "Bob's phone", unique_id)])
     )
@@ -93,7 +93,7 @@ async def test_provision_reinstall_device_found_by_name(client):
     email = f"{new_uid}@mylife360.local"
     device_name = "Carol's phone"
 
-    respx.post(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
     respx.get(f"{TRACCAR}/api/devices").mock(
         return_value=httpx.Response(200, json=[_device(7, device_name, old_uid)])
     )
@@ -122,7 +122,7 @@ async def test_provision_reinstall_user_found_by_old_email(client):
     new_email = f"{new_uid}@mylife360.local"
     device_name = "Dave's phone"
 
-    respx.post(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
     respx.get(f"{TRACCAR}/api/devices").mock(
         return_value=httpx.Response(200, json=[_device(8, device_name, old_uid)])
     )
@@ -158,7 +158,7 @@ async def test_provision_multiple_devices_same_name_picks_most_recent(client):
         _device(12, device_name, "old-uid-c", last_update="2023-12-01T00:00:00Z"),
     ]
 
-    respx.post(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
     respx.get(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(200, json=devices))
     # Should update device 11 (most recent)
     respx.put(f"{TRACCAR}/api/devices/11").mock(
@@ -182,7 +182,7 @@ async def test_provision_multiple_devices_same_name_picks_most_recent(client):
 @respx.mock
 async def test_provision_traccar_5xx_returns_503(client):
     """If Traccar admin session fails with 5xx, return 503."""
-    respx.post(f"{TRACCAR}/api/session").mock(
+    respx.get(f"{TRACCAR}/api/session").mock(
         return_value=httpx.Response(500, text="Internal Server Error")
     )
 

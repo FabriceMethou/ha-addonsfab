@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from app.auth import require_session
 from app.database import delete_wifi_mapping, list_wifi_mappings, upsert_wifi_mapping
-from app.routers.stream import bus
+from app.broadcast import bus
 from app.traccar import TraccarError, traccar
 
 logger = logging.getLogger(__name__)
