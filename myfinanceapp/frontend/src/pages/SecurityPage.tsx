@@ -34,6 +34,7 @@ import {
   UserPlus,
   Pencil,
   Trash2,
+  KeyRound as KeyRoundIcon,
 } from "lucide-react";
 import { authAPI } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
@@ -67,6 +68,12 @@ export default function SecurityPage() {
     is_admin: false,
   });
   const [deleteUserConfirm, setDeleteUserConfirm] = useState<any>(null);
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<any>(null);
+  const [resetPasswordForm, setResetPasswordForm] = useState({
+    newPassword: "",
+    confirmPassword: "",
+    requireChangeOnLogin: true,
+  });
 
   // Fetch users (admin only)
   const { data: usersData = [], isLoading: usersLoading } = useQuery({
@@ -176,6 +183,34 @@ export default function SecurityPage() {
     },
   });
 
+  const resetUserPasswordMutation = useMutation({
+    mutationFn: ({
+      userId,
+      newPassword,
+      requireChangeOnLogin,
+    }: {
+      userId: number;
+      newPassword: string;
+      requireChangeOnLogin: boolean;
+    }) => authAPI.resetUserPassword(userId, newPassword, requireChangeOnLogin),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      setResetPasswordTarget(null);
+      setResetPasswordForm({
+        newPassword: "",
+        confirmPassword: "",
+        requireChangeOnLogin: true,
+      });
+      toast.success("Password reset successfully!");
+    },
+    onError: (error: any) => {
+      console.error("Failed to reset password:", error);
+      const errorMessage =
+        error.response?.data?.detail || error.message || "Unknown error";
+      toast.error(`Failed to reset password: ${errorMessage}`);
+    },
+  });
+
   const deleteUserMutation = useMutation({
     mutationFn: (userId: number) => authAPI.deleteUser(userId),
     onSuccess: () => {
@@ -248,6 +283,32 @@ export default function SecurityPage() {
         email: editUserForm.email,
         is_admin: editUserForm.is_admin,
       },
+    });
+  };
+
+  const handleOpenResetPassword = (userData: any) => {
+    setResetPasswordForm({
+      newPassword: "",
+      confirmPassword: "",
+      requireChangeOnLogin: true,
+    });
+    setResetPasswordTarget(userData);
+  };
+
+  const handleSubmitResetPassword = () => {
+    if (!resetPasswordTarget) return;
+    if (resetPasswordForm.newPassword.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    if (resetPasswordForm.newPassword !== resetPasswordForm.confirmPassword) {
+      toast.error("Passwords do not match");
+      return;
+    }
+    resetUserPasswordMutation.mutate({
+      userId: resetPasswordTarget.id,
+      newPassword: resetPasswordForm.newPassword,
+      requireChangeOnLogin: resetPasswordForm.requireChangeOnLogin,
     });
   };
 
@@ -655,6 +716,16 @@ export default function SecurityPage() {
                               <Button
                                 size="sm"
                                 variant="ghost"
+                                onClick={() =>
+                                  handleOpenResetPassword(userData)
+                                }
+                                title="Reset password"
+                              >
+                                <KeyRoundIcon className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
                                 onClick={() => setDeleteUserConfirm(userData)}
                                 disabled={userData.username === user?.username}
                                 className="text-error hover:text-error hover:bg-error/10"
@@ -933,6 +1004,117 @@ export default function SecurityPage() {
               disabled={updateUserMutation.isPending}
             >
               Update User
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset Password Dialog (Admin) */}
+      <Dialog
+        open={!!resetPasswordTarget}
+        onOpenChange={(open) => {
+          if (!open) setResetPasswordTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset User Password</DialogTitle>
+            <DialogDescription>
+              Set a new password for{" "}
+              <strong>{resetPasswordTarget?.username}</strong>. The user will be
+              able to sign in with this password immediately.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label
+                htmlFor="reset-password-new"
+                className="text-sm font-medium text-foreground mb-2 block"
+              >
+                New Password
+              </label>
+              <Input
+                id="reset-password-new"
+                type="password"
+                value={resetPasswordForm.newPassword}
+                onChange={(e) =>
+                  setResetPasswordForm({
+                    ...resetPasswordForm,
+                    newPassword: e.target.value,
+                  })
+                }
+                placeholder="Enter new password"
+                autoComplete="new-password"
+              />
+              <p className="text-xs text-foreground-muted mt-1">
+                Minimum 8 characters, must include uppercase, lowercase and a
+                digit.
+              </p>
+            </div>
+            <div>
+              <label
+                htmlFor="reset-password-confirm"
+                className="text-sm font-medium text-foreground mb-2 block"
+              >
+                Confirm Password
+              </label>
+              <Input
+                id="reset-password-confirm"
+                type="password"
+                value={resetPasswordForm.confirmPassword}
+                onChange={(e) =>
+                  setResetPasswordForm({
+                    ...resetPasswordForm,
+                    confirmPassword: e.target.value,
+                  })
+                }
+                placeholder="Re-enter new password"
+                autoComplete="new-password"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="require-change-on-login"
+                checked={resetPasswordForm.requireChangeOnLogin}
+                onChange={(e) =>
+                  setResetPasswordForm({
+                    ...resetPasswordForm,
+                    requireChangeOnLogin: e.target.checked,
+                  })
+                }
+                className="w-4 h-4"
+              />
+              <label
+                htmlFor="require-change-on-login"
+                className="text-sm font-medium text-foreground cursor-pointer"
+              >
+                Require user to change password on next login
+              </label>
+            </div>
+            <div className="p-4 rounded-lg bg-warning/10 border border-warning/20">
+              <p className="text-xs text-foreground">
+                <strong>Note:</strong> This will also clear any account lockout
+                and failed-attempt counters so the user can sign in right away.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setResetPasswordTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSubmitResetPassword}
+              disabled={resetUserPasswordMutation.isPending}
+            >
+              {resetUserPasswordMutation.isPending
+                ? "Resetting..."
+                : "Reset Password"}
             </Button>
           </DialogFooter>
         </DialogContent>

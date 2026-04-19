@@ -214,6 +214,15 @@ export const authAPI = {
   updateUser: (userId: number, data: Record<string, unknown>) =>
     api.put(`/api/auth/users/${userId}`, data),
   deleteUser: (userId: number) => api.delete(`/api/auth/users/${userId}`),
+  resetUserPassword: (
+    userId: number,
+    newPassword: string,
+    requireChangeOnLogin: boolean = true,
+  ) =>
+    api.post(`/api/auth/users/${userId}/reset-password`, {
+      new_password: newPassword,
+      require_change_on_login: requireChangeOnLogin,
+    }),
   getLoginHistory: (userId?: number, limit: number = 50) =>
     api.get("/api/auth/login-history", { params: { user_id: userId, limit } }),
 };
