@@ -1,8 +1,10 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
+
+from app.rate_limit import crash_report_limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -22,7 +24,7 @@ class CrashReport(BaseModel):
     extra: Optional[dict] = None
 
 
-@router.post("/crash-report", status_code=204)
+@router.post("/crash-report", status_code=204, dependencies=[Depends(crash_report_limiter)])
 async def crash_report(report: CrashReport, request: Request) -> None:
     client_ip = request.headers.get(
         "x-forwarded-for", request.client.host if request.client else "unknown"

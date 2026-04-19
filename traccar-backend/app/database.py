@@ -2,6 +2,11 @@ import aiosqlite
 from app.config import settings
 
 _DB_PATH = settings.db_path
+_DB_URI = _DB_PATH.startswith("file:") or "?" in _DB_PATH
+
+
+def _connect() -> aiosqlite.Connection:
+    return aiosqlite.connect(_DB_PATH, uri=_DB_URI)
 
 CREATE_SESSIONS = """
 CREATE TABLE IF NOT EXISTS device_sessions (
@@ -39,7 +44,7 @@ CREATE TABLE IF NOT EXISTS wifi_mappings (
 
 
 async def init_db() -> None:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         await db.execute("PRAGMA foreign_keys = ON")
 
         # ------------------------------------------------------------------ #
@@ -89,7 +94,7 @@ async def upsert_session(
     display_name: str,
     device_unique_id: str,
 ) -> None:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             """
             INSERT INTO device_sessions
@@ -106,7 +111,7 @@ async def upsert_session(
 
 
 async def get_session(token: str) -> dict | None:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM device_sessions WHERE token = ?", (token,)
@@ -120,14 +125,14 @@ async def get_session(token: str) -> dict | None:
 # ------------------------------------------------------------------
 
 async def list_groups() -> list[dict]:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM groups ORDER BY name") as cur:
             return [dict(row) async for row in cur]
 
 
 async def get_group(group_id: int) -> dict | None:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM groups WHERE id = ?", (group_id,)
@@ -137,7 +142,7 @@ async def get_group(group_id: int) -> dict | None:
 
 
 async def create_group(name: str, color: str) -> dict:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "INSERT INTO groups (name, color) VALUES (?, ?)", (name, color)
@@ -151,7 +156,7 @@ async def create_group(name: str, color: str) -> dict:
 
 
 async def update_group(group_id: int, name: str, color: str) -> dict | None:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         await db.execute(
             "UPDATE groups SET name = ?, color = ? WHERE id = ?",
@@ -166,7 +171,7 @@ async def update_group(group_id: int, name: str, color: str) -> dict | None:
 
 
 async def delete_group(group_id: int) -> bool:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "DELETE FROM groups WHERE id = ?", (group_id,)
         )
@@ -175,7 +180,7 @@ async def delete_group(group_id: int) -> bool:
 
 
 async def add_device_to_group(device_unique_id: str, group_id: int) -> None:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         await db.execute("PRAGMA foreign_keys = ON")
         await db.execute(
             """
@@ -188,7 +193,7 @@ async def add_device_to_group(device_unique_id: str, group_id: int) -> None:
 
 
 async def remove_device_from_group(device_unique_id: str, group_id: int) -> None:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "DELETE FROM device_groups WHERE device_unique_id = ? AND group_id = ?",
             (device_unique_id, group_id),
@@ -197,7 +202,7 @@ async def remove_device_from_group(device_unique_id: str, group_id: int) -> None
 
 
 async def get_groups_for_device(device_unique_id: str) -> list[int]:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT group_id FROM device_groups WHERE device_unique_id = ?",
             (device_unique_id,),
@@ -206,7 +211,7 @@ async def get_groups_for_device(device_unique_id: str) -> list[int]:
 
 
 async def get_devices_in_group(group_id: int) -> list[str]:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT device_unique_id FROM device_groups WHERE group_id = ?",
             (group_id,),
@@ -218,7 +223,7 @@ async def get_traccar_ids_for_unique_ids(unique_ids: list[str]) -> list[int]:
     """Resolves device_unique_ids → traccar_device_id via the device_sessions table."""
     if not unique_ids:
         return []
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         placeholders = ",".join("?" for _ in unique_ids)
         async with db.execute(
             f"SELECT device_unique_id, traccar_device_id FROM device_sessions"
@@ -234,14 +239,14 @@ async def get_traccar_ids_for_unique_ids(unique_ids: list[str]) -> list[int]:
 # ------------------------------------------------------------------
 
 async def list_wifi_mappings() -> list[dict]:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT ssid, place_id FROM wifi_mappings") as cur:
             return [dict(row) async for row in cur]
 
 
 async def upsert_wifi_mapping(ssid: str, place_id: int) -> None:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             """
             INSERT INTO wifi_mappings (ssid, place_id) VALUES (?, ?)
@@ -253,7 +258,7 @@ async def upsert_wifi_mapping(ssid: str, place_id: int) -> None:
 
 
 async def delete_wifi_mapping(ssid: str) -> bool:
-    async with aiosqlite.connect(_DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "DELETE FROM wifi_mappings WHERE ssid = ?", (ssid,)
         )

@@ -25,7 +25,7 @@ def _client() -> TraccarClient:
 @respx.mock
 async def test_admin_session_sets_cookie_and_bearer():
     tc = _client()
-    respx.post(f"{TRACCAR}/api/session").mock(
+    respx.get(f"{TRACCAR}/api/session").mock(
         return_value=httpx.Response(200, json={"id": 1}, headers={"Set-Cookie": "JSESSIONID=abc"})
     )
 
@@ -37,7 +37,7 @@ async def test_admin_session_sets_cookie_and_bearer():
 @respx.mock
 async def test_admin_session_raises_on_failure():
     tc = _client()
-    respx.post(f"{TRACCAR}/api/session").mock(
+    respx.get(f"{TRACCAR}/api/session").mock(
         return_value=httpx.Response(401, text="Unauthorized")
     )
 

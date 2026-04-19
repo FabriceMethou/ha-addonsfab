@@ -1,10 +1,11 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.auth import require_session
+from app.errors import http_error_from_traccar
 from app.traccar import TraccarError, traccar
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ async def get_places(session: dict = Depends(require_session)) -> list[dict[str,
         finally:
             await client.aclose()
     except TraccarError as exc:
-        _http_error_from_traccar(exc)
+        http_error_from_traccar(exc)
 
     return [{"id": g["id"], "name": g.get("name"), "area": g.get("area")} for g in geofences]
 
@@ -46,7 +47,7 @@ async def create_place(
         finally:
             await client.aclose()
     except TraccarError as exc:
-        _http_error_from_traccar(exc)
+        http_error_from_traccar(exc)
 
     return {"id": geofence["id"], "name": geofence.get("name"), "area": geofence.get("area")}
 
@@ -63,11 +64,4 @@ async def delete_place(
         finally:
             await client.aclose()
     except TraccarError as exc:
-        _http_error_from_traccar(exc)
-
-
-def _http_error_from_traccar(exc: TraccarError) -> None:
-    msg = str(exc)
-    if "client error" in msg:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=msg)
-    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg)
+        http_error_from_traccar(exc)

@@ -10,9 +10,9 @@ pytestmark = pytest.mark.asyncio
 
 @respx.mock
 async def test_family_merged_result(client):
-    token = await seed_session(traccar_user_id=42, traccar_device_id=7)
+    token = await seed_session(traccar_device_id=7)
 
-    respx.post(f"{TRACCAR}/api/session").mock(
+    respx.get(f"{TRACCAR}/api/session").mock(
         return_value=httpx.Response(200, json={"id": 42})
     )
     respx.get(f"{TRACCAR}/api/devices").mock(
@@ -58,7 +58,7 @@ async def test_family_device_with_no_position(client):
     """Device without a position entry should have null position fields."""
     token = await seed_session(traccar_device_id=9)
 
-    respx.post(f"{TRACCAR}/api/session").mock(
+    respx.get(f"{TRACCAR}/api/session").mock(
         return_value=httpx.Response(200, json={"id": 42})
     )
     respx.get(f"{TRACCAR}/api/devices").mock(

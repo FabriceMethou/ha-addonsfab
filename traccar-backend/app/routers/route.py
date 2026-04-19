@@ -1,9 +1,10 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 
 from app.auth import require_session
+from app.errors import http_error_from_traccar
 from app.traccar import TraccarError, traccar
 
 logger = logging.getLogger(__name__)
@@ -24,10 +25,7 @@ async def get_route(
         finally:
             await client.aclose()
     except TraccarError as exc:
-        msg = str(exc)
-        if "client error" in msg:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=msg)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg)
+        http_error_from_traccar(exc)
 
     _MAX_POINTS = 500
 

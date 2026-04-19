@@ -9,47 +9,13 @@ from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
 
 from app.auth import require_session
+from app.broadcast import bus
 from app.traccar import TraccarError, traccar
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _KEEPALIVE_INTERVAL = 30  # seconds
-
-
-class _BroadcastBus:
-    """Fan-out bus: one admin WebSocket feeds many SSE client queues."""
-
-    def __init__(self) -> None:
-        self._queues: list[asyncio.Queue] = []
-        self._lock = asyncio.Lock()
-
-    async def subscribe(self) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue(maxsize=100)
-        async with self._lock:
-            self._queues.append(q)
-        return q
-
-    async def unsubscribe(self, q: asyncio.Queue) -> None:
-        async with self._lock:
-            try:
-                self._queues.remove(q)
-            except ValueError:
-                pass
-
-    async def publish(self, data: str) -> None:
-        async with self._lock:
-            dead: list[asyncio.Queue] = []
-            for q in self._queues:
-                try:
-                    q.put_nowait(data)
-                except asyncio.QueueFull:
-                    dead.append(q)
-            for q in dead:
-                self._queues.remove(q)
-
-
-bus = _BroadcastBus()
 
 
 async def ws_reader_loop() -> None:
