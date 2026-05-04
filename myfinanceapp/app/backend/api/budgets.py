@@ -23,6 +23,7 @@ db = FinanceDatabase(db_path=DB_PATH)
 # Pydantic models
 class BudgetCreate(BaseModel):
     type_id: int
+    owner_id: Optional[int] = None
     amount: float
     currency: str = 'EUR'  # Budget currency (EUR, SEK, DKK, etc.)
     period: str = 'monthly'  # 'monthly' or 'yearly'
@@ -32,6 +33,7 @@ class BudgetCreate(BaseModel):
 
 class BudgetUpdate(BaseModel):
     type_id: Optional[int] = None
+    owner_id: Optional[int] = None
     amount: Optional[float] = None
     currency: Optional[str] = None
     period: Optional[str] = None
@@ -73,6 +75,7 @@ async def create_budget(
     """Create new budget"""
     budget_data = {
         'type_id': budget.type_id,
+        'owner_id': budget.owner_id,
         'amount': budget.amount,
         'currency': budget.currency,
         'period': budget.period,

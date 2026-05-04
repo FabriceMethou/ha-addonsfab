@@ -601,6 +601,7 @@ export default function AccountsPage() {
     mutationFn: (data: any) => accountsAPI.createValidation(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-summary"] });
       setValidationDialog(false);
       setValidationForm({ actual_balance: "", notes: "" });
       setValidatingAccount(null);
@@ -613,20 +614,10 @@ export default function AccountsPage() {
     onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ["accounts"] });
       queryClient.invalidateQueries({ queryKey: ["accounts-summary"] });
-      const { updated_count, updates } = response.data;
-      if (updated_count > 0) {
-        const updateList = updates
-          .map(
-            (u: any) =>
-              `${u.name}: ${u.old_balance.toFixed(2)} → ${u.new_balance.toFixed(2)}`,
-          )
-          .join(", ");
-        toast.success(
-          `Successfully recalculated ${updated_count} account balance${updated_count !== 1 ? "s" : ""}: ${updateList}`,
-        );
-      } else {
-        toast.success("All account balances are already correct!");
-      }
+      const { accounts_updated, transactions_processed } = response.data;
+      toast.success(
+        `Recalculated ${accounts_updated} account balance${accounts_updated !== 1 ? "s" : ""} from ${transactions_processed} transaction${transactions_processed !== 1 ? "s" : ""}.`,
+      );
     },
     onError: (error: any) => {
       console.error("Failed to recalculate balances:", error);
@@ -644,10 +635,10 @@ export default function AccountsPage() {
       accountsAPI
         .recalculateBalances()
         .then((response) => {
-          const { updated_count } = response.data;
-          if (updated_count > 0) {
+          const { accounts_updated } = response.data;
+          if (accounts_updated > 0) {
             console.log(
-              `[DEBUG] Auto-recalculated ${updated_count} account balances`,
+              `[DEBUG] Auto-recalculated ${accounts_updated} account balances`,
             );
             queryClient.invalidateQueries({ queryKey: ["accounts"] });
             queryClient.invalidateQueries({ queryKey: ["accounts-summary"] });
@@ -1828,8 +1819,9 @@ export default function AccountsPage() {
                           <TableCell
                             className={`text-right ${val.is_match ? "text-success" : "text-error"}`}
                           >
+                            {val.difference >= 0 ? "+" : ""}
                             {formatCurrency(
-                              Math.abs(val.difference),
+                              val.difference,
                               validatingAccount?.currency,
                             )}
                           </TableCell>
