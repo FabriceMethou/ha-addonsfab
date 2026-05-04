@@ -637,7 +637,9 @@ async def get_monthly_summary(
 
 @router.get("/summary")
 async def get_summary(current_user: User = Depends(get_current_user)):
-    """Get investment portfolio summary with detailed metrics"""
+    """Get investment portfolio summary with all amounts converted to the user's display currency"""
+    display_currency = db.get_preference('display_currency', 'EUR')
+    exchange_rates = db.get_exchange_rates_map()
     holdings = db.get_investment_holdings()
 
     total_value = 0
@@ -654,32 +656,48 @@ async def get_summary(current_user: User = Depends(get_current_user)):
         quantity = holding.get('quantity', 0) or 0
         average_cost = holding.get('average_cost', 0) or 0
         current_price = holding.get('current_price', 0) or average_cost
+        holding_currency = holding.get('holding_currency') or holding.get('security_currency', 'EUR')
 
         cost_basis = quantity * average_cost
         current_value = quantity * current_price
 
+        # Convert to display currency
+        if holding_currency != display_currency:
+            cost_basis = db.convert_with_rates(cost_basis, holding_currency, display_currency, exchange_rates)
+            current_value = db.convert_with_rates(current_value, holding_currency, display_currency, exchange_rates)
+
         total_cost += cost_basis
         total_value += current_value
 
-        # Calculate asset allocation by type
+        # Asset allocation by type (in display currency)
         inv_type = holding.get('investment_type', 'Other')
         if inv_type not in allocation_by_type:
             allocation_by_type[inv_type] = 0
         allocation_by_type[inv_type] += current_value
 
-    # Calculate total dividends, fees, and tax
-    for trans in all_transactions:
-        if trans.get('transaction_type') == 'dividend':
-            total_dividends += trans.get('total_amount', 0)
-        total_fees += trans.get('fees', 0) or 0
-        total_tax += trans.get('tax', 0) or 0
-
-    # Calculate dividend yield (annual dividends / current value)
+    # Calculate total dividends, fees, and tax — converting each to display currency
     from datetime import datetime, timedelta
     one_year_ago = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-    recent_dividends = sum(t.get('total_amount', 0) for t in all_transactions
-                          if t.get('transaction_type') == 'dividend'
-                          and t.get('transaction_date', '') >= one_year_ago)
+    recent_dividends = 0
+
+    for trans in all_transactions:
+        trans_currency = trans.get('currency', 'EUR')
+        amount = trans.get('total_amount', 0) or 0
+        fees = trans.get('fees', 0) or 0
+        tax = trans.get('tax', 0) or 0
+
+        if trans_currency != display_currency:
+            amount = db.convert_with_rates(amount, trans_currency, display_currency, exchange_rates)
+            fees = db.convert_with_rates(fees, trans_currency, display_currency, exchange_rates)
+            tax = db.convert_with_rates(tax, trans_currency, display_currency, exchange_rates)
+
+        if trans.get('transaction_type') == 'dividend':
+            total_dividends += amount
+            if trans.get('transaction_date', '') >= one_year_ago:
+                recent_dividends += amount
+        total_fees += fees
+        total_tax += tax
+
     dividend_yield = (recent_dividends / total_value * 100) if total_value > 0 else 0
 
     # Format allocation by type for charts
@@ -699,7 +717,8 @@ async def get_summary(current_user: User = Depends(get_current_user)):
         "total_fees": total_fees,
         "total_tax": total_tax,
         "holdings_count": len(holdings),
-        "allocation_by_type": allocation_data
+        "allocation_by_type": allocation_data,
+        "display_currency": display_currency
     }
 
 @router.post("/holdings/{holding_id}/update-price")
