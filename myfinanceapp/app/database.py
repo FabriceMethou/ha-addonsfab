@@ -3723,10 +3723,13 @@ class FinanceDatabase:
     # ==================== REPORTING ====================
 
     def get_monthly_summary(self, year: int, month: int) -> Dict[str, Any]:
-        """Get monthly summary report."""
+        """Get monthly summary report with all amounts converted to the user's display currency."""
         from datetime import date
-        
         import calendar
+
+        display_currency = self.get_preference('display_currency', 'EUR')
+        exchange_rates = self.get_exchange_rates_map()
+
         start_date = date(year, month, 1)
         last_day = calendar.monthrange(year, month)[1]
         end_date = date(year, month, last_day)
@@ -3736,35 +3739,34 @@ class FinanceDatabase:
             'end_date': end_date.isoformat()
         })
 
-        income = sum(t['amount'] for t in transactions if t['category'] == 'income')
-        expenses = sum(abs(t['amount']) for t in transactions if t['category'] == 'expense')
+        def convert(t, raw_amount):
+            acct_currency = t.get('account_currency', 'EUR')
+            if acct_currency == display_currency:
+                return raw_amount
+            return self.convert_with_rates(raw_amount, acct_currency, display_currency, exchange_rates)
 
-        # By category
+        income = sum(convert(t, t['amount']) for t in transactions if t['category'] == 'income')
+        expenses = sum(convert(t, abs(t['amount'])) for t in transactions if t['category'] == 'expense')
+
         income_by_cat = {}
         expense_by_cat = {}
-
-        # By category with subcategory breakdown
         expense_by_cat_detailed = {}
 
         for t in transactions:
             if t['category'] == 'income':
-                income_by_cat[t['type_name']] = income_by_cat.get(t['type_name'], 0) + t['amount']
+                amt = convert(t, t['amount'])
+                income_by_cat[t['type_name']] = income_by_cat.get(t['type_name'], 0) + amt
             elif t['category'] == 'expense':
-                expense_by_cat[t['type_name']] = expense_by_cat.get(t['type_name'], 0) + abs(t['amount'])
+                amt = convert(t, abs(t['amount']))
+                expense_by_cat[t['type_name']] = expense_by_cat.get(t['type_name'], 0) + amt
 
-                # Build detailed subcategory structure
                 type_name = t['type_name']
                 subtype_name = t.get('subtype_name', 'Other')
-
                 if type_name not in expense_by_cat_detailed:
-                    expense_by_cat_detailed[type_name] = {
-                        'total': 0,
-                        'subcategories': {}
-                    }
-
-                expense_by_cat_detailed[type_name]['total'] += abs(t['amount'])
+                    expense_by_cat_detailed[type_name] = {'total': 0, 'subcategories': {}}
+                expense_by_cat_detailed[type_name]['total'] += amt
                 expense_by_cat_detailed[type_name]['subcategories'][subtype_name] = \
-                    expense_by_cat_detailed[type_name]['subcategories'].get(subtype_name, 0) + abs(t['amount'])
+                    expense_by_cat_detailed[type_name]['subcategories'].get(subtype_name, 0) + amt
 
         return {
             'year': year,
@@ -3775,48 +3777,54 @@ class FinanceDatabase:
             'income_by_category': income_by_cat,
             'expense_by_category': expense_by_cat,
             'expense_by_category_detailed': expense_by_cat_detailed,
-            'transaction_count': len(transactions)
+            'transaction_count': len(transactions),
+            'display_currency': display_currency
         }
 
     def get_spending_trends(self, start_date: str, end_date: str, group_by: str = 'month') -> Dict[str, Any]:
-        """Get spending trends over time."""
+        """Get spending trends over time with all amounts converted to the user's display currency."""
         from datetime import datetime
-        import calendar
-        
+
+        display_currency = self.get_preference('display_currency', 'EUR')
+        exchange_rates = self.get_exchange_rates_map()
+
         transactions = self.get_transactions({
             'start_date': start_date,
             'end_date': end_date
         })
-        
-        # Group by period
+
         trends = {}
-        
+
         for t in transactions:
             if t['category'] != 'expense':
                 continue
-            
+
+            acct_currency = t.get('account_currency', 'EUR')
+            amount = abs(t['amount'])
+            if acct_currency != display_currency:
+                amount = self.convert_with_rates(amount, acct_currency, display_currency, exchange_rates)
+
             trans_date = datetime.fromisoformat(t['transaction_date'])
-            
             if group_by == 'month':
                 period_key = f"{trans_date.year}-{trans_date.month:02d}"
             elif group_by == 'quarter':
                 quarter = (trans_date.month - 1) // 3 + 1
                 period_key = f"{trans_date.year}-Q{quarter}"
-            else:  # year
+            else:
                 period_key = str(trans_date.year)
-            
+
             if period_key not in trends:
                 trends[period_key] = {'total': 0, 'by_category': {}}
-
-            trends[period_key]['total'] += abs(t['amount'])
+            trends[period_key]['total'] += amount
             cat = t['type_name']
-            trends[period_key]['by_category'][cat] = trends[period_key]['by_category'].get(cat, 0) + abs(t['amount'])
-        
+            trends[period_key]['by_category'][cat] = trends[period_key]['by_category'].get(cat, 0) + amount
+
         return {
             'start_date': start_date,
             'end_date': end_date,
             'group_by': group_by,
-            'trends': trends
+            'trends': trends,
+            'display_currency': display_currency
         }
 
     def get_budget_vs_actual(self, year: int, month: int) -> Dict[str, Any]:
@@ -5478,18 +5486,25 @@ class FinanceDatabase:
         return transactions
     
     def get_today_spending(self) -> float:
-        """Get total spending for today."""
+        """Get total spending for today converted to the user's display currency."""
+        display_currency = self.get_preference('display_currency', 'EUR')
+        exchange_rates = self.get_exchange_rates_map()
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT COALESCE(SUM(ABS(t.amount)), 0) as total
+            SELECT ABS(t.amount) as amount, a.currency as account_currency
             FROM transactions t
             JOIN transaction_types tt ON t.type_id = tt.id
-            WHERE transaction_date = date('now')
+            JOIN accounts a ON t.account_id = a.id
+            WHERE t.transaction_date = date('now')
             AND tt.category = 'expense'
         """)
-        result = cursor.fetchone()
+        rows = cursor.fetchall()
         conn.close()
-        return float(result['total'])
+        total = sum(
+            self.convert_with_rates(row['amount'], row['account_currency'] or 'EUR', display_currency, exchange_rates)
+            for row in rows
+        )
+        return float(total)
     
     

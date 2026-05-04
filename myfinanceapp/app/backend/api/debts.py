@@ -87,20 +87,22 @@ async def get_debts(include_inactive: bool = False, current_user: User = Depends
 
 @router.get("/summary")
 async def get_debts_summary(current_user: User = Depends(get_current_user)):
-    """Get debts summary with all amounts converted to EUR"""
+    """Get debts summary with all amounts converted to the user's display currency"""
+    display_currency = db.get_preference('display_currency', 'EUR')
     debts = db.get_debts()
     exchange_rates = db.get_exchange_rates_map()
     total_original_amount = sum(
-        db.convert_with_rates(debt.get('principal_amount', 0), debt.get('currency', 'EUR'), 'EUR', exchange_rates)
+        db.convert_with_rates(debt.get('principal_amount', 0), debt.get('currency', 'EUR'), display_currency, exchange_rates)
         for debt in debts
     )
     total_debt = sum(
-        db.convert_with_rates(debt.get('current_balance', 0), debt.get('currency', 'EUR'), 'EUR', exchange_rates)
+        db.convert_with_rates(debt.get('current_balance', 0), debt.get('currency', 'EUR'), display_currency, exchange_rates)
         for debt in debts
     )
     return {
         "total_original_amount": total_original_amount,
-        "total_debt": total_debt
+        "total_debt": total_debt,
+        "display_currency": display_currency
     }
 
 @router.post("/")

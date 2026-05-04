@@ -417,8 +417,10 @@ export default function DebtsPage() {
     }
   };
 
-  const formatCurrency = (amount: number, currency: string = "EUR") => {
-    return formatCurrencyUtil(amount, currency);
+  const displayCurrency = summaryData?.display_currency || "EUR";
+
+  const formatCurrency = (amount: number, currency?: string) => {
+    return formatCurrencyUtil(amount, currency || displayCurrency);
   };
 
   const getStatusBadgeVariant = (

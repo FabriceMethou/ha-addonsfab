@@ -799,8 +799,10 @@ export default function InvestmentsPage() {
     }
   };
 
+  const displayCurrency = summaryData?.display_currency || "EUR";
+
   const formatCurrency = (amount: number) => {
-    return formatCurrencyUtil(amount, "EUR");
+    return formatCurrencyUtil(amount, displayCurrency);
   };
 
   if (holdingsLoading) {
