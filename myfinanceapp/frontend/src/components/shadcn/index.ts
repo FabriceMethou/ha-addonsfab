@@ -35,7 +35,6 @@ export {
   BudgetsSkeleton,
   DebtsSkeleton,
   EnvelopesSkeleton,
-  RecurringSkeleton,
   ReportsSkeleton,
 } from "./Skeleton";
 

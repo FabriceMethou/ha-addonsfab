@@ -853,25 +853,12 @@ class FinanceDatabase:
                 )
             """)
 
-            # Database migrations - add columns if they don't exist
-            # Check if linked_debt_id column exists in recurring_templates
-            cursor.execute("PRAGMA table_info(recurring_templates)")
-            columns = [col[1] for col in cursor.fetchall()]
-            if 'linked_debt_id' not in columns:
-                cursor.execute("ALTER TABLE recurring_templates ADD COLUMN linked_debt_id INTEGER")
-                logger.info("Added linked_debt_id column to recurring_templates")
-                # Note: SQLite doesn't support adding FOREIGN KEY constraints via ALTER TABLE
-                # The constraint will be enforced at the application level
-
             # Create indexes
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_envelope_transactions_envelope ON envelope_transactions(envelope_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_envelope_transactions_date ON envelope_transactions(transaction_date)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_recurring_templates_active ON recurring_templates(is_active)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_recurring_templates_debt ON recurring_templates(linked_debt_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_transactions_date ON pending_transactions(transaction_date)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_debt_payments_debt ON debt_payments(debt_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_debt_payments_date ON debt_payments(payment_date)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_type ON budgets(type_id)")
@@ -930,6 +917,10 @@ class FinanceDatabase:
             )
             if cursor.rowcount:
                 logger.info("Migrated 'Investments' transaction type: expense → transfer")
+
+            # Drop recurring tables (feature removed)
+            cursor.execute("DROP TABLE IF EXISTS pending_transactions")
+            cursor.execute("DROP TABLE IF EXISTS recurring_templates")
 
             conn.commit()
 
@@ -3118,533 +3109,6 @@ class FinanceDatabase:
             'color': envelope['color']
         }
 
-    # ==================== RECURRING TRANSACTIONS ====================
-
-    def get_recurring_templates(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
-        """Get all recurring transaction templates."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        if include_inactive:
-            query = """
-                SELECT rt.*, a.name as account_name, tt.name as type_name, tt.category as category, ts.name as subtype_name
-                FROM recurring_templates rt
-                JOIN accounts a ON rt.account_id = a.id
-                JOIN transaction_types tt ON rt.type_id = tt.id
-                JOIN transaction_subtypes ts ON rt.subtype_id = ts.id
-                ORDER BY rt.is_active DESC, rt.name
-            """
-        else:
-            query = """
-                SELECT rt.*, a.name as account_name, tt.name as type_name, tt.category as category, ts.name as subtype_name
-                FROM recurring_templates rt
-                JOIN accounts a ON rt.account_id = a.id
-                JOIN transaction_types tt ON rt.type_id = tt.id
-                JOIN transaction_subtypes ts ON rt.subtype_id = ts.id
-                WHERE rt.is_active = 1
-                ORDER BY rt.name
-            """
-
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
-
-    def add_recurring_template(self, template_data: Dict[str, Any]) -> int:
-        """Add a new recurring transaction template."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO recurring_templates
-            (name, account_id, amount, currency, description, destinataire,
-             type_id, subtype_id, tags, recurrence_pattern, recurrence_interval,
-             day_of_month, start_date, end_date, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            template_data['name'],
-            template_data['account_id'],
-            template_data['amount'],
-            template_data['currency'],
-            template_data.get('description') or '',
-            template_data.get('destinataire') or '',
-            template_data['type_id'],
-            template_data.get('subtype_id') or template_data['type_id'],
-            template_data.get('tags', ''),
-            template_data['recurrence_pattern'],
-            template_data.get('recurrence_interval', 1),
-            template_data.get('day_of_month'),
-            template_data['start_date'],
-            template_data.get('end_date'),
-            template_data.get('is_active', 1)
-        ))
-        
-        template_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        logger.info(f"Added recurring template: {template_data['name']}")
-        return template_id
-
-    def update_recurring_template(self, template_id: int, updates: Dict[str, Any]) -> bool:
-        """Update a recurring template."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        # Handle null values for NOT NULL fields
-        processed_updates = {}
-        for key, value in updates.items():
-            if key == 'destinataire' and value is None:
-                processed_updates[key] = ''
-            elif key == 'description' and value is None:
-                processed_updates[key] = ''
-            elif key == 'subtype_id' and value is None:
-                # If subtype_id is null, we need to get the type_id
-                # If type_id is also being updated, use that, otherwise fetch current type_id
-                if 'type_id' in updates:
-                    processed_updates[key] = updates['type_id']
-                else:
-                    cursor.execute("SELECT type_id FROM recurring_templates WHERE id = ?", (template_id,))
-                    row = cursor.fetchone()
-                    if row:
-                        processed_updates[key] = row['type_id']
-                    else:
-                        processed_updates[key] = value
-            else:
-                processed_updates[key] = value
-
-        # Whitelist allowed columns to prevent SQL injection
-        ALLOWED_COLUMNS = {
-            'account_id', 'type_id', 'subtype_id', 'amount', 'description', 'destinataire',
-            'tags', 'recurrence_pattern', 'recurrence_day', 'recurrence_interval', 'day_of_month',
-            'name', 'start_date', 'end_date',
-            'is_active', 'is_transfer', 'transfer_account_id'
-        }
-        processed_updates = {k: v for k, v in processed_updates.items() if k in ALLOWED_COLUMNS}
-        if not processed_updates:
-            conn.close()
-            return False
-
-        set_clause = ", ".join([f"{key} = ?" for key in processed_updates.keys()])
-        values = list(processed_updates.values()) + [template_id]
-
-        cursor.execute(f"UPDATE recurring_templates SET {set_clause} WHERE id = ?", values)
-
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
-
-    def delete_recurring_template(self, template_id: int) -> bool:
-        """Delete a recurring template."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        # Delete the template from database
-        cursor.execute("DELETE FROM recurring_templates WHERE id = ?", (template_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-
-        if success:
-            logger.info(f"Deleted recurring template with ID {template_id}")
-
-        return success
-
-    def get_pending_transactions(self) -> List[Dict[str, Any]]:
-        """Get all pending transactions awaiting confirmation."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT pt.*, rt.name as recurring_template_name, a.name as account_name,
-                   tt.name as type_name, tt.category, ts.name as subtype_name
-            FROM pending_transactions pt
-            JOIN recurring_templates rt ON pt.recurring_template_id = rt.id
-            JOIN accounts a ON pt.account_id = a.id
-            JOIN transaction_types tt ON pt.type_id = tt.id
-            JOIN transaction_subtypes ts ON pt.subtype_id = ts.id
-            ORDER BY pt.transaction_date
-        """)
-        
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
-
-    def calculate_future_recurring_transactions(self, year: int, month: int, currency: str = None) -> List[Dict[str, Any]]:
-        """Calculate expected recurring transactions for a given month.
-
-        Args:
-            year: Target year
-            month: Target month
-            currency: Optional currency filter
-
-        Returns:
-            List of expected recurring transactions with amount, date, type info
-        """
-        from datetime import date, timedelta
-        from calendar import monthrange
-
-        # Get active recurring templates
-        templates = self.get_recurring_templates(include_inactive=False)
-
-        # Filter by currency if specified
-        if currency:
-            templates = [t for t in templates if t['currency'] == currency]
-
-        # Calculate first and last day of target month
-        first_day = date(year, month, 1)
-        last_day = date(year, month, monthrange(year, month)[1])
-
-        future_transactions = []
-
-        for template in templates:
-            start_date = date.fromisoformat(template['start_date'])
-            end_date = date.fromisoformat(template['end_date']) if template['end_date'] else None
-
-            # Skip if template hasn't started yet or has already ended
-            if start_date > last_day or (end_date and end_date < first_day):
-                continue
-
-            pattern = template['recurrence_pattern']
-            interval = template.get('recurrence_interval', 1)
-
-            # Calculate occurrences based on pattern
-            if pattern == 'monthly':
-                # Monthly: occurs on specific day of month
-                day = template.get('day_of_month', 1)
-                if day > monthrange(year, month)[1]:
-                    day = monthrange(year, month)[1]  # Handle months with fewer days
-
-                transaction_date = date(year, month, day)
-
-                # Check if this date is within the template's active period
-                if transaction_date >= start_date and (not end_date or transaction_date <= end_date):
-                    future_transactions.append({
-                        'template_id': template['id'],
-                        'template_name': template['name'],
-                        'transaction_date': transaction_date.isoformat(),
-                        'amount': template['amount'],
-                        'currency': template['currency'],
-                        'type_name': template['type_name'],
-                        'category': template['category'],
-                        'description': template['description'],
-                        'destinataire': template['destinataire']
-                    })
-
-            elif pattern == 'weekly':
-                # Weekly: calculate all occurrences in the month
-                # Start from first day of month that matches the weekday
-                current_date = start_date
-                if current_date < first_day:
-                    current_date = first_day
-
-                while current_date <= last_day:
-                    if current_date >= start_date and (not end_date or current_date <= end_date):
-                        if (current_date - start_date).days % (7 * interval) == 0:
-                            future_transactions.append({
-                                'template_id': template['id'],
-                                'template_name': template['name'],
-                                'transaction_date': current_date.isoformat(),
-                                'amount': template['amount'],
-                                'currency': template['currency'],
-                                'type_name': template['type_name'],
-                                'category': template['category'],
-                                'description': template['description'],
-                                'destinataire': template['destinataire']
-                            })
-                    current_date += timedelta(days=1)
-
-            elif pattern == 'daily':
-                # Daily: count all days in month
-                current_date = max(start_date, first_day)
-                end = min(end_date, last_day) if end_date else last_day
-
-                while current_date <= end:
-                    if (current_date - start_date).days % interval == 0:
-                        future_transactions.append({
-                            'template_id': template['id'],
-                            'template_name': template['name'],
-                            'transaction_date': current_date.isoformat(),
-                            'amount': template['amount'],
-                            'currency': template['currency'],
-                            'type_name': template['type_name'],
-                            'category': template['category'],
-                            'description': template['description'],
-                            'destinataire': template['destinataire']
-                        })
-                    current_date += timedelta(days=1)
-
-            elif pattern == 'yearly':
-                # Yearly: check if the month matches
-                if start_date.month == month:
-                    transaction_date = date(year, month, start_date.day)
-                    if transaction_date >= start_date and (not end_date or transaction_date <= end_date):
-                        future_transactions.append({
-                            'template_id': template['id'],
-                            'template_name': template['name'],
-                            'transaction_date': transaction_date.isoformat(),
-                            'amount': template['amount'],
-                            'currency': template['currency'],
-                            'type_name': template['type_name'],
-                            'category': template['category'],
-                            'description': template['description'],
-                            'destinataire': template['destinataire']
-                        })
-
-        return sorted(future_transactions, key=lambda x: x['transaction_date'])
-
-    def add_pending_transaction(self, pending_data: Dict[str, Any]) -> int:
-        """Create a pending transaction from template."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            INSERT INTO pending_transactions
-            (recurring_template_id, transaction_date, amount, currency, description,
-             destinataire, account_id, type_id, subtype_id, tags)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            pending_data['recurring_template_id'],
-            pending_data['transaction_date'],
-            pending_data['amount'],
-            pending_data['currency'],
-            pending_data.get('description') or '',
-            pending_data.get('destinataire') or '',
-            pending_data['account_id'],
-            pending_data['type_id'],
-            pending_data['subtype_id'],
-            pending_data.get('tags') or ''
-        ))
-        
-        pending_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        logger.info(f"Created pending transaction {pending_id}")
-        return pending_id
-
-    def confirm_pending_transaction(self, pending_id: int) -> int:
-        """Confirm a pending transaction and create actual transaction.
-
-        Uses add_transaction() to ensure all business logic is applied:
-        - Account balance updates
-        - Duplicate detection
-        - Historical transaction handling
-        - Transfer account updates
-        """
-        # Get pending transaction data
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM pending_transactions WHERE id = ?", (pending_id,))
-        pending = cursor.fetchone()
-        conn.close()
-
-        if not pending:
-            return None
-
-        # Build transaction data dict from pending transaction
-        transaction_data = {
-            'account_id': pending['account_id'],
-            'transaction_date': pending['transaction_date'],
-            'amount': pending['amount'],
-            'currency': pending['currency'],
-            'description': pending['description'],
-            'destinataire': pending['destinataire'],
-            'type_id': pending['type_id'],
-            'subtype_id': pending['subtype_id'],
-            'tags': pending['tags'],
-            'recurring_template_id': pending['recurring_template_id'],
-            'confirmed': True  # Mark as confirmed
-        }
-
-        # Use add_transaction to get ALL business logic:
-        # - Balance updates via _update_account_balance
-        # - Duplicate detection
-        # - Historical transaction handling
-        # - Transfer account updates
-        # - Proper logging
-        transaction_id = self.add_transaction(transaction_data)
-
-        # Clean up pending transaction and update template
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("DELETE FROM pending_transactions WHERE id = ?", (pending_id,))
-
-        cursor.execute("""
-            UPDATE recurring_templates
-            SET last_generated = ?
-            WHERE id = ?
-        """, (pending['transaction_date'], pending['recurring_template_id']))
-
-        conn.commit()
-        conn.close()
-
-        logger.info(f"Confirmed pending transaction {pending_id} → transaction {transaction_id}")
-        return transaction_id
-
-    def reject_pending_transaction(self, pending_id: int) -> bool:
-        """Reject and delete a pending transaction."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("DELETE FROM pending_transactions WHERE id = ?", (pending_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        logger.info(f"Rejected pending transaction {pending_id}")
-        return success
-
-    def generate_pending_from_templates(self, check_date: str = None) -> int:
-        """
-        Generate ALL pending transactions from active templates up to the given date.
-        Creates ONE transaction per missed occurrence/period.
-        """
-        from datetime import datetime, timedelta
-        from dateutil.relativedelta import relativedelta
-
-        if check_date is None:
-            check_date = datetime.now().date().isoformat()
-
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        # Get active templates
-        cursor.execute("SELECT * FROM recurring_templates WHERE is_active = 1")
-        templates = cursor.fetchall()
-
-        count = 0
-        check_date_obj = datetime.fromisoformat(check_date).date()
-
-        for template in templates:
-            template_dict = dict(template)
-
-            start_date = datetime.fromisoformat(template_dict['start_date']).date()
-            end_date = datetime.fromisoformat(template_dict['end_date']).date() if template_dict['end_date'] else None
-            last_generated = datetime.fromisoformat(template_dict['last_generated']).date() if template_dict['last_generated'] else None
-
-            pattern = template_dict['recurrence_pattern']
-            interval = template_dict['recurrence_interval']
-
-            # Determine the starting point for generating transactions
-            if last_generated:
-                next_date = last_generated
-            else:
-                next_date = start_date
-
-            # Generate all occurrences from next_date to check_date_obj
-            # Use a list to collect all dates that need transactions
-            dates_to_generate = []
-
-            if pattern == 'daily':
-                # Generate every interval days
-                current = next_date if not last_generated else next_date + timedelta(days=interval)
-                while current <= check_date_obj:
-                    if end_date and current > end_date:
-                        break
-                    dates_to_generate.append(current)
-                    current += timedelta(days=interval)
-
-            elif pattern == 'weekly':
-                # Generate every interval weeks
-                current = next_date if not last_generated else next_date + timedelta(weeks=interval)
-                while current <= check_date_obj:
-                    if end_date and current > end_date:
-                        break
-                    dates_to_generate.append(current)
-                    current += timedelta(weeks=interval)
-
-            elif pattern == 'monthly':
-                # Generate on the specified day of each month
-                day_of_month = template_dict['day_of_month']
-
-                if day_of_month:
-                    # Start from the next month after last_generated (or start month if never generated)
-                    if last_generated:
-                        current = last_generated + relativedelta(months=interval)
-                    else:
-                        current = start_date
-
-                    # Ensure we're on the correct day of month
-                    # Handle edge case where day doesn't exist (e.g., Feb 31 -> Feb 28/29)
-                    try:
-                        current = current.replace(day=day_of_month)
-                    except ValueError:
-                        # Day doesn't exist in this month, use last day of month
-                        import calendar
-                        last_day = calendar.monthrange(current.year, current.month)[1]
-                        current = current.replace(day=min(day_of_month, last_day))
-
-                    # Generate for all months until check_date
-                    while current <= check_date_obj:
-                        if end_date and current > end_date:
-                            break
-                        # Only add if this month hasn't been generated yet
-                        if not last_generated or (current.year, current.month) != (last_generated.year, last_generated.month):
-                            dates_to_generate.append(current)
-                        current = current + relativedelta(months=interval)
-                        # Adjust day again for next month
-                        try:
-                            current = current.replace(day=day_of_month)
-                        except ValueError:
-                            import calendar
-                            last_day = calendar.monthrange(current.year, current.month)[1]
-                            current = current.replace(day=min(day_of_month, last_day))
-
-            elif pattern == 'yearly':
-                # Generate on the anniversary of start_date every interval years
-                current = next_date if not last_generated else next_date.replace(year=next_date.year + interval)
-
-                while current <= check_date_obj:
-                    if end_date and current > end_date:
-                        break
-                    dates_to_generate.append(current)
-                    current = current.replace(year=current.year + interval)
-
-            elif pattern == 'custom':
-                # Generate every interval days (same as daily)
-                current = next_date if not last_generated else next_date + timedelta(days=interval)
-                while current <= check_date_obj:
-                    if end_date and current > end_date:
-                        break
-                    dates_to_generate.append(current)
-                    current += timedelta(days=interval)
-
-            # Create pending transactions for all collected dates
-            for transaction_date in dates_to_generate:
-                # Check if pending already exists
-                cursor.execute("""
-                    SELECT id FROM pending_transactions
-                    WHERE recurring_template_id = ? AND transaction_date = ?
-                """, (template_dict['id'], transaction_date.isoformat()))
-
-                if not cursor.fetchone():
-                    # Create pending transaction
-                    cursor.execute("""
-                        INSERT INTO pending_transactions
-                        (recurring_template_id, transaction_date, amount, currency, description,
-                         destinataire, account_id, type_id, subtype_id, tags)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        template_dict['id'],
-                        transaction_date.isoformat(),
-                        template_dict['amount'],
-                        template_dict['currency'],
-                        template_dict.get('description') or '',
-                        template_dict.get('destinataire') or '',
-                        template_dict['account_id'],
-                        template_dict['type_id'],
-                        template_dict['subtype_id'],
-                        template_dict.get('tags') or ''
-                    ))
-                    count += 1
-                    logger.info(f"Generated pending transaction for template '{template_dict['name']}' on {transaction_date} (pattern: {pattern})")
-
-        conn.commit()
-        conn.close()
-        logger.info(f"Generated {count} total pending transactions across all overdue periods")
-        return count
-
  # ==================== DEBTS ====================
 
     def get_debts(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
@@ -3726,46 +3190,13 @@ class FinanceDatabase:
 
         debt_id = cursor.lastrowid
 
-        # Create recurring transaction template for this debt
-        account_id = debt_data['linked_account_id']
-
-        if account_id:
-            cursor.execute("""
-                INSERT INTO recurring_templates
-                (name, account_id, amount, currency, description, destinataire,
-                 type_id, subtype_id, tags, recurrence_pattern, recurrence_interval,
-                 day_of_month, start_date, is_active, linked_debt_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                f"Debt Payment: {debt_data['name']}",
-                account_id,
-                debt_data['monthly_payment'],
-                debt_data.get('currency', 'EUR'),
-                f"Monthly payment for {debt_data['name']}",
-                debt_data['name'],
-                debt_type_id,
-                debt_subtype_id,
-                'Debt Payment, Auto-generated',
-                'monthly',
-                1,  # recurrence_interval
-                debt_data['payment_day'],
-                debt_data['start_date'],
-                1,  # is_active
-                debt_id
-            ))
-            logger.info(f"Created recurring template for debt: {debt_data['name']}")
-
         conn.commit()
         conn.close()
         logger.info(f"Added debt: {debt_data['name']}")
         return debt_id
 
     def update_debt(self, debt_id: int, updates: Dict[str, Any]) -> bool:
-        """Update an existing debt and its associated recurring template.
-
-        If the debt is fully paid (current_balance <= 0), the recurring template is deleted.
-        """
-        # Whitelist allowed columns to prevent SQL injection
+        """Update an existing debt."""
         ALLOWED_COLUMNS = {
             'name', 'principal_amount', 'current_balance', 'interest_rate', 'interest_type',
             'monthly_payment', 'start_date', 'payment_day', 'is_active', 'notes',
@@ -3783,51 +3214,12 @@ class FinanceDatabase:
             values = list(updates.values()) + [debt_id]
 
             cursor.execute(f"UPDATE debts SET {set_clause} WHERE id = ?", values)
-
             success = cursor.rowcount > 0
 
-            # Check if debt is fully paid off
-            if success and 'current_balance' in updates:
-                new_balance = updates['current_balance']
-                if new_balance <= 0:
-                    # Debt is fully paid - DELETE the recurring template
-                    cursor.execute("DELETE FROM recurring_templates WHERE linked_debt_id = ?", (debt_id,))
-                    deleted_count = cursor.rowcount
-                    if deleted_count > 0:
-                        logger.info(f"Debt {debt_id} fully paid! Deleted recurring template.")
-
-                    # Also deactivate the debt
-                    cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (debt_id,))
-                    logger.info(f"Debt {debt_id} marked as inactive (fully paid)")
-
-                    conn.commit()
-                    return success
-
-            # Update the recurring template if relevant fields changed (and debt not paid off)
-            if success and any(key in updates for key in ['monthly_payment', 'payment_day', 'linked_account_id', 'name', 'currency']):
-                # Build update for recurring template
-                template_updates = {}
-                if 'monthly_payment' in updates:
-                    template_updates['amount'] = updates['monthly_payment']
-                if 'payment_day' in updates:
-                    template_updates['day_of_month'] = updates['payment_day']
-                if 'linked_account_id' in updates:
-                    template_updates['account_id'] = updates['linked_account_id']
-                if 'name' in updates:
-                    template_updates['name'] = f"Debt Payment: {updates['name']}"
-                    template_updates['destinataire'] = updates['name']
-                    template_updates['description'] = f"Monthly payment for {updates['name']}"
-                if 'currency' in updates:
-                    template_updates['currency'] = updates['currency']
-
-                if template_updates:
-                    set_template_clause = ", ".join([f"{key} = ?" for key in template_updates.keys()])
-                    template_values = list(template_updates.values()) + [debt_id]
-                    cursor.execute(
-                        f"UPDATE recurring_templates SET {set_template_clause} WHERE linked_debt_id = ?",
-                        template_values
-                    )
-                    logger.info(f"Updated recurring template for debt {debt_id}")
+            # If debt fully paid off, deactivate it
+            if success and 'current_balance' in updates and updates['current_balance'] <= 0:
+                cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (debt_id,))
+                logger.info(f"Debt {debt_id} marked as inactive (fully paid)")
 
             conn.commit()
             return success
@@ -3835,19 +3227,12 @@ class FinanceDatabase:
             conn.close()
 
     def delete_debt(self, debt_id: int) -> bool:
-        """Deactivate a debt and DELETE its associated recurring template."""
+        """Deactivate a debt."""
         conn = self._get_connection()
         cursor = conn.cursor()
 
         cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (debt_id,))
         success = cursor.rowcount > 0
-
-        # DELETE the recurring template (not just deactivate)
-        if success:
-            cursor.execute("DELETE FROM recurring_templates WHERE linked_debt_id = ?", (debt_id,))
-            deleted_count = cursor.rowcount
-            if deleted_count > 0:
-                logger.info(f"Deleted recurring template for debt {debt_id}")
 
         conn.commit()
         conn.close()
@@ -4069,12 +3454,6 @@ class FinanceDatabase:
             if result:
                 new_balance = result[0]
                 if new_balance <= 0:
-                    # Debt is fully paid - DELETE the recurring template
-                    cursor.execute("DELETE FROM recurring_templates WHERE linked_debt_id = ?", (payment_data['debt_id'],))
-                    deleted_count = cursor.rowcount
-                    if deleted_count > 0:
-                        logger.info(f"Debt {payment_data['debt_id']} fully paid! Deleted recurring template.")
-
                     # Mark debt as inactive (paid off)
                     cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (payment_data['debt_id'],))
                     logger.info(f"Debt {payment_data['debt_id']} marked as inactive (fully paid)")

@@ -399,17 +399,6 @@ export const investmentsAPI = {
   fixDividendTotals: () => api.post("/api/investments/fix-dividend-totals"),
 };
 
-// Recurring Transactions API
-export const recurringAPI = {
-  getAll: (includeInactive: boolean = false) =>
-    api.get(`/api/recurring/?include_inactive=${includeInactive}`),
-  getById: (id: number) => api.get(`/api/recurring/${id}`),
-  create: (data: Record<string, unknown>) => api.post("/api/recurring/", data),
-  update: (id: number, data: Record<string, unknown>) =>
-    api.put(`/api/recurring/${id}`, data),
-  delete: (id: number) => api.delete(`/api/recurring/${id}`),
-  generate: () => api.post("/api/recurring/generate"),
-};
 
 // Work Profiles API
 export const workProfilesAPI = {

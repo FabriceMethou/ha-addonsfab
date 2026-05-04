@@ -1002,12 +1002,6 @@ export default function DashboardPage() {
               <Badge variant="outline">
                 Base: {formatCurrency(spendingPrediction.base_prediction || 0)}
               </Badge>
-              {spendingPrediction.recurring_amount > 0 && (
-                <Badge variant="outline">
-                  Recurring:{" "}
-                  {formatCurrency(spendingPrediction.recurring_amount)}
-                </Badge>
-              )}
               <Badge
                 variant={
                   spendingPrediction.confidence > 0.7 ? "success" : "warning"

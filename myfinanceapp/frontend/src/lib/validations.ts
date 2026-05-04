@@ -117,33 +117,6 @@ export const envelopeSchema = z.object({
 
 export type EnvelopeFormData = z.infer<typeof envelopeSchema>;
 
-// Recurring transaction template schema
-export const recurringTemplateSchema = z.object({
-  name: z.string().min(1, 'Template name is required'),
-  account_id: z.string().min(1, 'Account is required'),
-  amount: z
-    .string()
-    .min(1, 'Amount is required')
-    .refine((val) => !isNaN(parseFloat(val)), 'Amount must be a valid number')
-    .refine((val) => parseFloat(val) !== 0, 'Amount cannot be zero'),
-  currency: z.string().min(1, 'Currency is required'),
-  type_id: z.string().min(1, 'Category is required'),
-  subtype_id: z.string().optional(),
-  description: z.string().optional(),
-  destinataire: z.string().optional(),
-  recurrence_pattern: z.enum(['daily', 'weekly', 'monthly', 'yearly'], { message: 'Recurrence pattern is required' }),
-  recurrence_interval: z
-    .string()
-    .min(1, 'Interval is required')
-    .refine((val) => !isNaN(parseInt(val)), 'Interval must be a number')
-    .refine((val) => parseInt(val) > 0, 'Interval must be positive'),
-  day_of_month: z.string().optional(),
-  start_date: z.string().min(1, 'Start date is required'),
-  end_date: z.string().optional(),
-  is_active: z.boolean(),
-});
-
-export type RecurringTemplateFormData = z.infer<typeof recurringTemplateSchema>;
 
 // Debt form validation schema
 export const debtSchema = z.object({

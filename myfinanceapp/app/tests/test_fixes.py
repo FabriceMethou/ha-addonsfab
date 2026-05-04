@@ -114,45 +114,6 @@ class TestMonthlyOffByOne:
         )
 
 
-# ── P1-B: update_recurring_template whitelist ─────────────────────────────────
-
-class TestRecurringTemplateUpdate:
-    def _make_template(self, db):
-        acc = add_account(db)
-        tid, sid = type_ids(db)
-        return db.add_recurring_template({
-            "account_id": acc,
-            "name": "Gym",
-            "amount": -30.0,
-            "currency": "EUR",
-            "recurrence_pattern": "monthly",
-            "recurrence_interval": 1,
-            "start_date": "2025-01-01",
-            "type_id": tid,
-            "subtype_id": sid,
-            "is_active": True,
-        })
-
-    def test_recurrence_interval_updatable(self):
-        db = make_db()
-        tid = self._make_template(db)
-        ok = db.update_recurring_template(tid, {"recurrence_interval": 3})
-        assert ok is True, "update returned False"
-        t = next(t for t in db.get_recurring_templates(include_inactive=True)
-                 if t["id"] == tid)
-        assert t["recurrence_interval"] == 3, (
-            f"recurrence_interval not updated: {t['recurrence_interval']}"
-        )
-
-    def test_name_updatable(self):
-        db = make_db()
-        tid = self._make_template(db)
-        ok = db.update_recurring_template(tid, {"name": "New Name"})
-        assert ok is True
-        t = next(t for t in db.get_recurring_templates(include_inactive=True)
-                 if t["id"] == tid)
-        assert t["name"] == "New Name", f"name not updated: {t['name']}"
-
 
 # ── P1-C: extra debt payment math ────────────────────────────────────────────
 
