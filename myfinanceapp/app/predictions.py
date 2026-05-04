@@ -29,13 +29,12 @@ class SpendingPredictor:
     """Predict future spending based on historical patterns."""
 
     def __init__(self, transactions: List[Dict], pending_transactions: List[Dict] = None,
-                 future_recurring: List[Dict] = None, budgets: List[Dict] = None):
+                 budgets: List[Dict] = None):
         """Initialize with transaction history and optional future data.
 
         Args:
             transactions: Historical transaction records
-            pending_transactions: Pending recurring transactions awaiting confirmation
-            future_recurring: Expected future recurring transactions
+            pending_transactions: Pending transactions awaiting confirmation
             budgets: Active budget limits for spending categories
         """
         self.df = pd.DataFrame(transactions) if transactions else pd.DataFrame()
@@ -47,22 +46,21 @@ class SpendingPredictor:
                 self.df['date'] = pd.to_datetime(self.df['date'])
 
         self.pending = pending_transactions or []
-        self.future_recurring = future_recurring or []
         self.budgets = budgets or []
 
     def predict_monthly_spending(self, months_ahead: int = 1) -> Dict:
-        """Predict spending for upcoming months, including future recurring transactions."""
+        """Predict spending for upcoming months based on historical patterns."""
         if self.df.empty:
-            return {'predicted': 0, 'confidence': 0, 'base_prediction': 0, 'recurring_amount': 0, 'pending_amount': 0}
+            return {'predicted': 0, 'confidence': 0, 'base_prediction': 0, 'pending_amount': 0}
 
         # Check if date column exists
         if 'date' not in self.df.columns:
-            return {'predicted': 0, 'confidence': 0, 'base_prediction': 0, 'recurring_amount': 0, 'pending_amount': 0}
+            return {'predicted': 0, 'confidence': 0, 'base_prediction': 0, 'pending_amount': 0}
 
         # Filter to expenses only
         expenses = self.df[self.df['category'] == 'expense'].copy()
         if expenses.empty:
-            return {'predicted': 0, 'confidence': 0, 'base_prediction': 0, 'recurring_amount': 0, 'pending_amount': 0}
+            return {'predicted': 0, 'confidence': 0, 'base_prediction': 0, 'pending_amount': 0}
 
         # Expenses are stored as negative amounts — use abs() for spending totals
         expenses['spending'] = expenses['amount'].abs()
@@ -126,14 +124,7 @@ class SpendingPredictor:
             if p.get('category') == 'expense'
         )
 
-        # Calculate future recurring transactions amount (expenses only) — already absolute
-        recurring_amount = sum(
-            r['amount'] for r in self.future_recurring
-            if r.get('category') == 'expense'
-        )
-
-        # Total prediction = base + future recurring (don't double count pending as they're already in future)
-        total_prediction = max(0, base_prediction) + recurring_amount
+        total_prediction = max(0, base_prediction)
 
         # Get budget comparison
         budget_info = self._compare_with_budgets(total_prediction)
@@ -145,7 +136,6 @@ class SpendingPredictor:
         return {
             'predicted': float(total_prediction),
             'base_prediction': max(0, float(base_prediction)),
-            'recurring_amount': float(recurring_amount),
             'pending_amount': float(pending_amount),
             'confidence': float(confidence),
             'trend': trend,

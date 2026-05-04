@@ -17,7 +17,6 @@ const CategoriesPage = lazy(() => import('./pages/CategoriesPage'));
 const EnvelopesPage = lazy(() => import('./pages/EnvelopesPage'));
 const DebtsPage = lazy(() => import('./pages/DebtsPage'));
 const InvestmentsPage = lazy(() => import('./pages/InvestmentsPage'));
-const RecurringPage = lazy(() => import('./pages/RecurringPage'));
 const BudgetsPage = lazy(() => import('./pages/BudgetsPage'));
 const WorkHoursPage = lazy(() => import('./pages/WorkHoursPage'));
 const BackupPage = lazy(() => import('./pages/BackupPage'));
@@ -81,7 +80,6 @@ function AppRoutes() {
           <Route path="envelopes" element={<EnvelopesPage />} />
           <Route path="debts" element={<DebtsPage />} />
           <Route path="investments" element={<InvestmentsPage />} />
-          <Route path="recurring" element={<RecurringPage />} />
           <Route path="budgets" element={<BudgetsPage />} />
           <Route path="work-hours" element={<WorkHoursPage />} />
           <Route path="backup" element={<BackupPage />} />

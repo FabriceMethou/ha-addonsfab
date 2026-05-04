@@ -326,26 +326,6 @@ function EnvelopesSkeleton() {
   )
 }
 
-// Recurring page skeleton
-function RecurringSkeleton() {
-  return (
-    <div className="space-y-6">
-      {/* Pending section */}
-      <div className="rounded-xl border border-border bg-card p-6">
-        <Skeleton className="h-5 w-48 mb-4" />
-        <ListSkeleton items={3} showAction />
-      </div>
-
-      {/* Templates table */}
-      <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <div className="p-4 border-b border-border">
-          <Skeleton className="h-5 w-40" />
-        </div>
-        <TableSkeleton rows={6} columns={5} />
-      </div>
-    </div>
-  )
-}
 
 // Reports page skeleton
 function ReportsSkeleton() {
@@ -388,6 +368,5 @@ export {
   BudgetsSkeleton,
   DebtsSkeleton,
   EnvelopesSkeleton,
-  RecurringSkeleton,
   ReportsSkeleton,
 }

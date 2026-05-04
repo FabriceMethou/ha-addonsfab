@@ -49,17 +49,6 @@ def migrate():
         conn.commit()
         print(f"Successfully added 'currency' column. {debt_count} existing debts set to EUR.")
 
-        # Also update recurring templates linked to debts to use EUR if not set
-        cursor.execute("""
-            UPDATE recurring_templates
-            SET currency = 'EUR'
-            WHERE linked_debt_id IS NOT NULL AND (currency IS NULL OR currency = '')
-        """)
-        updated_templates = cursor.rowcount
-        conn.commit()
-
-        if updated_templates > 0:
-            print(f"Updated {updated_templates} recurring templates with EUR currency.")
 
     except sqlite3.Error as e:
         print(f"Error during migration: {e}")

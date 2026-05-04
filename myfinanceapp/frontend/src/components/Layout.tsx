@@ -9,7 +9,6 @@ import {
   PiggyBank,
   CreditCard,
   TrendingUp,
-  RefreshCw,
   Wallet,
   Clock,
   HardDrive,
@@ -78,7 +77,6 @@ const NAV_GROUPS = [
     items: [
       { text: "Budgets", icon: Wallet, path: "/budgets" },
       { text: "Envelopes", icon: PiggyBank, path: "/envelopes" },
-      { text: "Recurring", icon: RefreshCw, path: "/recurring" },
     ],
   },
   {

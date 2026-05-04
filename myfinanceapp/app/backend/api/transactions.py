@@ -823,44 +823,6 @@ async def train_categorizer(current_user: User = Depends(get_current_user)):
             detail=f"Training failed: {str(e)}"
         )
 
-@router.get("/pending/all")
-async def get_pending_transactions(current_user: User = Depends(get_current_user)):
-    """Get all pending transactions"""
-    pending = db.get_pending_transactions()
-    return {"pending_transactions": pending, "count": len(pending)}
-
-@router.post("/{transaction_id}/confirm")
-async def confirm_pending_transaction(
-    transaction_id: int,
-    current_user: User = Depends(get_current_user)
-):
-    """Confirm a pending transaction"""
-    success = db.confirm_pending_transaction(transaction_id)
-
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to confirm transaction"
-        )
-
-    return {"message": "Transaction confirmed successfully"}
-
-@router.delete("/{transaction_id}/reject")
-async def reject_pending_transaction(
-    transaction_id: int,
-    current_user: User = Depends(get_current_user)
-):
-    """Reject/delete a pending transaction"""
-    # For pending transactions, delete from pending_transactions table
-    success = db.reject_pending_transaction(transaction_id)
-
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to reject transaction"
-        )
-
-    return {"message": "Transaction rejected successfully"}
 
 @router.get("/tags/all")
 async def get_all_tags(
