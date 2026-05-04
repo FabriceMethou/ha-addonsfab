@@ -575,6 +575,7 @@ class FinanceDatabase:
                 CREATE TABLE IF NOT EXISTS budgets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     type_id INTEGER NOT NULL,
+                    owner_id INTEGER,
                     amount REAL NOT NULL,
                     currency TEXT NOT NULL DEFAULT 'EUR',
                     period TEXT DEFAULT 'monthly' CHECK(period IN ('monthly', 'yearly')),
@@ -582,7 +583,8 @@ class FinanceDatabase:
                     end_date DATE,
                     is_active BOOLEAN DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (type_id) REFERENCES transaction_types(id)
+                    FOREIGN KEY (type_id) REFERENCES transaction_types(id),
+                    FOREIGN KEY (owner_id) REFERENCES owners(id)
                 )
             """)
 
@@ -591,6 +593,9 @@ class FinanceDatabase:
             columns = [col[1] for col in cursor.fetchall()]
             if 'currency' not in columns:
                 cursor.execute("ALTER TABLE budgets ADD COLUMN currency TEXT NOT NULL DEFAULT 'EUR'")
+            if 'owner_id' not in columns:
+                cursor.execute("ALTER TABLE budgets ADD COLUMN owner_id INTEGER REFERENCES owners(id)")
+                logger.info("Added owner_id column to budgets table")
 
             # Securities master table
             cursor.execute("""
@@ -4237,23 +4242,27 @@ class FinanceDatabase:
         """Get all budgets."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         if include_inactive:
             query = """
-                SELECT b.*, tt.name as type_name, tt.icon, tt.color
+                SELECT b.*, tt.name as type_name, tt.icon, tt.color,
+                       o.name as owner_name
                 FROM budgets b
                 JOIN transaction_types tt ON b.type_id = tt.id
+                LEFT JOIN owners o ON b.owner_id = o.id
                 ORDER BY b.is_active DESC, tt.name
             """
         else:
             query = """
-                SELECT b.*, tt.name as type_name, tt.icon, tt.color
+                SELECT b.*, tt.name as type_name, tt.icon, tt.color,
+                       o.name as owner_name
                 FROM budgets b
                 JOIN transaction_types tt ON b.type_id = tt.id
+                LEFT JOIN owners o ON b.owner_id = o.id
                 WHERE b.is_active = 1
                 ORDER BY tt.name
             """
-        
+
         cursor.execute(query)
         rows = cursor.fetchall()
         conn.close()
@@ -4276,10 +4285,11 @@ class FinanceDatabase:
         cursor = conn.cursor()
 
         cursor.execute("""
-            INSERT INTO budgets (type_id, amount, currency, period, start_date, end_date, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO budgets (type_id, owner_id, amount, currency, period, start_date, end_date, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             budget_data['type_id'],
+            budget_data.get('owner_id'),
             budget_data['amount'],
             budget_data.get('currency', 'EUR'),
             budget_data.get('period', 'monthly'),
@@ -4298,7 +4308,7 @@ class FinanceDatabase:
         """Update a budget."""
         # Whitelist allowed columns to prevent SQL injection
         ALLOWED_COLUMNS = {
-            'type_id', 'subtype_id', 'amount', 'period', 'start_date', 'end_date',
+            'type_id', 'owner_id', 'subtype_id', 'amount', 'period', 'start_date', 'end_date',
             'is_active', 'rollover', 'notes'
         }
         updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
@@ -4468,47 +4478,69 @@ class FinanceDatabase:
                 continue  # Budget has already ended before this month
             budgets.append(b)
 
-        # Get actual spending
-        transactions = self.get_transactions({
-            'start_date': start_date.isoformat(),
-            'end_date': end_date.isoformat()
-        })
+        # Aggregate expense spending per (type_id, owner_id) in a single query
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT t.type_id, a.owner_id, a.currency as account_currency,
+                   SUM(ABS(t.amount)) as total
+            FROM transactions t
+            JOIN transaction_types tt ON t.type_id = tt.id
+            JOIN accounts a ON t.account_id = a.id
+            WHERE tt.category = 'expense'
+              AND t.transaction_date >= ?
+              AND t.transaction_date < ?
+            GROUP BY t.type_id, a.owner_id, a.currency
+        """, (start_date.isoformat(), end_date.isoformat()))
+        rows = cursor.fetchall()
+        conn.close()
 
         # Load exchange rates once for efficient batch conversion
         exchange_rates = self.get_exchange_rates_map()
 
-        # Group budgets by type_id for quick lookup of budget currency
-        budget_currency_map = {b['type_id']: b.get('currency', 'EUR') for b in budgets}
+        # Group budgets by (type_id, owner_id) for currency lookup
+        budget_currency_map = {(b['type_id'], b.get('owner_id')): b.get('currency', 'EUR') for b in budgets}
 
-        # Calculate actual by type WITH currency conversion
-        # For each transaction, convert to the budget's currency for that type
-        actual_by_type = {}
-        for t in transactions:
-            if t['category'] == 'expense':
-                type_id = t['type_id']
-                account_currency = t.get('account_currency', 'EUR')
-                amount = abs(t['amount'])
+        # Build actual spending maps with currency conversion
+        # (type_id, owner_id) -> amount in that budget's currency
+        actual_by_type_and_owner = {}  # owner-scoped budgets
+        actual_by_type_all = {}        # unscoped budgets (all owners)
 
-                # Get the budget's currency for this type (default to display_currency)
-                budget_currency = budget_currency_map.get(type_id, display_currency)
+        for row in rows:
+            type_id = row['type_id']
+            owner_id = row['owner_id']
+            account_currency = row['account_currency'] or 'EUR'
+            amount = row['total']
 
-                # Convert transaction amount to budget currency
-                if account_currency != budget_currency:
-                    amount = self.convert_with_rates(amount, account_currency, budget_currency, exchange_rates)
+            # Convert to budget currency for owner-scoped bucket
+            budget_currency_owner = budget_currency_map.get((type_id, owner_id), display_currency)
+            converted_owner = self.convert_with_rates(amount, account_currency, budget_currency_owner, exchange_rates) \
+                if account_currency != budget_currency_owner else amount
+            key = (type_id, owner_id)
+            actual_by_type_and_owner[key] = actual_by_type_and_owner.get(key, 0) + converted_owner
 
-                actual_by_type[type_id] = actual_by_type.get(type_id, 0) + amount
+            # Convert to budget currency for all-owners bucket
+            budget_currency_all = budget_currency_map.get((type_id, None), display_currency)
+            converted_all = self.convert_with_rates(amount, account_currency, budget_currency_all, exchange_rates) \
+                if account_currency != budget_currency_all else amount
+            actual_by_type_all[type_id] = actual_by_type_all.get(type_id, 0) + converted_all
 
         # Compare budgets vs actual
         results = []
         for budget in budgets:
             budget_currency = budget.get('currency', 'EUR')
+            budget_owner_id = budget.get('owner_id')
 
             if budget['period'] == 'monthly':
                 budget_amount = budget['amount']
             else:  # yearly
                 budget_amount = budget['amount'] / 12
 
-            actual = actual_by_type.get(budget['type_id'], 0)
+            if budget_owner_id:
+                actual = actual_by_type_and_owner.get((budget['type_id'], budget_owner_id), 0)
+            else:
+                actual = actual_by_type_all.get(budget['type_id'], 0)
+
             difference = budget_amount - actual
             percentage = (actual / budget_amount * 100) if budget_amount > 0 else 0
 
@@ -4522,16 +4554,18 @@ class FinanceDatabase:
                 difference_display = self.convert_with_rates(difference, budget_currency, display_currency, exchange_rates)
 
             results.append({
+                'budget_id': budget['id'],
                 'type_id': budget['type_id'],
                 'type_name': budget['type_name'],
                 'icon': budget['icon'],
                 'color': budget['color'],
+                'owner_id': budget_owner_id,
+                'owner_name': budget.get('owner_name'),
                 'budget': round(budget_display, 2),
                 'actual': round(actual_display, 2),
                 'difference': round(difference_display, 2),
                 'percentage': round(percentage, 1),
                 'status': 'over' if difference < 0 else 'under' if difference > 0 else 'exact',
-                # Include original currency amounts for reference
                 'budget_currency': budget_currency,
                 'budget_original': round(budget_amount, 2),
                 'actual_original': round(actual, 2)

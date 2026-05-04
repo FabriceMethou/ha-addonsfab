@@ -86,6 +86,7 @@ export type SubcategoryFormData = z.infer<typeof subcategorySchema>;
 // Budget form validation schema
 export const budgetSchema = z.object({
   type_id: z.string().min(1, 'Category is required'),
+  owner_id: z.string().optional(),
   amount: z
     .string()
     .min(1, 'Budget amount is required')

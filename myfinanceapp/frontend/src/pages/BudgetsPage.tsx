@@ -45,7 +45,8 @@ import {
   FormField,
   BudgetsSkeleton,
 } from "../components/shadcn";
-import { budgetsAPI, categoriesAPI, currenciesAPI } from "../services/api";
+import { budgetsAPI, categoriesAPI, currenciesAPI, accountsAPI } from "../services/api";
+import { User } from "lucide-react";
 import { format } from "date-fns";
 import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
 import { sumMoney, absMoney } from "../lib/money";
@@ -75,6 +76,7 @@ export default function BudgetsPage() {
     mode: "onChange",
     defaultValues: {
       type_id: "",
+      owner_id: "",
       amount: "",
       currency: "EUR",
       period: "monthly",
@@ -111,6 +113,16 @@ export default function BudgetsPage() {
     queryFn: async () => {
       const response = await currenciesAPI.getAll();
       return response.data.currencies;
+    },
+    staleTime: 30 * 60 * 1000,
+  });
+
+  // Fetch owners for dropdown
+  const { data: ownersData } = useQuery({
+    queryKey: ["owners"],
+    queryFn: async () => {
+      const response = await accountsAPI.getOwners();
+      return response.data.owners;
     },
     staleTime: 30 * 60 * 1000,
   });
@@ -187,6 +199,7 @@ export default function BudgetsPage() {
     setEditingBudget(budget);
     resetForm({
       type_id: budget.type_id.toString(),
+      owner_id: budget.owner_id ? budget.owner_id.toString() : "",
       amount: budget.amount.toString(),
       currency: budget.currency || "EUR",
       period: budget.period || "monthly",
@@ -202,6 +215,7 @@ export default function BudgetsPage() {
   const onSubmit = (formData: BudgetFormData) => {
     const data = {
       type_id: parseInt(formData.type_id),
+      owner_id: formData.owner_id ? parseInt(formData.owner_id) : null,
       amount: parseFloat(formData.amount),
       currency: formData.currency,
       period: formData.period,
@@ -380,11 +394,19 @@ export default function BudgetsPage() {
               const remaining = item.budget - item.actual;
 
               return (
-                <Card key={item.type_id} className="p-4 border border-border">
+                <Card key={item.budget_id} className="p-4 border border-border">
                   <div className="flex justify-between items-center mb-2">
-                    <h3 className="font-medium text-foreground">
-                      {item.type_name}
-                    </h3>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <h3 className="font-medium text-foreground truncate">
+                        {item.type_name}
+                      </h3>
+                      {item.owner_name && (
+                        <Badge variant="default" size="sm" className="shrink-0">
+                          <User className="w-3 h-3 mr-1" />
+                          {item.owner_name}
+                        </Badge>
+                      )}
+                    </div>
                     <Badge variant={remaining >= 0 ? "success" : "destructive"}>
                       {remaining >= 0 ? (
                         <TrendingUp className="h-3 w-3 mr-1" />
@@ -551,6 +573,7 @@ export default function BudgetsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Category</TableHead>
+                    <TableHead>Owner</TableHead>
                     <TableHead>Amount</TableHead>
                     <TableHead>Currency</TableHead>
                     <TableHead>Period</TableHead>
@@ -565,6 +588,16 @@ export default function BudgetsPage() {
                     <TableRow key={budget.id}>
                       <TableCell className="font-medium">
                         {budget.type_name || "Unknown Category"}
+                      </TableCell>
+                      <TableCell>
+                        {budget.owner_name ? (
+                          <Badge variant="default" size="sm">
+                            <User className="w-3 h-3 mr-1" />
+                            {budget.owner_name}
+                          </Badge>
+                        ) : (
+                          <span className="text-foreground-muted text-sm">All</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         {formatCurrency(budget.amount, budget.currency)}
@@ -672,35 +705,58 @@ export default function BudgetsPage() {
 
           <form onSubmit={handleFormSubmit(onSubmit)}>
             <div className="space-y-4 py-4">
-              <FormField
-                label="Category"
-                error={errors.type_id?.message}
-                required
-              >
-                <Controller
-                  name="type_id"
-                  control={control}
-                  render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {categoriesData
-                          ?.filter((cat: any) => cat.category === "expense")
-                          ?.map((category: any) => (
-                            <SelectItem
-                              key={category.id}
-                              value={category.id.toString()}
-                            >
-                              {category.name}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <FormField
+                  label="Category"
+                  error={errors.type_id?.message}
+                  required
+                >
+                  <Controller
+                    name="type_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categoriesData
+                            ?.filter((cat: any) => cat.category === "expense")
+                            ?.map((category: any) => (
+                              <SelectItem
+                                key={category.id}
+                                value={category.id.toString()}
+                              >
+                                {category.name}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+                <FormField label="Owner (optional)">
+                  <Controller
+                    name="owner_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value ?? ""} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="All owners" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">All owners</SelectItem>
+                          {ownersData?.map((owner: any) => (
+                            <SelectItem key={owner.id} value={owner.id.toString()}>
+                              {owner.name}
                             </SelectItem>
                           ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </FormField>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <FormField
