@@ -590,15 +590,16 @@ export default function TransactionsPage() {
     sourceAccount.currency !== destinationAccount.currency;
 
   const handleAutoCategorize = async () => {
-    // Prioritize recipient for auto-categorization as it's more indicative of category
-    const textToAnalyze =
-      formData.recipient?.trim() || formData.description?.trim();
-    if (!textToAnalyze) return;
+    const recipient = formData.recipient?.trim();
+    const description = formData.description?.trim();
+
+    // Recipient is required — the new approach looks up history by recipient
+    if (!recipient) return;
 
     setAutoCategorizingDescription(true);
     setAutoCategorizerConfidence(null);
     try {
-      const response = await transactionsAPI.autoCategorize(textToAnalyze);
+      const response = await transactionsAPI.autoCategorize(recipient, description);
       const data = response.data;
 
       if (data.type_id) {
@@ -608,10 +609,14 @@ export default function TransactionsPage() {
           data.subtype_id ? data.subtype_id.toString() : "",
         );
         trigger(["type_id", "subtype_id"]);
+        // confidence is the percentage of past transactions that used this pair (0–1)
         setAutoCategorizerConfidence(data.confidence ?? null);
       }
-    } catch (error) {
-      console.error("Auto-categorization failed:", error);
+    } catch (error: any) {
+      // 404 = no history for this recipient — expected, not an error worth logging
+      if (error?.response?.status !== 404) {
+        console.error("Auto-categorization failed:", error);
+      }
     } finally {
       setAutoCategorizingDescription(false);
     }
@@ -1521,7 +1526,7 @@ export default function TransactionsPage() {
               {/* Auto-categorizer confidence feedback */}
               {autoCategorizerConfidence !== null && (
                 <div className="sm:col-span-2 flex items-center gap-2 text-xs">
-                  <span className="text-foreground-muted">AI confidence:</span>
+                  <span className="text-foreground-muted">Based on history:</span>
                   <span
                     className={`px-2 py-0.5 rounded-full font-medium ${
                       autoCategorizerConfidence >= 0.7
@@ -1531,7 +1536,7 @@ export default function TransactionsPage() {
                           : "bg-error/15 text-error"
                     }`}
                   >
-                    {Math.round(autoCategorizerConfidence * 100)}%
+                    {Math.round(autoCategorizerConfidence * 100)}% of past transactions
                     {autoCategorizerConfidence < 0.4 && " — verify manually"}
                   </span>
                 </div>
@@ -1619,8 +1624,7 @@ export default function TransactionsPage() {
                       variant="outline"
                       onClick={handleAutoCategorize}
                       disabled={
-                        (!formData.recipient?.trim() &&
-                          !formData.description?.trim()) ||
+                        !formData.recipient?.trim() ||
                         autoCategorizingDescription
                       }
                       className="shrink-0"
