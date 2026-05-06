@@ -297,8 +297,8 @@ export const transactionsAPI = {
     api.get("/api/transactions/stats/summary", { params }),
   getSummaryByOwner: (params?: Record<string, unknown>) =>
     api.get("/api/transactions/stats/summary-by-owner", { params }),
-  autoCategorize: (description: string) =>
-    api.post("/api/transactions/auto-categorize", { description }),
+  autoCategorize: (recipient: string, description?: string) =>
+    api.post("/api/transactions/auto-categorize", { recipient, description }),
   getPending: () => api.get("/api/transactions/pending/all"),
   confirm: (id: number) => api.post(`/api/transactions/${id}/confirm`),
   reject: (id: number) => api.delete(`/api/transactions/${id}/reject`),

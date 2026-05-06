@@ -94,7 +94,8 @@ class TransactionFilter(BaseModel):
     tags: Optional[str] = None
 
 class AutoCategorizeRequest(BaseModel):
-    description: str
+    recipient: Optional[str] = None   # destinataire — primary signal
+    description: Optional[str] = None  # fallback text context (not used for lookup currently)
 
 @router.get("/")
 async def get_transactions(
@@ -677,50 +678,49 @@ async def auto_categorize_transaction(
     request: AutoCategorizeRequest,
     current_user: User = Depends(get_current_user)
 ):
-    """Auto-categorize a transaction based on description"""
+    """
+    Suggest a category for a transaction based on the recipient's history.
+
+    Looks up all past transactions for this exact recipient, counts how often
+    each (category, subcategory) pair was used, and returns the most frequent
+    one. Confidence equals the percentage of past transactions that used that
+    pair (e.g. 0.90 = 90 % of this recipient's transactions were Groceries).
+
+    Returns 404 when the recipient has no history so the frontend knows to let
+    the user categorize manually.
+    """
     try:
-        # Train categorizer if not already trained (lock prevents concurrent training)
-        if not categorizer.get_model_info().get('trained', False):
-            with _categorizer_train_lock:
-                # Re-check inside lock: another thread may have just finished training
-                if not categorizer.get_model_info().get('trained', False):
-                    transactions = db.get_transactions_for_prediction(months=0)
-                    if len(transactions) > 10:
-                        categorizer.train_model(transactions)
+        recipient = (request.recipient or "").strip()
 
-        # Predict category - returns (type_id, subtype_id, confidence)
-        type_id, subtype_id, confidence = categorizer.predict(request.description)
-
-        if type_id is None:
+        if not recipient:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Categorizer model not trained. Need at least 10 categorized transactions."
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No recipient provided — please categorize manually."
             )
 
-        # Get category names from database
-        conn = db._get_connection()
-        cursor = conn.cursor()
+        suggestions = db.get_category_suggestion_by_recipient(recipient)
 
-        cursor.execute("SELECT name FROM transaction_types WHERE id = ?", (type_id,))
-        type_result = cursor.fetchone()
-        type_name = type_result['name'] if type_result else None
+        if not suggestions:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No history found for this recipient — please categorize manually."
+            )
 
-        subtype_name = None
-        if subtype_id:
-            cursor.execute("SELECT name FROM transaction_subtypes WHERE id = ?", (subtype_id,))
-            subtype_result = cursor.fetchone()
-            subtype_name = subtype_result['name'] if subtype_result else None
-
-        conn.close()
+        # Top suggestion is the most frequent (category, subcategory) pair
+        top = suggestions[0]
 
         return {
-            "type_id": type_id,
-            "type_name": type_name,
-            "subtype_id": subtype_id,
-            "subtype_name": subtype_name,
-            "confidence": confidence
+            "type_id":      top['type_id'],
+            "type_name":    top['type_name'],
+            "subtype_id":   top['subtype_id'],
+            "subtype_name": top['subtype_name'],
+            "confidence":   top['percentage'] / 100,  # 0.0–1.0
+            "total_transactions": sum(s['count'] for s in suggestions),
+            "all_suggestions": suggestions,  # full breakdown for UI if needed
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

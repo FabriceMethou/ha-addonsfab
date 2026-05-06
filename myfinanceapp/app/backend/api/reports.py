@@ -164,15 +164,23 @@ async def spending_prediction(
 ):
     """Predict spending for upcoming months"""
     try:
-        # Use display currency to avoid mixing currencies in regression
         display_currency = db.get_preference('display_currency', 'EUR')
+        exchange_rates = db.get_exchange_rates_map()
 
-        # Use prediction-specific query: LEFT JOIN (includes transactions without subtype),
-        # filtered to display currency so amounts are comparable
-        transactions = db.get_transactions_for_prediction(months=24, currency=display_currency)
+        # All transactions are fetched and converted to display_currency in one step
+        transactions = db.get_transactions_for_prediction(months=24, display_currency=display_currency)
 
-        # Get active budgets
-        budgets = db.get_budgets(include_inactive=False)
+        # Normalise budgets to display currency so _compare_with_budgets is accurate
+        raw_budgets = db.get_budgets(include_inactive=False)
+        budgets = []
+        for b in raw_budgets:
+            b_copy = dict(b)
+            b_currency = b.get('currency', 'EUR')
+            if b_currency != display_currency:
+                b_copy['amount'] = db.convert_with_rates(
+                    b['amount'], b_currency, display_currency, exchange_rates
+                )
+            budgets.append(b_copy)
 
         # Create predictor and predict
         predictor = SpendingPredictor(

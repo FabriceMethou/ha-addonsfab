@@ -5438,13 +5438,21 @@ class FinanceDatabase:
         conn.close()
         return data
     # ==================== Machine Learning====================
-    def get_transactions_for_prediction(self, months: int = 24, currency: str = None) -> List[Dict]:
-        """Get transactions with full details for prediction analysis.
+    def get_transactions_for_prediction(self, months: int = 24, display_currency: str = None) -> List[Dict]:
+        """Get transactions for prediction, with amounts converted to the display currency.
+
+        All currencies are included and converted so the model trains on a single
+        comparable currency rather than silently excluding non-display-currency transactions.
 
         Args:
-            months: Number of months of history to retrieve. 0 or None = all history.
-            currency: Filter transactions by currency (e.g., 'EUR', 'DKK'). If None, returns all currencies.
+            months: Number of months of history to retrieve (0 = all history).
+            display_currency: Target currency for amount conversion. Falls back to the
+                              user's display_currency preference.
         """
+        if not display_currency:
+            display_currency = self.get_preference('display_currency', 'EUR')
+        exchange_rates = self.get_exchange_rates_map()
+
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -5452,7 +5460,6 @@ class FinanceDatabase:
             SELECT
                 t.transaction_date as date,
                 t.amount,
-                t.currency,
                 t.description,
                 t.destinataire,
                 t.created_at,
@@ -5460,31 +5467,97 @@ class FinanceDatabase:
                 t.subtype_id,
                 tt.name as type_name,
                 tt.category,
-                ts.name as subtype_name
+                ts.name as subtype_name,
+                a.currency as account_currency
             FROM transactions t
             JOIN transaction_types tt ON t.type_id = tt.id
             LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+            JOIN accounts a ON t.account_id = a.id
             WHERE 1=1
         """
 
         params = []
-
         if months:
-            query += " AND transaction_date >= date('now', ?)"
+            query += " AND t.transaction_date >= date('now', ?)"
             params.append(f'-{months} months')
 
-        # Filter by currency if specified
-        if currency:
-            query += " AND t.currency = ?"
-            params.append(currency)
-
-        query += " ORDER BY transaction_date DESC"
+        query += " ORDER BY t.transaction_date DESC"
 
         cursor.execute(query, params)
-        transactions = [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
         conn.close()
-        return transactions
-    
+
+        # Convert each amount to the display currency
+        for row in rows:
+            acct_currency = row.pop('account_currency', 'EUR') or 'EUR'
+            if acct_currency != display_currency:
+                row['amount'] = self.convert_with_rates(
+                    row['amount'], acct_currency, display_currency, exchange_rates
+                )
+
+        return rows
+
+    def get_category_suggestion_by_recipient(self, recipient: str) -> List[Dict[str, Any]]:
+        """
+        Return category/subcategory suggestions for a recipient based on past transactions.
+
+        Looks up all past transactions whose destinataire matches the recipient
+        (case-insensitive exact match), counts occurrences per (type_id, subtype_id)
+        pair, and returns them sorted by frequency descending.
+
+        # FUTURE: consider fuzzy/normalised matching here (strip trailing digits,
+        # punctuation, common suffixes like store numbers) so that
+        # "CARREFOUR MARKET 045" and "CARREFOUR MARKET 112" map to the same bucket.
+
+        Args:
+            recipient: The destinataire string from the transaction form.
+
+        Returns:
+            List of dicts with keys:
+                type_id, type_name, subtype_id, subtype_name, count, percentage
+            Sorted by count descending. Empty list if no history for this recipient.
+        """
+        if not recipient or not recipient.strip():
+            return []
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                t.type_id,
+                tt.name  AS type_name,
+                t.subtype_id,
+                ts.name  AS subtype_name,
+                COUNT(*) AS cnt
+            FROM transactions t
+            JOIN transaction_types tt ON t.type_id = tt.id
+            LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+            WHERE LOWER(t.destinataire) = LOWER(?)
+              AND t.type_id IS NOT NULL
+            GROUP BY t.type_id, t.subtype_id
+            ORDER BY cnt DESC
+        """, (recipient.strip(),))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return []
+
+        total = sum(r['cnt'] for r in rows)
+        return [
+            {
+                'type_id':      row['type_id'],
+                'type_name':    row['type_name'],
+                'subtype_id':   row['subtype_id'],
+                'subtype_name': row['subtype_name'],
+                'count':        row['cnt'],
+                'percentage':   round(row['cnt'] / total * 100, 1),
+            }
+            for row in rows
+        ]
+
     def get_today_spending(self) -> float:
         """Get total spending for today converted to the user's display currency."""
         display_currency = self.get_preference('display_currency', 'EUR')

@@ -39,6 +39,8 @@ import {
   ArrowDownCircle,
   ChevronLeft,
   ChevronRight,
+  RefreshCw,
+  Shuffle,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -999,9 +1001,6 @@ export default function DashboardPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2 pb-1">
-              <Badge variant="outline">
-                Base: {formatCurrency(spendingPrediction.base_prediction || 0)}
-              </Badge>
               <Badge
                 variant={
                   spendingPrediction.confidence > 0.7 ? "success" : "warning"
@@ -1012,6 +1011,30 @@ export default function DashboardPage() {
               </Badge>
             </div>
           </div>
+
+          {/* Recurring / non-recurring split */}
+          {(spendingPrediction.recurring_total > 0 || spendingPrediction.non_recurring_total > 0) && (
+            <div className="grid grid-cols-2 gap-3 mb-5">
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-surface border border-border">
+                <RefreshCw className="w-4 h-4 text-primary shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs text-foreground-muted">Recurring</p>
+                  <p className="text-sm font-semibold text-foreground truncate">
+                    {formatCurrency(spendingPrediction.recurring_total || 0)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-surface border border-border">
+                <Shuffle className="w-4 h-4 text-foreground-muted shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs text-foreground-muted">Variable</p>
+                  <p className="text-sm font-semibold text-foreground truncate">
+                    {formatCurrency(spendingPrediction.non_recurring_total || 0)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Budget comparison */}
           {spendingPrediction.budget_comparison?.has_budget && (
@@ -1048,31 +1071,56 @@ export default function DashboardPage() {
               <p className="text-xs font-medium text-foreground-muted uppercase tracking-wide mb-3">
                 By category
               </p>
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 {spendingPrediction.category_breakdown
-                  .slice(0, 5)
+                  .slice(0, 6)
                   .map((cat: any) => {
                     const pct =
                       spendingPrediction.predicted > 0
                         ? (cat.predicted / spendingPrediction.predicted) * 100
                         : 0;
                     return (
-                      <div
-                        key={cat.category}
-                        className="flex items-center gap-3"
-                      >
-                        <span className="text-sm text-foreground-muted w-28 truncate shrink-0">
-                          {cat.category}
-                        </span>
-                        <div className="flex-1 h-1.5 bg-surface rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-primary/60 rounded-full"
-                            style={{ width: `${Math.min(100, pct)}%` }}
-                          />
+                      <div key={cat.category} className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-foreground-muted w-28 truncate shrink-0">
+                            {cat.category}
+                          </span>
+                          <div className="flex-1 h-1.5 bg-surface rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-primary/60 rounded-full"
+                              style={{ width: `${Math.min(100, pct)}%` }}
+                            />
+                          </div>
+                          <span className="text-sm text-foreground w-20 text-right shrink-0">
+                            {formatCurrency(cat.predicted)}
+                          </span>
                         </div>
-                        <span className="text-sm text-foreground w-20 text-right shrink-0">
-                          {formatCurrency(cat.predicted)}
-                        </span>
+                        {/* Show split only when both portions exist */}
+                        {cat.recurring_amount > 0 && cat.non_recurring_amount > 0 && (
+                          <div className="flex items-center gap-2 pl-30">
+                            <span className="w-28 shrink-0" />
+                            <div className="flex gap-2 text-xs text-foreground-muted">
+                              <span className="flex items-center gap-1">
+                                <RefreshCw className="w-2.5 h-2.5" />
+                                {formatCurrency(cat.recurring_amount)}
+                              </span>
+                              <span>+</span>
+                              <span className="flex items-center gap-1">
+                                <Shuffle className="w-2.5 h-2.5" />
+                                {formatCurrency(cat.non_recurring_amount)}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                        {/* Badge for purely recurring categories */}
+                        {cat.is_recurring && cat.non_recurring_amount === 0 && (
+                          <div className="flex items-center gap-2">
+                            <span className="w-28 shrink-0" />
+                            <span className="text-xs text-primary flex items-center gap-1">
+                              <RefreshCw className="w-2.5 h-2.5" /> recurring
+                            </span>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
