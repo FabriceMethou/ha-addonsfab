@@ -17,6 +17,7 @@ export const transactionSchema = z.object({
   transfer_account_id: z.string().optional(),
   transfer_amount: z.string().optional(),
   tags: z.string().optional(),
+  debt_id: z.string().optional(),
 });
 
 // Transfer-specific validation - adds conditional requirement for destination account

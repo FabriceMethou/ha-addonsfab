@@ -3,7 +3,7 @@ import PageHeader from "../components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { transactionsAPI, accountsAPI, categoriesAPI } from "../services/api";
+import { transactionsAPI, accountsAPI, categoriesAPI, debtsAPI } from "../services/api";
 import { format } from "date-fns";
 import { useToast } from "../contexts/ToastContext";
 import {
@@ -170,6 +170,7 @@ export default function TransactionsPage() {
       transfer_account_id: "",
       transfer_amount: "",
       tags: "",
+      debt_id: "",
     },
   });
 
@@ -267,6 +268,15 @@ export default function TransactionsPage() {
     staleTime: 30 * 60 * 1000,
   });
 
+  const { data: activeDebtsData } = useQuery({
+    queryKey: ["debts", false],
+    queryFn: async () => {
+      const response = await debtsAPI.getAll(false);
+      return response.data.debts;
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
   const createMutation = useMutation({
     mutationFn: (data: any) => transactionsAPI.create(data),
     onMutate: async (newData: any) => {
@@ -347,6 +357,9 @@ export default function TransactionsPage() {
       queryClient.invalidateQueries({ queryKey: ["recipients"] });
       queryClient.invalidateQueries({ queryKey: ["tags"] });
       queryClient.invalidateQueries({ queryKey: ["spending-prediction"] });
+      queryClient.invalidateQueries({ queryKey: ["debts"] });
+      queryClient.invalidateQueries({ queryKey: ["debts-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["debt-payments"] });
     },
   });
 
@@ -508,6 +521,7 @@ export default function TransactionsPage() {
       transfer_account_id: "",
       transfer_amount: "",
       tags: currentValues.tags,
+      debt_id: "",
     });
     setAutoCategorizerConfidence(null);
   };
@@ -525,6 +539,7 @@ export default function TransactionsPage() {
       transfer_account_id: "",
       transfer_amount: "",
       tags: "",
+      debt_id: "",
     });
     setSelectedFormOwner("");
     setAutoCategorizerConfidence(null);
@@ -565,6 +580,7 @@ export default function TransactionsPage() {
       transfer_account_id: transaction.transfer_account_id?.toString() || "",
       transfer_amount: transaction.transfer_amount?.toString() || "",
       tags: transaction.tags || "",
+      debt_id: "",
     });
     setOpenDialog(true);
     // Trigger validation after reset to enable the Update button
@@ -645,6 +661,7 @@ export default function TransactionsPage() {
       is_pending: false,
       tags: formValues.tags || null,
       owner_id: selectedFormOwner ? parseInt(selectedFormOwner) : null,
+      debt_id: !editingTransaction && formValues.debt_id ? parseInt(formValues.debt_id) : null,
     };
 
     if (editingTransaction) {
@@ -1670,6 +1687,33 @@ export default function TransactionsPage() {
                   )}
                 />
               </div>
+
+              {/* Loan Payment Field - only for new non-transfer transactions */}
+              {!editingTransaction && !isTransfer && activeDebtsData && activeDebtsData.length > 0 && (
+                <FormField label="Loan Payment (Optional)" className="sm:col-span-2">
+                  <Controller
+                    name="debt_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value || ""} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Not a loan payment" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Not a loan payment</SelectItem>
+                          {activeDebtsData
+                            .filter((d: any) => d.is_active === 1 || d.status === "active")
+                            .map((debt: any) => (
+                              <SelectItem key={debt.id} value={debt.id.toString()}>
+                                {debt.creditor} — {formatCurrency(debt.current_balance, debt.currency)} remaining
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+              )}
             </div>
             <DialogFooter>
               <Button

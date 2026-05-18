@@ -66,6 +66,7 @@ class TransactionCreate(BaseModel):
     is_pending: bool = False
     tags: Optional[str] = None
     owner_id: Optional[int] = None  # Override owner; None = inherit from account
+    debt_id: Optional[int] = None  # Link transaction to a debt payment
 
 class TransactionUpdate(BaseModel):
     account_id: Optional[int] = None
@@ -253,6 +254,27 @@ async def create_transaction(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Failed to create transaction"
             )
+
+        # If linked to a debt, record a debt payment automatically
+        if transaction.debt_id:
+            try:
+                debt = db.get_debt(transaction.debt_id)
+                if debt:
+                    payment_data = {
+                        'debt_id': transaction.debt_id,
+                        'amount': abs(amount),
+                        'payment_date': transaction.date,
+                        'transaction_id': transaction_id,
+                        'extra_payment': 0,
+                        'payment_type': 'regular',
+                        'notes': transaction.description,
+                    }
+                    db.add_debt_payment(payment_data)
+            except Exception as e:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    f"Failed to record debt payment for transaction {transaction_id}: {e}"
+                )
 
         # Check alerts after successful transaction creation
         # Wrap in try/except so alert failures don't block the transaction

@@ -1403,7 +1403,7 @@ function DebtPayments({
               <TableCell className="font-semibold text-success">
                 {formatCurrency(payment.amount)}
               </TableCell>
-              <TableCell className="text-sm">{payment.notes || "-"}</TableCell>
+              <TableCell className="text-sm">{payment.notes || payment.description || "-"}</TableCell>
             </TableRow>
           ))}
         </TableBody>

@@ -480,7 +480,7 @@ export default function ReconcilePage() {
               <SelectContent>
                 {accountsData?.map((account: any) => (
                   <SelectItem key={account.id} value={account.id.toString()}>
-                    {account.bank_name} - {account.name || account.account_type}
+                    {account.bank_name} - {account.name || account.account_type} ({account.currency})
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -899,7 +899,7 @@ export default function ReconcilePage() {
                       <SelectContent>
                         {accountsData?.map((account: any) => (
                           <SelectItem key={account.id} value={account.id.toString()}>
-                            {account.bank_name} - {account.name || account.account_type}
+                            {account.bank_name} - {account.name || account.account_type} ({account.currency})
                           </SelectItem>
                         ))}
                       </SelectContent>
