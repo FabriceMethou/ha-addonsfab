@@ -1,6 +1,11 @@
 # Changelog
 
-## 2.0.35
+## 2.0.42
+- Transactions: added optional "Loan Payment" dropdown to the add-transaction form — selecting a debt automatically records the payment in the Debts page (balance updated, payment history populated, debt marked paid off if balance reaches zero)
+- Debts: payment history now refreshes immediately after a linked transaction is created; notes column correctly falls back to transaction description
+- Reconcile: account selector now shows the currency code alongside the bank and account name
+
+## 2.0.41
 - Admin user management: added ability for administrators to reset another user's password from Security > User Management (key icon in the row); optional "require change on next login" toggle; resetting clears account lockout and failed-attempt counters so the user can sign in immediately
 
 ## 2.0.34
