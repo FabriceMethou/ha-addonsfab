@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useLocation } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm, Controller } from "react-hook-form";
@@ -99,6 +100,7 @@ function KPICard({ title, value, icon, iconColor, loading }: KPICardProps) {
 
 export default function TransactionsPage() {
   const toast = useToast();
+  const location = useLocation();
   const [openDialog, setOpenDialog] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null);
@@ -131,6 +133,9 @@ export default function TransactionsPage() {
     recipient: "",
     tags: "",
   });
+
+  const [fromReports, setFromReports] = useState(false);
+  const [pendingCategoryName, setPendingCategoryName] = useState<string | null>(null);
 
   // Check if pending filters differ from applied filters
   const hasUnappliedChanges =
@@ -188,6 +193,32 @@ export default function TransactionsPage() {
   useEffect(() => {
     setCurrentPage(1);
   }, [debouncedFilters, pageSize]);
+
+  // Pre-apply filters when navigated from Reports page
+  useEffect(() => {
+    const state = location.state as any;
+    if (state?.presetFilters) {
+      const preset = state.presetFilters;
+      const newFilters = {
+        account_id: "",
+        owner_id: "",
+        category_id: "",
+        start_date: preset.start_date || "",
+        end_date: preset.end_date || "",
+        recipient: "",
+        tags: "",
+      };
+      setPendingFilters(newFilters);
+      setAppliedFilters(newFilters);
+      setShowFilters(true);
+      setFromReports(true);
+      if (preset.category_name) {
+        setPendingCategoryName(preset.category_name);
+      }
+      // Clear state so back-navigation doesn't re-apply
+      window.history.replaceState({}, document.title);
+    }
+  }, []);
 
   const { data: transactionsResponse, isLoading: transactionsLoading } =
     useQuery({
@@ -249,6 +280,19 @@ export default function TransactionsPage() {
     },
     staleTime: 30 * 60 * 1000,
   });
+
+  // Resolve category name → ID once categories are loaded (set by navigation from Reports)
+  useEffect(() => {
+    if (!pendingCategoryName || !categoriesData) return;
+    const cat = categoriesData.find(
+      (c: any) => c.name === pendingCategoryName,
+    );
+    if (cat) {
+      setPendingFilters((prev) => ({ ...prev, category_id: cat.id.toString() }));
+      setAppliedFilters((prev) => ({ ...prev, category_id: cat.id.toString() }));
+    }
+    setPendingCategoryName(null);
+  }, [pendingCategoryName, categoriesData]);
 
   const { data: tagsData } = useQuery({
     queryKey: ["tags"],
@@ -557,6 +601,7 @@ export default function TransactionsPage() {
     };
     setPendingFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
+    setFromReports(false);
   };
 
   const hasActiveFilters =
@@ -861,6 +906,21 @@ export default function TransactionsPage() {
       {/* Filters Section */}
       {showFilters && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+          {fromReports && (
+            <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-lg bg-primary/10 border border-primary/20">
+              <span className="text-xs text-primary font-medium">
+                Filtered from Reports
+              </span>
+              <button
+                className="ml-auto text-primary/60 hover:text-primary transition-colors"
+                onClick={() => {
+                  clearFilters();
+                }}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="filter-account">Account</Label>

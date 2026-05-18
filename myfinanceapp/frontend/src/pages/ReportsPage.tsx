@@ -1,5 +1,6 @@
 // Reports Page - Financial Analytics with Modern Design
 import React, { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { useIsMobile } from "../hooks/useBreakpoint";
 import { useQuery } from "@tanstack/react-query";
@@ -144,6 +145,15 @@ function KPICard({
 
 export default function ReportsPage() {
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
+
+  const navigateToTransactions = (filters: {
+    start_date?: string;
+    end_date?: string;
+    category_name?: string;
+  }) => {
+    navigate("/transactions", { state: { presetFilters: filters } });
+  };
   const [currentTab, setCurrentTab] = useState("overview");
   const [dateRange, setDateRange] = useState("current_month");
   const [startDate, setStartDate] = useState(
@@ -826,9 +836,14 @@ export default function ReportsPage() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Income vs Expenses Chart */}
               <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-                <h3 className="text-lg font-semibold text-foreground mb-4">
-                  Income vs Expenses
-                </h3>
+                <div className="flex items-baseline justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-foreground">
+                    Income vs Expenses
+                  </h3>
+                  <span className="text-xs text-foreground-muted">
+                    Click a bar to view transactions
+                  </span>
+                </div>
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={incomeExpensesBarData}>
                     <defs>
@@ -920,7 +935,17 @@ export default function ReportsPage() {
                       itemStyle={{ color: "#e5e5e5" }}
                       formatter={(value: any) => formatCurrency(value)}
                     />
-                    <Bar dataKey="amount" radius={[8, 8, 0, 0]}>
+                    <Bar
+                      dataKey="amount"
+                      radius={[8, 8, 0, 0]}
+                      style={{ cursor: "pointer" }}
+                      onClick={() =>
+                        navigateToTransactions({
+                          start_date: startDate,
+                          end_date: endDate,
+                        })
+                      }
+                    >
                       {incomeExpensesBarData.map((entry, index) => (
                         <Cell
                           key={`cell-${index}`}
@@ -940,13 +965,25 @@ export default function ReportsPage() {
 
               {/* Spending by Category Pie Chart */}
               <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-                <h3 className="text-lg font-semibold text-foreground mb-4">
-                  Spending by Category
-                </h3>
+                <div className="flex items-baseline justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-foreground">
+                    Spending by Category
+                  </h3>
+                  <span className="text-xs text-foreground-muted">
+                    Click a slice to view transactions
+                  </span>
+                </div>
                 {spendingChartData.length > 0 ? (
-                  <div className="h-[300px]">
+                  <div className="h-[300px] cursor-pointer">
                     <ResponsivePie
                       data={spendingChartData}
+                      onClick={(datum) =>
+                        navigateToTransactions({
+                          start_date: startDate,
+                          end_date: endDate,
+                          category_name: datum.id as string,
+                        })
+                      }
                       margin={{
                         top: 20,
                         right: isMobile ? 20 : 80,
@@ -1218,12 +1255,30 @@ export default function ReportsPage() {
                 {/* Spending Breakdown Sunburst */}
                 {spendingTrendsData.all_categories?.length > 0 && (
                   <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-                    <h3 className="text-lg font-semibold text-foreground mb-4">
-                      Spending Distribution
-                    </h3>
-                    <div className="h-[400px]">
+                    <div className="flex items-baseline justify-between mb-4">
+                      <h3 className="text-lg font-semibold text-foreground">
+                        Spending Distribution
+                      </h3>
+                      <span className="text-xs text-foreground-muted">
+                        Click a segment to view transactions
+                      </span>
+                    </div>
+                    <div className="h-[400px] cursor-pointer">
                       <ResponsiveSunburst
                         data={sunburstData!}
+                        onClick={(node) => {
+                          if ((node.id as string) === "Spending") return;
+                          const trendsEnd = format(new Date(), "yyyy-MM-dd");
+                          const trendsStart = format(
+                            subMonths(new Date(), Number(trendMonths)),
+                            "yyyy-MM-dd",
+                          );
+                          navigateToTransactions({
+                            start_date: trendsStart,
+                            end_date: trendsEnd,
+                            category_name: node.id as string,
+                          });
+                        }}
                         margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
                         id="name"
                         value="value"
@@ -1684,12 +1739,42 @@ export default function ReportsPage() {
                     </Card>
 
                     <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-                      <h3 className="text-lg font-semibold text-foreground mb-4">
-                        Category Distribution
-                      </h3>
-                      <div className="h-[300px]">
+                      <div className="flex items-baseline justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-foreground">
+                          Category Distribution
+                        </h3>
+                        <span className="text-xs text-foreground-muted">
+                          Click a slice to view transactions
+                        </span>
+                      </div>
+                      <div className="h-[300px] cursor-pointer">
                         <ResponsivePie
                           data={monthlySummaryPieData}
+                          onClick={(datum) => {
+                            const monthStart = format(
+                              new Date(
+                                Number(summaryYear),
+                                Number(summaryMonth) - 1,
+                                1,
+                              ),
+                              "yyyy-MM-dd",
+                            );
+                            const monthEnd = format(
+                              endOfMonth(
+                                new Date(
+                                  Number(summaryYear),
+                                  Number(summaryMonth) - 1,
+                                  1,
+                                ),
+                              ),
+                              "yyyy-MM-dd",
+                            );
+                            navigateToTransactions({
+                              start_date: monthStart,
+                              end_date: monthEnd,
+                              category_name: datum.id as string,
+                            });
+                          }}
                           margin={{
                             top: 20,
                             right: isMobile ? 20 : 80,

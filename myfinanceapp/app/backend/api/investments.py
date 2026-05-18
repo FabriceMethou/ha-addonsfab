@@ -591,6 +591,8 @@ async def get_monthly_summary(
     Returns total amount invested (buys), received from sales, dividends earned,
     and net cash flow for the period. Useful for the dashboard monthly KPI card.
     """
+    display_currency = db.get_preference('display_currency', 'EUR')
+    exchange_rates = db.get_exchange_rates_map()
     transactions = db.get_investment_transactions()
 
     total_invested = 0.0   # sum of buy total_amount (including fees + tax)
@@ -608,9 +610,10 @@ async def get_monthly_summary(
             continue
 
         t_type = t.get('transaction_type')
-        amount = t.get('total_amount', 0) or 0
-        fees = t.get('fees', 0) or 0
-        tax = t.get('tax', 0) or 0
+        t_currency = t.get('currency', 'EUR')
+        amount = db.convert_with_rates(t.get('total_amount', 0) or 0, t_currency, display_currency, exchange_rates)
+        fees   = db.convert_with_rates(t.get('fees', 0) or 0,         t_currency, display_currency, exchange_rates)
+        tax    = db.convert_with_rates(t.get('tax', 0) or 0,          t_currency, display_currency, exchange_rates)
 
         if t_type == 'buy':
             total_invested += amount + fees + tax
@@ -632,6 +635,7 @@ async def get_monthly_summary(
         "dividend_count": dividend_count,
         "start_date": start_date,
         "end_date": end_date,
+        "currency": display_currency,
     }
 
 
