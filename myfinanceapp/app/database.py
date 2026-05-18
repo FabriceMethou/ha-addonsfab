@@ -2089,7 +2089,7 @@ class FinanceDatabase:
         # Also get envelope transactions for envelopes with this tag
         env_query = """
             SELECT et.*, e.name as envelope_name, e.tags,
-                   a.name as account_name,
+                   a.name as account_name, a.currency as account_currency,
                    'Envelope Allocation' as type_name,
                    'envelope' as category
             FROM envelope_transactions et
@@ -2121,13 +2121,29 @@ class FinanceDatabase:
         envelopes_with_tag = [dict(row) for row in cursor.fetchall()]
         conn.close()
 
-        # Calculate statistics
+        # Load display currency and exchange rates once for all conversions
+        display_currency = self.get_preference('display_currency', 'EUR')
+        exchange_rates = self.get_exchange_rates_map()
+
+        def _conv(amount, currency):
+            return self.convert_with_rates(amount, currency or 'EUR', display_currency, exchange_rates)
+
+        # Calculate statistics with currency conversion
         total_transactions = len(transactions) + len(envelope_transactions)
-        total_income = sum(t['amount'] for t in transactions if t['category'] == 'income')
-        total_expenses = sum(abs(t['amount']) for t in transactions if t['category'] == 'expense')
+        total_income = sum(
+            _conv(t['amount'], t.get('currency', 'EUR'))
+            for t in transactions if t['category'] == 'income'
+        )
+        total_expenses = sum(
+            _conv(abs(t['amount']), t.get('currency', 'EUR'))
+            for t in transactions if t['category'] == 'expense'
+        )
 
         # Envelope allocations are treated as expenses (money moved to savings)
-        envelope_allocations = sum(et['amount'] for et in envelope_transactions)
+        envelope_allocations = sum(
+            _conv(et['amount'], et.get('account_currency', 'EUR'))
+            for et in envelope_transactions
+        )
         total_expenses += envelope_allocations
 
         net = total_income - total_expenses
@@ -2139,13 +2155,17 @@ class FinanceDatabase:
         by_envelope = {}
 
         for t in transactions:
+            t_currency = t.get('currency', 'EUR')
+            converted = _conv(t['amount'], t_currency)
+            converted_abs = _conv(abs(t['amount']), t_currency)
+
             # By category
             cat = t['type_name']
-            by_category[cat] = by_category.get(cat, 0) + t['amount']
+            by_category[cat] = by_category.get(cat, 0) + converted
 
             # By account
             acc = t['account_name']
-            by_account[acc] = by_account.get(acc, 0) + abs(t['amount'])
+            by_account[acc] = by_account.get(acc, 0) + converted_abs
 
             # By month
             from datetime import datetime
@@ -2155,22 +2175,26 @@ class FinanceDatabase:
                 by_month[month_key] = {'income': 0, 'expenses': 0, 'envelopes': 0}
 
             if t['category'] == 'income':
-                by_month[month_key]['income'] += t['amount']
+                by_month[month_key]['income'] += converted
             elif t['category'] == 'expense':
-                by_month[month_key]['expenses'] += abs(t['amount'])
+                by_month[month_key]['expenses'] += converted_abs
 
         # Process envelope transactions
         for et in envelope_transactions:
+            et_currency = et.get('account_currency', 'EUR')
+            et_converted = _conv(et['amount'], et_currency)
+            et_converted_abs = _conv(abs(et['amount']), et_currency)
+
             # By category (add to "Envelope Allocation" category)
-            by_category['Envelope Allocation'] = by_category.get('Envelope Allocation', 0) + et['amount']
+            by_category['Envelope Allocation'] = by_category.get('Envelope Allocation', 0) + et_converted
 
             # By account
             acc = et['account_name']
-            by_account[acc] = by_account.get(acc, 0) + abs(et['amount'])
+            by_account[acc] = by_account.get(acc, 0) + et_converted_abs
 
             # By envelope
             env = et['envelope_name']
-            by_envelope[env] = by_envelope.get(env, 0) + et['amount']
+            by_envelope[env] = by_envelope.get(env, 0) + et_converted
 
             # By month
             from datetime import datetime
@@ -2179,7 +2203,7 @@ class FinanceDatabase:
             if month_key not in by_month:
                 by_month[month_key] = {'income': 0, 'expenses': 0, 'envelopes': 0}
 
-            by_month[month_key]['envelopes'] += et['amount']
+            by_month[month_key]['envelopes'] += et_converted
 
         # Combine all transactions for display
         all_transactions = transactions + envelope_transactions

@@ -314,8 +314,15 @@ async def create_transaction(
                     'end_date': today.isoformat()
                 }
                 daily_transactions = db.get_transactions(filters=today_filters)
+                _display_currency = db.get_preference('display_currency', 'EUR')
+                _exchange_rates = db.get_exchange_rates_map()
                 daily_total = sum(
-                    abs(t['amount'])
+                    db.convert_with_rates(
+                        abs(t['amount']),
+                        t.get('account_currency', 'EUR'),
+                        _display_currency,
+                        _exchange_rates,
+                    )
                     for t in daily_transactions
                     if t['amount'] < 0 and t.get('category') != 'transfer'
                 )

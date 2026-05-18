@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.44
+- Reports: charts are now interactive — clicking a bar, pie slice, or sunburst segment navigates to the Transactions page with matching filters (date range + category) pre-applied automatically
+- Reports: "Income vs Expenses" bar chart navigates to transactions for the current date range on click; "Spending by Category" pie and "Category Distribution" pie (Monthly tab) filter by both date range and the clicked category; "Spending Distribution" sunburst (Trends tab) filters by the trend period and the clicked category
+- Transactions: added "Filtered from Reports" banner when arriving from a chart click, with a quick-clear button to reset the pre-applied filters
+
+## 2.0.43
+- Fix currency conversion: investment monthly summary (`GET /api/investments/monthly`) now converts each transaction's amount, fees, and tax to the display currency before summing — previously raw amounts from different currencies were added together (e.g. 300 EUR + 7.5 DKK = 307.5 instead of ~301 EUR)
+- Fix currency conversion: daily spending alert now converts each transaction to the display currency before comparing against the alert threshold
+- Fix currency conversion: tag report (`get_tag_report`) now converts all amounts — totals, and all breakdowns by category, account, month, and envelope — to the display currency; envelope transaction query also gains the account currency field needed for conversion
+- Transactions: pre-apply filters when navigating from the Reports page (category, date range passed via router state)
+
 ## 2.0.42
 - Transactions: added optional "Loan Payment" dropdown to the add-transaction form — selecting a debt automatically records the payment in the Debts page (balance updated, payment history populated, debt marked paid off if balance reaches zero)
 - Debts: payment history now refreshes immediately after a linked transaction is created; notes column correctly falls back to transaction description
