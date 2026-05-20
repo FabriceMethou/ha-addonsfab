@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.46
+- Reconcile: fixed category dropdown being empty in the "Add Transaction" dialog — query was returning the full response object instead of the categories array, and field references used `.types` instead of the correct `.categories` key
+
 ## 2.0.45
 - Reconcile: fixed CSV parse errors when uploading a Trade Republic export — date parser now accepts ISO format (`2026-02-01`) in addition to the existing French format (`01 janv. 2026`)
 
