@@ -223,7 +223,7 @@ def match_transactions(csv_transactions: List[Dict], system_transactions: List[D
                     if days_diff <= DATE_TOLERANCE_DAYS and days_diff < best_days_diff:
                         best_match = sys_tx
                         best_days_diff = days_diff
-                except ValueError:
+                except (ValueError, TypeError):
                     continue
 
         if best_match is not None:
@@ -312,8 +312,11 @@ async def upload_csv(
 
         for row_idx, row in enumerate(reader):
             try:
-                # Parse date
-                date_field = row.get('date', '').strip()
+                # Parse date — prefer 'datetime' (execution timestamp) over 'date'
+                # (settlement/booking date) when both columns are present, as the
+                # execution time matches what users see in their banking app.
+                datetime_field = row.get('datetime', '').strip()
+                date_field = datetime_field if datetime_field else row.get('date', '').strip()
                 if not date_field:
                     parse_errors.append(f"Row {row_idx + 2}: Missing date")
                     continue
