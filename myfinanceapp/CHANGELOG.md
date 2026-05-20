@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.45
+- Reconcile: fixed CSV parse errors when uploading a Trade Republic export — date parser now accepts ISO format (`2026-02-01`) in addition to the existing French format (`01 janv. 2026`)
+
 ## 2.0.44
 - Reports: charts are now interactive — clicking a bar, pie slice, or sunburst segment navigates to the Transactions page with matching filters (date range + category) pre-applied automatically
 - Reports: "Income vs Expenses" bar chart navigates to transactions for the current date range on click; "Spending by Category" pie and "Category Distribution" pie (Monthly tab) filter by both date range and the clicked category; "Spending Distribution" sunburst (Trends tab) filters by the trend period and the clicked category

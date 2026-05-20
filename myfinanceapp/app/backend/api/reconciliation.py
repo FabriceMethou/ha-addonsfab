@@ -54,12 +54,19 @@ class ReconciliationComplete(BaseModel):
 
 def parse_french_date(date_str: str) -> str:
     """
-    Parse French date format to ISO format.
-    Examples:
-        '01 sept. 2025' -> '2025-09-01'
-        '15 janvier 2025' -> '2025-01-15'
+    Parse date to ISO format. Supports:
+        ISO format:    '2026-02-01'       -> '2026-02-01'
+        French format: '01 sept. 2025'    -> '2025-09-01'
+        French format: '15 janvier 2025'  -> '2025-01-15'
     """
-    parts = date_str.strip().split()
+    date_str = date_str.strip()
+
+    # ISO format: YYYY-MM-DD (also handles datetime like 2026-02-01T01:42:32Z)
+    iso_match = re.match(r'^(\d{4}-\d{2}-\d{2})', date_str)
+    if iso_match:
+        return iso_match.group(1)
+
+    parts = date_str.split()
     if len(parts) != 3:
         raise ValueError(f"Invalid date format: {date_str}")
 
