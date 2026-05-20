@@ -175,10 +175,10 @@ export default function ReconcilePage() {
   });
 
   const { data: categoriesData } = useQuery({
-    queryKey: ['categories'],
+    queryKey: ['categories-hierarchy'],
     queryFn: async () => {
       const response = await categoriesAPI.getHierarchy();
-      return response.data;
+      return response.data.categories;
     },
     staleTime: 30 * 60 * 1000,
   });
@@ -446,7 +446,7 @@ export default function ReconcilePage() {
   const selectedTypeId = watch('type_id');
   const subtypesForSelectedType = useMemo(() => {
     if (!categoriesData || !selectedTypeId) return [];
-    const type = categoriesData.types?.find((t: any) => t.id.toString() === selectedTypeId);
+    const type = categoriesData?.find((t: any) => t.id.toString() === selectedTypeId);
     return type?.subtypes || [];
   }, [categoriesData, selectedTypeId]);
 
@@ -936,7 +936,7 @@ export default function ReconcilePage() {
                         <SelectValue placeholder="Select category" />
                       </SelectTrigger>
                       <SelectContent>
-                        {categoriesData?.types?.map((type: any) => (
+                        {categoriesData?.map((type: any) => (
                           <SelectItem key={type.id} value={type.id.toString()}>
                             {type.name}
                           </SelectItem>
