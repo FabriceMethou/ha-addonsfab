@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.47
+- Reconcile: fixed 1-day date mismatch when matching Trade Republic CSV transactions — parser now uses the `datetime` column (execution timestamp) instead of `date` (settlement/booking date), so CSV dates align with what appears in the banking app
+- Reconcile: fixed silent match failure when a system transaction has a null date — tolerance loop now catches `TypeError` in addition to `ValueError`
+
 ## 2.0.46
 - Reconcile: fixed category dropdown being empty in the "Add Transaction" dialog — query was returning the full response object instead of the categories array, and field references used `.types` instead of the correct `.categories` key
 
