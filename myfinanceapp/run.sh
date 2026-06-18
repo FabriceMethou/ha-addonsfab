@@ -59,13 +59,6 @@ if bashio::config.has_value 'api_url'; then
 fi
 
 # =============================================================================
-# Create Log Directory
-# =============================================================================
-mkdir -p /var/log
-touch /var/log/backend.out.log /var/log/backend.err.log
-touch /var/log/nginx.out.log /var/log/nginx.err.log
-
-# =============================================================================
 # Start Services using Supervisor
 # =============================================================================
 bashio::log.info "Starting backend (FastAPI) and frontend (nginx)..."

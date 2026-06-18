@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.49
+- Logging: backend (FastAPI/uvicorn) and nginx logs now stream to the container's stdout/stderr, so they appear live in the Home Assistant add-on **Log** tab. Previously they were written to files inside the container (`/var/log/*.log`) and were invisible in HA, making issues like failed investment updates hard to diagnose. supervisord now forwards each program to `/dev/fd/1` / `/dev/fd/2` (rotation disabled), and nginx logs to `/dev/stdout` / `/dev/stderr`
+
 ## 2.0.48
 - Reconcile: added "Link" action on "Missing from System" rows — manually match a bank CSV row to an existing system transaction the auto-matcher missed (e.g. amount or date differs), instead of creating a duplicate via "Add". The link dialog lists unmatched system transactions sorted by closeness (amount delta, then date delta) with a search box
 - Reconcile: linked pairs are removed from both the "Missing from System" and "Not in Bank Statement" lists, shown in a new "Linked" review section with an Unlink option, and counted in the Summary and Complete dialog. Linking is session-only and does not modify the stored transaction
