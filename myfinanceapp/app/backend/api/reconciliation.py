@@ -118,6 +118,34 @@ def parse_european_amount(amount_str: str) -> float:
         raise ValueError(f"Could not parse amount: {amount_str}")
 
 
+def parse_us_amount(amount_str: str) -> float:
+    """
+    Parse US/UK format amount (comma thousands, dot decimal) to float.
+    Used for Revolut exports.
+    Examples:
+        '7.93'      -> 7.93
+        '-26.04'    -> -26.04
+        '3,552.42'  -> 3552.42
+        '10000.00'  -> 10000.0
+    """
+    if not amount_str:
+        return 0.0
+
+    cleaned = amount_str.replace('€', '').replace('\xa0', '').replace(' ', '').strip()
+
+    is_negative = cleaned.startswith('-')
+    cleaned = cleaned.replace('-', '')
+
+    # Remove thousands separators (comma); dot stays as decimal separator
+    cleaned = cleaned.replace(',', '')
+
+    try:
+        value = float(cleaned)
+        return -value if is_negative else value
+    except ValueError:
+        raise ValueError(f"Could not parse amount: {amount_str}")
+
+
 def extract_recipient_from_description(description: str, transaction_type: str) -> Optional[str]:
     """
     Extract likely recipient from CSV description based on transaction type.
@@ -141,6 +169,123 @@ def extract_recipient_from_description(description: str, transaction_type: str) 
 
     # Default: return first 50 chars of description
     return cleaned[:50] if len(cleaned) > 50 else cleaned
+
+
+def parse_csv_rows(file_content: str, account_currency: Optional[str] = None) -> tuple:
+    """
+    Parse bank CSV content into normalized transactions, auto-detecting the layout
+    from the header row.
+
+    Supported layouts:
+      - Trade Republic: lowercase `datetime`/`date`, `amount`, `balance`, `type`,
+        `description` columns with European amounts (`26,85 €`).
+      - Revolut: `Type, Product, Started Date, Completed Date, Description, Amount,
+        Fee, Currency, State, Balance` with US amounts (`3552.42`).
+
+    Revolut-specific handling:
+      - Only `COMPLETED` rows are kept (PENDING/REVERTED/DECLINED rows haven't
+        settled and aren't reflected in the Balance column).
+      - The `Started Date` (execution time) is used as the transaction date — this
+        matches what the Revolut app shows, mirroring the Trade Republic logic.
+      - The `Fee` column is ignored for matching: the per-transaction `Amount` is
+        what the user typically records, and the `Balance` column already reflects
+        fees for the ending-balance check.
+      - Revolut exports a single file covering every product. When the export mixes
+        the main `Current` account with a savings pot (which appears as
+        `Product=Deposit`, e.g. "Instant Access Savings"), each inter-pot transfer
+        shows up on both sides. To avoid phantom rows, only `Current` rows are kept
+        when any exist; otherwise all rows are used (e.g. a savings-only export).
+      - Rows whose `Currency` doesn't match the account currency are skipped.
+
+    Returns (transactions, parse_errors). Transactions are NOT date-filtered.
+    """
+    from io import StringIO
+
+    transactions = []
+    parse_errors = []
+
+    reader = csv.DictReader(StringIO(file_content))
+    fieldnames = reader.fieldnames or []
+    is_revolut = (
+        'Started Date' in fieldnames
+        and 'Completed Date' in fieldnames
+        and 'Amount' in fieldnames
+    )
+
+    rows = list(reader)
+
+    # For Revolut multi-product exports, prefer the main "Current" account rows.
+    revolut_use_current_only = False
+    if is_revolut:
+        products = {(r.get('Product') or '').strip() for r in rows}
+        revolut_use_current_only = 'Current' in products
+
+    for row_idx, row in enumerate(rows):
+        try:
+            if is_revolut:
+                state = (row.get('State') or '').strip().upper()
+                if state and state != 'COMPLETED':
+                    continue
+
+                product = (row.get('Product') or '').strip()
+                if revolut_use_current_only and product != 'Current':
+                    continue
+
+                row_currency = (row.get('Currency') or '').strip()
+                if account_currency and row_currency and row_currency.upper() != account_currency.upper():
+                    continue
+
+                date_field = (row.get('Started Date') or row.get('Completed Date') or '').strip()
+                amount_field = (row.get('Amount') or '').strip()
+                balance_field = (row.get('Balance') or '').strip()
+                tx_type = (row.get('Type') or '').strip()
+                description = (row.get('Description') or '').strip()
+                amount_parser = parse_us_amount
+            else:
+                # Trade Republic / generic: prefer 'datetime' (execution timestamp)
+                # over 'date' (settlement/booking date) when both are present.
+                datetime_field = (row.get('datetime') or '').strip()
+                date_field = datetime_field if datetime_field else (row.get('date') or '').strip()
+                amount_field = (row.get('amount') or '').strip()
+                balance_field = (row.get('balance') or '').strip()
+                tx_type = (row.get('type') or '').strip()
+                description = (row.get('description') or '').strip()
+                amount_parser = parse_european_amount
+
+            if not date_field:
+                parse_errors.append(f"Row {row_idx + 2}: Missing date")
+                continue
+
+            parsed_date = parse_french_date(date_field)
+
+            if not amount_field:
+                parse_errors.append(f"Row {row_idx + 2}: Missing amount")
+                continue
+
+            amount = amount_parser(amount_field)
+
+            balance = None
+            if balance_field:
+                try:
+                    balance = amount_parser(balance_field)
+                except ValueError:
+                    pass  # Balance parsing is optional
+
+            transactions.append({
+                'date': parsed_date,
+                'original_date': date_field,
+                'type': tx_type,
+                'amount': amount,
+                'balance': balance,
+                'description': description,
+                'suggested_recipient': extract_recipient_from_description(description, tx_type),
+            })
+
+        except ValueError as e:
+            parse_errors.append(f"Row {row_idx + 2}: {str(e)}")
+            continue
+
+    return transactions, parse_errors
 
 
 def match_transactions(csv_transactions: List[Dict], system_transactions: List[Dict]) -> Dict:
@@ -306,59 +451,13 @@ async def upload_csv(
         if len(lines) < 2:
             raise HTTPException(status_code=400, detail="CSV file appears to be empty")
 
-        # Use csv.DictReader with the content
-        from io import StringIO
-        reader = csv.DictReader(StringIO(file_content))
-
-        for row_idx, row in enumerate(reader):
-            try:
-                # Parse date — prefer 'datetime' (execution timestamp) over 'date'
-                # (settlement/booking date) when both columns are present, as the
-                # execution time matches what users see in their banking app.
-                datetime_field = row.get('datetime', '').strip()
-                date_field = datetime_field if datetime_field else row.get('date', '').strip()
-                if not date_field:
-                    parse_errors.append(f"Row {row_idx + 2}: Missing date")
-                    continue
-
-                parsed_date = parse_french_date(date_field)
-
-                # Parse amount
-                amount_field = row.get('amount', '').strip()
-                if not amount_field:
-                    parse_errors.append(f"Row {row_idx + 2}: Missing amount")
-                    continue
-
-                amount = parse_european_amount(amount_field)
-
-                # Parse balance (optional)
-                balance = None
-                balance_field = row.get('balance', '').strip()
-                if balance_field:
-                    try:
-                        balance = parse_european_amount(balance_field)
-                    except ValueError:
-                        pass  # Balance parsing is optional
-
-                # Get type and description
-                tx_type = row.get('type', '').strip()
-                description = row.get('description', '').strip()
-
-                # Filter by date range
-                if start_date <= parsed_date <= end_date:
-                    csv_transactions.append({
-                        'date': parsed_date,
-                        'original_date': date_field,
-                        'type': tx_type,
-                        'amount': amount,
-                        'balance': balance,
-                        'description': description,
-                        'suggested_recipient': extract_recipient_from_description(description, tx_type)
-                    })
-
-            except ValueError as e:
-                parse_errors.append(f"Row {row_idx + 2}: {str(e)}")
-                continue
+        # Parse all rows (auto-detects Trade Republic vs Revolut layout), then
+        # filter to the requested date range.
+        all_transactions, parse_errors = parse_csv_rows(file_content, account.get('currency'))
+        csv_transactions = [
+            tx for tx in all_transactions
+            if start_date <= tx['date'] <= end_date
+        ]
 
     finally:
         # Clean up temp file
