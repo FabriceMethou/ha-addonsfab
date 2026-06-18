@@ -56,6 +56,7 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  Link2,
 } from 'lucide-react';
 
 // Types for reconciliation data
@@ -155,6 +156,13 @@ export default function ReconcilePage() {
   const [ignoredSystemIds, setIgnoredSystemIds] = useState<Set<number>>(new Set());
   const [addedCsvIndices, setAddedCsvIndices] = useState<Set<number>>(new Set());
   const [flaggedSystemIds, setFlaggedSystemIds] = useState<Set<number>>(new Set());
+  // Manual links: csvIndex -> systemId. Session-only — declares that a CSV row
+  // corresponds to an existing system transaction the auto-matcher missed.
+  const [linkedPairs, setLinkedPairs] = useState<Map<number, number>>(new Map());
+
+  // Link dialog state
+  const [linkDialogCsvIndex, setLinkDialogCsvIndex] = useState<number | null>(null);
+  const [linkSearch, setLinkSearch] = useState('');
 
   // Add transaction dialog state
   const [addTransactionDialog, setAddTransactionDialog] = useState(false);
@@ -271,6 +279,7 @@ export default function ReconcilePage() {
       setIgnoredSystemIds(new Set());
       setAddedCsvIndices(new Set());
       setFlaggedSystemIds(new Set());
+      setLinkedPairs(new Map());
 
       const summary = response.data.summary;
       toast.success(
@@ -328,7 +337,7 @@ export default function ReconcilePage() {
         account_id: parseInt(selectedAccountId),
         validation_date: format(new Date(), 'yyyy-MM-dd'),
         actual_balance: reconciliationData.csv_ending_balance || 0,
-        matched_count: reconciliationData.summary.matched,
+        matched_count: reconciliationData.summary.matched + linkedPairs.size,
         added_count: addedCsvIndices.size,
         flagged_count: flaggedSystemIds.size,
       });
@@ -387,6 +396,27 @@ export default function ReconcilePage() {
     setIgnoredSystemIds((prev) => new Set(prev).add(id));
   };
 
+  // Handle link actions
+  const openLinkDialog = (csvIndex: number) => {
+    setLinkSearch('');
+    setLinkDialogCsvIndex(csvIndex);
+  };
+
+  const handleLink = (csvIndex: number, systemId: number) => {
+    setLinkedPairs((prev) => new Map(prev).set(csvIndex, systemId));
+    setLinkDialogCsvIndex(null);
+    setLinkSearch('');
+    toast.success('Transaction linked to existing system transaction');
+  };
+
+  const handleUnlink = (csvIndex: number) => {
+    setLinkedPairs((prev) => {
+      const next = new Map(prev);
+      next.delete(csvIndex);
+      return next;
+    });
+  };
+
   // Handle form submission for adding transaction
   const onSubmitTransaction = (data: TransactionFormData) => {
     const submitData = {
@@ -431,16 +461,55 @@ export default function ReconcilePage() {
   const missingFromSystem = useMemo(() => {
     if (!reconciliationData) return [];
     return reconciliationData.missing_from_system.filter(
-      (idx) => !ignoredCsvIndices.has(idx) && !addedCsvIndices.has(idx)
+      (idx) => !ignoredCsvIndices.has(idx) && !addedCsvIndices.has(idx) && !linkedPairs.has(idx)
     );
-  }, [reconciliationData, ignoredCsvIndices, addedCsvIndices]);
+  }, [reconciliationData, ignoredCsvIndices, addedCsvIndices, linkedPairs]);
+
+  const linkedSystemIds = useMemo(() => new Set(linkedPairs.values()), [linkedPairs]);
 
   const notInCsv = useMemo(() => {
     if (!reconciliationData) return [];
     return reconciliationData.not_in_csv.filter(
-      (id) => !ignoredSystemIds.has(id) && !flaggedSystemIds.has(id)
+      (id) => !ignoredSystemIds.has(id) && !flaggedSystemIds.has(id) && !linkedSystemIds.has(id)
     );
-  }, [reconciliationData, ignoredSystemIds, flaggedSystemIds]);
+  }, [reconciliationData, ignoredSystemIds, flaggedSystemIds, linkedSystemIds]);
+
+  // CSV row currently being linked
+  const linkCsvTx = useMemo(() => {
+    if (linkDialogCsvIndex === null || !reconciliationData) return null;
+    return reconciliationData.csv_transactions[linkDialogCsvIndex];
+  }, [linkDialogCsvIndex, reconciliationData]);
+
+  // Candidate system transactions for linking: the still-unmatched "Not in CSV"
+  // rows, sorted by closeness to the CSV row (amount delta first, then date delta).
+  const linkCandidates = useMemo(() => {
+    if (!linkCsvTx || !reconciliationData) return [];
+
+    const daysBetween = (a: string, b: string) => {
+      const d1 = new Date(a).getTime();
+      const d2 = new Date(b).getTime();
+      if (isNaN(d1) || isNaN(d2)) return Number.MAX_SAFE_INTEGER;
+      return Math.abs(Math.round((d1 - d2) / 86400000));
+    };
+
+    const search = linkSearch.trim().toLowerCase();
+
+    return notInCsv
+      .map((id) => {
+        const tx = reconciliationData.system_transactions.find((t) => t.id === id);
+        if (!tx) return null;
+        const amountDelta = Math.abs(Math.abs(tx.amount) - Math.abs(linkCsvTx.amount));
+        const dateDelta = daysBetween(tx.transaction_date, linkCsvTx.date);
+        return { tx, amountDelta, dateDelta };
+      })
+      .filter((c): c is { tx: SystemTransaction; amountDelta: number; dateDelta: number } => {
+        if (!c) return false;
+        if (!search) return true;
+        const haystack = `${c.tx.destinataire || ''} ${c.tx.description || ''} ${c.tx.type_name || ''} ${c.tx.subtype_name || ''}`.toLowerCase();
+        return haystack.includes(search);
+      })
+      .sort((a, b) => a.amountDelta - b.amountDelta || a.dateDelta - b.dateDelta);
+  }, [linkCsvTx, reconciliationData, notInCsv, linkSearch]);
 
   // Get subtypes for selected type
   const selectedTypeId = watch('type_id');
@@ -568,10 +637,14 @@ export default function ReconcilePage() {
           {/* Summary */}
           <Card className="p-6">
             <h2 className="text-lg font-semibold mb-4">Summary</h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
               <div className="text-center p-3 bg-success/10 rounded-lg">
                 <div className="text-2xl font-bold text-success">{reconciliationData.summary.matched}</div>
                 <div className="text-sm text-foreground-muted">Matched</div>
+              </div>
+              <div className="text-center p-3 bg-info/10 rounded-lg">
+                <div className="text-2xl font-bold text-info">{linkedPairs.size}</div>
+                <div className="text-sm text-foreground-muted">Linked</div>
               </div>
               <div className="text-center p-3 bg-warning/10 rounded-lg">
                 <div className="text-2xl font-bold text-warning">{missingFromSystem.length}</div>
@@ -775,6 +848,9 @@ export default function ReconcilePage() {
                               <Button size="sm" onClick={() => handleAddTransaction(idx)}>
                                 <Plus className="w-4 h-4 mr-1" /> Add
                               </Button>
+                              <Button size="sm" variant="outline" onClick={() => openLinkDialog(idx)}>
+                                <Link2 className="w-4 h-4 mr-1" /> Link
+                              </Button>
                               <Button size="sm" variant="ghost" onClick={() => handleIgnoreCsv(idx)}>
                                 <EyeOff className="w-4 h-4 mr-1" /> Ignore
                               </Button>
@@ -844,6 +920,72 @@ export default function ReconcilePage() {
                               </Button>
                               <Button size="sm" variant="ghost" onClick={() => handleIgnoreSystem(id)}>
                                 <EyeOff className="w-4 h-4 mr-1" /> Ignore
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </Card>
+          )}
+
+          {/* Linked Pairs Table */}
+          {linkedPairs.size > 0 && (
+            <Card className="p-6">
+              <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <Link2 className="w-5 h-5 text-info" />
+                Linked ({linkedPairs.size})
+              </h2>
+              <p className="text-sm text-foreground-muted mb-4">
+                These CSV rows were manually matched to existing system transactions for this session.
+              </p>
+
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>CSV Date</TableHead>
+                      <TableHead className="text-right">CSV Amount</TableHead>
+                      <TableHead hiddenOnMobile>CSV Description</TableHead>
+                      <TableHead>→</TableHead>
+                      <TableHead>System</TableHead>
+                      <TableHead className="text-right">Sys Amount</TableHead>
+                      <TableHead className="text-center">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Array.from(linkedPairs.entries()).map(([csvIndex, systemId]) => {
+                      const csvTx = reconciliationData.csv_transactions[csvIndex];
+                      const sysTx = reconciliationData.system_transactions.find((t) => t.id === systemId);
+                      if (!csvTx) return null;
+                      return (
+                        <TableRow key={csvIndex}>
+                          <TableCell className="whitespace-nowrap">{csvTx.original_date}</TableCell>
+                          <TableCell className={`text-right font-medium ${csvTx.amount < 0 ? 'text-error' : 'text-success'}`}>
+                            {formatCurrency(csvTx.amount)}
+                          </TableCell>
+                          <TableCell hiddenOnMobile title={csvTx.description}>
+                            {csvTx.description || '-'}
+                          </TableCell>
+                          <TableCell><ArrowRight className="w-4 h-4 text-foreground-muted" /></TableCell>
+                          <TableCell className="font-mono text-sm whitespace-nowrap">
+                            #{systemId}
+                            {sysTx && (
+                              <span className="ml-1 font-sans text-foreground-muted">
+                                {sysTx.destinataire || sysTx.type_name || ''}
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className={`text-right font-medium ${(sysTx?.amount || 0) < 0 ? 'text-error' : 'text-success'}`}>
+                            {sysTx ? formatCurrency(sysTx.amount) : '-'}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex justify-center">
+                              <Button size="sm" variant="ghost" onClick={() => handleUnlink(csvIndex)}>
+                                <X className="w-4 h-4 mr-1" /> Unlink
                               </Button>
                             </div>
                           </TableCell>
@@ -1043,6 +1185,103 @@ export default function ReconcilePage() {
         </DialogContent>
       </Dialog>
 
+      {/* Link Dialog */}
+      <Dialog open={linkDialogCsvIndex !== null} onOpenChange={(open) => { if (!open) { setLinkDialogCsvIndex(null); setLinkSearch(''); } }}>
+        <DialogContent size="lg">
+          <DialogHeader>
+            <DialogTitle>Link to Existing Transaction</DialogTitle>
+            <DialogDescription>
+              Match this bank row to a system transaction the auto-matcher missed (e.g. amount or date differs). This is for reconciliation only — the system transaction is left unchanged.
+            </DialogDescription>
+          </DialogHeader>
+
+          {linkCsvTx && (
+            <div className="space-y-4">
+              {/* CSV row being linked */}
+              <div className="p-3 bg-surface rounded-lg flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-xs text-foreground-muted">Bank row</div>
+                  <div className="text-sm truncate" title={linkCsvTx.description}>
+                    {linkCsvTx.original_date} · {linkCsvTx.description || linkCsvTx.type || '-'}
+                  </div>
+                </div>
+                <div className={`text-lg font-bold whitespace-nowrap ${linkCsvTx.amount < 0 ? 'text-error' : 'text-success'}`}>
+                  {formatCurrency(linkCsvTx.amount)}
+                </div>
+              </div>
+
+              {/* Search */}
+              <div className="space-y-2">
+                <Label htmlFor="link-search">Search candidates</Label>
+                <Input
+                  id="link-search"
+                  value={linkSearch}
+                  onChange={(e) => setLinkSearch(e.target.value)}
+                  placeholder="Filter by recipient, description, category..."
+                />
+              </div>
+
+              {/* Candidate list */}
+              <div className="max-h-80 overflow-y-auto border border-border rounded-lg">
+                {linkCandidates.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-foreground-muted">
+                    No unmatched system transactions available to link.
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead hiddenOnMobile>Recipient</TableHead>
+                        <TableHead className="text-center">Δ</TableHead>
+                        <TableHead className="text-center">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {linkCandidates.map(({ tx, amountDelta, dateDelta }) => (
+                        <TableRow key={tx.id}>
+                          <TableCell className="whitespace-nowrap">
+                            {format(new Date(tx.transaction_date), 'MMM dd, yyyy')}
+                          </TableCell>
+                          <TableCell className={`text-right font-medium ${tx.amount < 0 ? 'text-error' : 'text-success'}`}>
+                            {formatCurrency(tx.amount)}
+                          </TableCell>
+                          <TableCell hiddenOnMobile title={tx.destinataire || tx.description || ''}>
+                            {tx.destinataire || tx.description || tx.type_name || '-'}
+                          </TableCell>
+                          <TableCell className="text-center whitespace-nowrap">
+                            <div className="flex flex-col items-center gap-1">
+                              {amountDelta < 0.01 ? (
+                                <Badge variant="outline" className="text-success border-success">amount ✓</Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-warning border-warning">{formatCurrency(amountDelta)}</Badge>
+                              )}
+                              <span className="text-xs text-foreground-muted">{dateDelta}d</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Button size="sm" onClick={() => handleLink(linkDialogCsvIndex!, tx.id)}>
+                              <Link2 className="w-4 h-4 mr-1" /> Link
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setLinkDialogCsvIndex(null); setLinkSearch(''); }}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Complete Confirmation Dialog */}
       <Dialog open={completeDialog} onOpenChange={setCompleteDialog}>
         <DialogContent>
@@ -1058,6 +1297,10 @@ export default function ReconcilePage() {
               <div>
                 <span className="text-foreground-muted">Matched:</span>
                 <span className="ml-2 font-medium">{reconciliationData?.summary.matched || 0}</span>
+              </div>
+              <div>
+                <span className="text-foreground-muted">Linked:</span>
+                <span className="ml-2 font-medium text-info">{linkedPairs.size}</span>
               </div>
               <div>
                 <span className="text-foreground-muted">Added:</span>

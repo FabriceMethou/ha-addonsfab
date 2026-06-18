@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.48
+- Reconcile: added "Link" action on "Missing from System" rows — manually match a bank CSV row to an existing system transaction the auto-matcher missed (e.g. amount or date differs), instead of creating a duplicate via "Add". The link dialog lists unmatched system transactions sorted by closeness (amount delta, then date delta) with a search box
+- Reconcile: linked pairs are removed from both the "Missing from System" and "Not in Bank Statement" lists, shown in a new "Linked" review section with an Unlink option, and counted in the Summary and Complete dialog. Linking is session-only and does not modify the stored transaction
+
 ## 2.0.47
 - Reconcile: fixed 1-day date mismatch when matching Trade Republic CSV transactions — parser now uses the `datetime` column (execution timestamp) instead of `date` (settlement/booking date), so CSV dates align with what appears in the banking app
 - Reconcile: fixed silent match failure when a system transaction has a null date — tolerance loop now catches `TypeError` in addition to `ValueError`
