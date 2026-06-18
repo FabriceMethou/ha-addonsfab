@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.51
+- Reconcile: widened the "Link to Existing Transaction" dialog to its full size so the candidate list fits without horizontal scrolling
+
 ## 2.0.50
 - Reconcile: bank CSV import now auto-detects and supports **Revolut** exports in addition to Trade Republic. The format is detected from the header row, so no manual selection is needed. Revolut handling: maps Revolut's column layout, parses US-format amounts (`3552.42`), uses the `Started Date` as the transaction date, keeps only `COMPLETED` rows, and skips rows whose currency doesn't match the account
 - Reconcile: when a Revolut export mixes the main **Current** account with a savings pot (e.g. "Instant Access Savings", which appears as `Product=Deposit`), only the `Current` rows are used so the pot's mirror transfers don't appear as phantom "missing" entries. A savings-only export still imports normally

@@ -1197,7 +1197,7 @@ export default function ReconcilePage() {
 
       {/* Link Dialog */}
       <Dialog open={linkDialogCsvIndex !== null} onOpenChange={(open) => { if (!open) { setLinkDialogCsvIndex(null); setLinkSearch(''); } }}>
-        <DialogContent size="lg">
+        <DialogContent size="full">
           <DialogHeader>
             <DialogTitle>Link to Existing Transaction</DialogTitle>
             <DialogDescription>
