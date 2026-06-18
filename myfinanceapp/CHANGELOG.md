@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2.0.49
+- Build: fixed add-on failing to build/update — the `ghcr.io/home-assistant/*-base:latest` image moved to Python 3.14, for which the pinned `pydantic-core==2.14.6` has no wheel and fails to compile from source (`ForwardRef._evaluate() missing ... 'recursive_guard'`). Added `build.yaml` pinning the base image to Alpine 3.21 (Python 3.12), the environment the pinned dependencies are known to build in
 - Logging: backend (FastAPI/uvicorn) and nginx logs now stream to the container's stdout/stderr, so they appear live in the Home Assistant add-on **Log** tab. Previously they were written to files inside the container (`/var/log/*.log`) and were invisible in HA, making issues like failed investment updates hard to diagnose. supervisord now forwards each program to `/dev/fd/1` / `/dev/fd/2` (rotation disabled), and nginx logs to `/dev/stdout` / `/dev/stderr`
 
 ## 2.0.48
