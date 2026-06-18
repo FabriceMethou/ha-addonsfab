@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1.4
 
-# Base image for the final Home Assistant add-on (can be overridden by the build system)
-ARG BUILD_FROM="ghcr.io/home-assistant/amd64-base:latest"
+# Base image for the final Home Assistant add-on (overridden per-arch by build.yaml).
+# Pinned to Alpine 3.21 (Python 3.12) — newer bases ship Python 3.14, for which the
+# pinned pydantic-core==2.14.6 has no wheel and fails to compile.
+ARG BUILD_FROM="ghcr.io/home-assistant/amd64-base:3.21"
 
 #
 # Stage 1: Build the React frontend
