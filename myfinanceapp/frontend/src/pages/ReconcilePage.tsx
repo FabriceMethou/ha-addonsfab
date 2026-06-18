@@ -480,8 +480,19 @@ export default function ReconcilePage() {
     return reconciliationData.csv_transactions[linkDialogCsvIndex];
   }, [linkDialogCsvIndex, reconciliationData]);
 
-  // Candidate system transactions for linking: the still-unmatched "Not in CSV"
-  // rows, sorted by closeness to the CSV row (amount delta first, then date delta).
+  // System transaction IDs already matched (auto) to a CSV row — used to badge
+  // candidates that are already accounted for elsewhere.
+  const matchedSystemIds = useMemo(
+    () => new Set((reconciliationData?.matched || []).map((m) => m.system_id)),
+    [reconciliationData]
+  );
+
+  // Number of days the link dialog looks around the CSV row's date.
+  const LINK_DATE_WINDOW_DAYS = 3;
+
+  // Candidate system transactions for linking: every system transaction within
+  // ±3 days of the CSV row's date (matched or not), excluding ones already linked
+  // this session. Sorted by closeness to the CSV row (amount delta, then date delta).
   const linkCandidates = useMemo(() => {
     if (!linkCsvTx || !reconciliationData) return [];
 
@@ -494,22 +505,21 @@ export default function ReconcilePage() {
 
     const search = linkSearch.trim().toLowerCase();
 
-    return notInCsv
-      .map((id) => {
-        const tx = reconciliationData.system_transactions.find((t) => t.id === id);
-        if (!tx) return null;
+    return reconciliationData.system_transactions
+      .filter((tx) => !linkedSystemIds.has(tx.id))
+      .map((tx) => {
         const amountDelta = Math.abs(Math.abs(tx.amount) - Math.abs(linkCsvTx.amount));
         const dateDelta = daysBetween(tx.transaction_date, linkCsvTx.date);
-        return { tx, amountDelta, dateDelta };
+        return { tx, amountDelta, dateDelta, isMatched: matchedSystemIds.has(tx.id) };
       })
-      .filter((c): c is { tx: SystemTransaction; amountDelta: number; dateDelta: number } => {
-        if (!c) return false;
+      .filter((c) => {
+        if (c.dateDelta > LINK_DATE_WINDOW_DAYS) return false;
         if (!search) return true;
         const haystack = `${c.tx.destinataire || ''} ${c.tx.description || ''} ${c.tx.type_name || ''} ${c.tx.subtype_name || ''}`.toLowerCase();
         return haystack.includes(search);
       })
       .sort((a, b) => a.amountDelta - b.amountDelta || a.dateDelta - b.dateDelta);
-  }, [linkCsvTx, reconciliationData, notInCsv, linkSearch]);
+  }, [linkCsvTx, reconciliationData, linkedSystemIds, matchedSystemIds, linkSearch]);
 
   // Get subtypes for selected type
   const selectedTypeId = watch('type_id');
@@ -1222,54 +1232,45 @@ export default function ReconcilePage() {
               </div>
 
               {/* Candidate list */}
-              <div className="max-h-80 overflow-y-auto border border-border rounded-lg">
-                {linkCandidates.length === 0 ? (
-                  <div className="p-6 text-center text-sm text-foreground-muted">
-                    No unmatched system transactions available to link.
-                  </div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Date</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                        <TableHead hiddenOnMobile>Recipient</TableHead>
-                        <TableHead className="text-center">Δ</TableHead>
-                        <TableHead className="text-center">Action</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {linkCandidates.map(({ tx, amountDelta, dateDelta }) => (
-                        <TableRow key={tx.id}>
-                          <TableCell className="whitespace-nowrap">
-                            {format(new Date(tx.transaction_date), 'MMM dd, yyyy')}
-                          </TableCell>
-                          <TableCell className={`text-right font-medium ${tx.amount < 0 ? 'text-error' : 'text-success'}`}>
-                            {formatCurrency(tx.amount)}
-                          </TableCell>
-                          <TableCell hiddenOnMobile title={tx.destinataire || tx.description || ''}>
-                            {tx.destinataire || tx.description || tx.type_name || '-'}
-                          </TableCell>
-                          <TableCell className="text-center whitespace-nowrap">
-                            <div className="flex flex-col items-center gap-1">
-                              {amountDelta < 0.01 ? (
-                                <Badge variant="outline" className="text-success border-success">amount ✓</Badge>
-                              ) : (
-                                <Badge variant="outline" className="text-warning border-warning">{formatCurrency(amountDelta)}</Badge>
-                              )}
-                              <span className="text-xs text-foreground-muted">{dateDelta}d</span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <Button size="sm" onClick={() => handleLink(linkDialogCsvIndex!, tx.id)}>
-                              <Link2 className="w-4 h-4 mr-1" /> Link
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
+              <div>
+                <Label>System transactions within ±{LINK_DATE_WINDOW_DAYS} days ({linkCandidates.length})</Label>
+                <div className="mt-2 max-h-80 overflow-y-auto border border-border rounded-lg divide-y divide-border">
+                  {linkCandidates.length === 0 ? (
+                    <div className="p-6 text-center text-sm text-foreground-muted">
+                      No system transactions within ±{LINK_DATE_WINDOW_DAYS} days of {linkCsvTx.date}.
+                    </div>
+                  ) : (
+                    linkCandidates.map(({ tx, amountDelta, dateDelta, isMatched }) => (
+                      <div
+                        key={tx.id}
+                        className="flex items-center gap-3 p-3 hover:bg-surface"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`font-medium ${tx.amount < 0 ? 'text-error' : 'text-success'}`}>
+                              {formatCurrency(tx.amount)}
+                            </span>
+                            {amountDelta < 0.01 ? (
+                              <Badge variant="outline" className="text-success border-success">amount ✓</Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-warning border-warning">Δ {formatCurrency(amountDelta)}</Badge>
+                            )}
+                            <Badge variant="outline" className="text-foreground-muted">{dateDelta}d</Badge>
+                            {isMatched && (
+                              <Badge variant="outline" className="text-info border-info">already matched</Badge>
+                            )}
+                          </div>
+                          <div className="text-sm text-foreground-muted truncate mt-0.5" title={tx.destinataire || tx.description || ''}>
+                            {format(new Date(tx.transaction_date), 'MMM dd, yyyy')} · {tx.destinataire || tx.description || tx.type_name || '-'}
+                          </div>
+                        </div>
+                        <Button size="sm" className="shrink-0" onClick={() => handleLink(linkDialogCsvIndex!, tx.id)}>
+                          <Link2 className="w-4 h-4 mr-1" /> Link
+                        </Button>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           )}

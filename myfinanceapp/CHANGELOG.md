@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.50
+- Reconcile: bank CSV import now auto-detects and supports **Revolut** exports in addition to Trade Republic. The format is detected from the header row, so no manual selection is needed. Revolut handling: maps Revolut's column layout, parses US-format amounts (`3552.42`), uses the `Started Date` as the transaction date, keeps only `COMPLETED` rows, and skips rows whose currency doesn't match the account
+- Reconcile: when a Revolut export mixes the main **Current** account with a savings pot (e.g. "Instant Access Savings", which appears as `Product=Deposit`), only the `Current` rows are used so the pot's mirror transfers don't appear as phantom "missing" entries. A savings-only export still imports normally
+- Reconcile: the "Link" candidate list now shows **all** system transactions within ±3 days of the bank row's date (not just unmatched ones), so a transaction the auto-matcher paired to the wrong row can still be selected; candidates already matched elsewhere are badged "already matched"
+- Reconcile: fixed the Link dialog rendering clipped/cut off — the candidate picker is now a clean scrollable list instead of a full-bleed table
+
 ## 2.0.49
 - Build: fixed add-on failing to build/update — the `ghcr.io/home-assistant/*-base:latest` image moved to Python 3.14, for which the pinned `pydantic-core==2.14.6` has no wheel and fails to compile from source (`ForwardRef._evaluate() missing ... 'recursive_guard'`). Added `build.yaml` pinning the base image to Alpine 3.21 (Python 3.12), the environment the pinned dependencies are known to build in
 - Logging: backend (FastAPI/uvicorn) and nginx logs now stream to the container's stdout/stderr, so they appear live in the Home Assistant add-on **Log** tab. Previously they were written to files inside the container (`/var/log/*.log`) and were invisible in HA, making issues like failed investment updates hard to diagnose. supervisord now forwards each program to `/dev/fd/1` / `/dev/fd/2` (rotation disabled), and nginx logs to `/dev/stdout` / `/dev/stderr`
