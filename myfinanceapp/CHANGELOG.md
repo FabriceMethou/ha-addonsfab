@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.0.53
+- Reconcile: amounts now display in the selected account's currency (CSV vs system balances, the Missing/Not-in-CSV/Linked tables, and the Link dialog) instead of always using the global display currency — so reconciling a DKK, SEK, etc. account shows the right currency
+
 ## 2.0.52
 - Transactions: fixed the filter panel's dropdowns (Recipient/Tags autocomplete) rendering *behind* the transaction list, where they couldn't be seen or clicked — the panel's `backdrop-blur` was trapping the dropdown's stacking context. The filter card now sits above the list (but below the sticky header)
 - Reports: fixed custom date-range inputs applying a partial year while typing — entering `2026` previously refetched with years `0002`/`0020`/`0202` before you finished. The inputs now commit only a complete 4-digit-year date, and only after you pause typing. Applies to both the main report filter and the Tag Reports tab
