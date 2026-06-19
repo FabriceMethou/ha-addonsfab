@@ -488,7 +488,7 @@ export default function ReconcilePage() {
   );
 
   // Number of days the link dialog looks around the CSV row's date.
-  const LINK_DATE_WINDOW_DAYS = 3;
+  const LINK_DATE_WINDOW_DAYS = 7;
 
   // Candidate system transactions for linking: every system transaction within
   // ±3 days of the CSV row's date (matched or not), excluding ones already linked

@@ -185,8 +185,10 @@ def parse_csv_rows(file_content: str, account_currency: Optional[str] = None) ->
     Revolut-specific handling:
       - Only `COMPLETED` rows are kept (PENDING/REVERTED/DECLINED rows haven't
         settled and aren't reflected in the Balance column).
-      - The `Started Date` (execution time) is used as the transaction date — this
-        matches what the Revolut app shows, mirroring the Trade Republic logic.
+      - The `Completed Date` (settlement) is used as the transaction date, falling
+        back to `Started Date` when it's empty. Completed Date is what users record
+        for Revolut transactions — month-boundary direct debits often start a few
+        days before they settle, and the ledger entry lands on the settlement date.
       - The `Fee` column is ignored for matching: the per-transaction `Amount` is
         what the user typically records, and the `Balance` column already reflects
         fees for the ending-balance check.
@@ -235,7 +237,7 @@ def parse_csv_rows(file_content: str, account_currency: Optional[str] = None) ->
                 if account_currency and row_currency and row_currency.upper() != account_currency.upper():
                     continue
 
-                date_field = (row.get('Started Date') or row.get('Completed Date') or '').strip()
+                date_field = (row.get('Completed Date') or row.get('Started Date') or '').strip()
                 amount_field = (row.get('Amount') or '').strip()
                 balance_field = (row.get('Balance') or '').strip()
                 tx_type = (row.get('Type') or '').strip()
