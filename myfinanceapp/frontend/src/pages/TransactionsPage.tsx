@@ -905,7 +905,7 @@ export default function TransactionsPage() {
 
       {/* Filters Section */}
       {showFilters && (
-        <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <Card className="relative z-10 p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           {fromReports && (
             <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-lg bg-primary/10 border border-primary/20">
               <span className="text-xs text-primary font-medium">

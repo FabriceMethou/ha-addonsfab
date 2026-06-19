@@ -1,5 +1,5 @@
 // Reports Page - Financial Analytics with Modern Design
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { useIsMobile } from "../hooks/useBreakpoint";
@@ -184,6 +184,34 @@ export default function ReportsPage() {
     Set<string>
   >(new Set());
   const [selectedOwner, setSelectedOwner] = useState<string>(""); // Empty = all owners
+
+  // Draft values for the custom-range date inputs. A native <input type="date">
+  // fires onChange for every intermediate valid date while the year is being
+  // typed (0002 -> 0020 -> 0202 -> 2026), which would otherwise refetch the
+  // reports with a wrong year. We keep what the user types in these drafts and
+  // only commit a complete date (4-digit year) to startDate/endDate — the values
+  // that drive the queries — after a short pause.
+  const [startDateInput, setStartDateInput] = useState(startDate);
+  const [endDateInput, setEndDateInput] = useState(endDate);
+
+  // Sync drafts when start/end are set programmatically (range presets).
+  useEffect(() => setStartDateInput(startDate), [startDate]);
+  useEffect(() => setEndDateInput(endDate), [endDate]);
+
+  const isCompleteDate = (s: string) =>
+    /^\d{4}-\d{2}-\d{2}$/.test(s) && Number(s.slice(0, 4)) >= 1000;
+
+  // Commit a complete date to the query state after the user stops typing.
+  useEffect(() => {
+    if (!isCompleteDate(startDateInput)) return;
+    const id = setTimeout(() => setStartDate(startDateInput), 500);
+    return () => clearTimeout(id);
+  }, [startDateInput]);
+  useEffect(() => {
+    if (!isCompleteDate(endDateInput)) return;
+    const id = setTimeout(() => setEndDate(endDateInput), 500);
+    return () => clearTimeout(id);
+  }, [endDateInput]);
 
   // Handle date range selection
   const handleDateRangeChange = (range: string) => {
@@ -717,14 +745,14 @@ export default function ReportsPage() {
                 <>
                   <Input
                     type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
+                    value={startDateInput}
+                    onChange={(e) => setStartDateInput(e.target.value)}
                     className="w-full sm:w-[150px]"
                   />
                   <Input
                     type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
+                    value={endDateInput}
+                    onChange={(e) => setEndDateInput(e.target.value)}
                     className="w-full sm:w-[150px]"
                   />
                 </>
@@ -2578,14 +2606,14 @@ export default function ReportsPage() {
                 <>
                   <Input
                     type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
+                    value={startDateInput}
+                    onChange={(e) => setStartDateInput(e.target.value)}
                     className="w-full sm:w-[150px]"
                   />
                   <Input
                     type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
+                    value={endDateInput}
+                    onChange={(e) => setEndDateInput(e.target.value)}
                     className="w-full sm:w-[150px]"
                   />
                 </>
