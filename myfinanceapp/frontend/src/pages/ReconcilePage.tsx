@@ -139,11 +139,6 @@ export default function ReconcilePage() {
     },
   });
 
-  const formatCurrency = (amount: number) => {
-    const displayCurrency = settingsData?.display_currency || 'EUR';
-    return formatCurrencyUtil(amount, displayCurrency);
-  };
-
   // Setup state
   const [selectedAccountId, setSelectedAccountId] = useState<string>('');
   const [startDate, setStartDate] = useState('');
@@ -214,6 +209,13 @@ export default function ReconcilePage() {
     if (!selectedAccountId || !accountsData) return null;
     return accountsData.find((a: any) => a.id.toString() === selectedAccountId);
   }, [selectedAccountId, accountsData]);
+
+  // Format amounts in the reconciled account's currency (falls back to the
+  // global display currency before an account is chosen).
+  const formatCurrency = (amount: number) => {
+    const currency = selectedAccount?.currency || settingsData?.display_currency || 'EUR';
+    return formatCurrencyUtil(amount, currency);
+  };
 
   // When account is selected, fetch the latest validation date for start date suggestion
   useEffect(() => {
