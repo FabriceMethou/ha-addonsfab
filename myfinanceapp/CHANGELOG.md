@@ -1,7 +1,13 @@
 # Changelog
 
+## 2.0.52
+- Transactions: fixed the filter panel's dropdowns (Recipient/Tags autocomplete) rendering *behind* the transaction list, where they couldn't be seen or clicked — the panel's `backdrop-blur` was trapping the dropdown's stacking context. The filter card now sits above the list (but below the sticky header)
+- Reports: fixed custom date-range inputs applying a partial year while typing — entering `2026` previously refetched with years `0002`/`0020`/`0202` before you finished. The inputs now commit only a complete 4-digit-year date, and only after you pause typing. Applies to both the main report filter and the Tag Reports tab
+
 ## 2.0.51
 - Reconcile: widened the "Link to Existing Transaction" dialog to its full size so the candidate list fits without horizontal scrolling
+- Reconcile: the Link candidate window now spans ±7 days (was ±3) so transactions recorded a few days off from the bank's date still appear in the picker
+- Reconcile: Revolut imports now use the `Completed Date` (settlement) as the transaction date instead of the `Started Date`, falling back to `Started Date` when empty. Month-boundary direct debits start a few days before they settle and are recorded on the settlement date, so this matches more transactions automatically (verified against a real statement: 75/86 auto-matched, up from 70)
 
 ## 2.0.50
 - Reconcile: bank CSV import now auto-detects and supports **Revolut** exports in addition to Trade Republic. The format is detected from the header row, so no manual selection is needed. Revolut handling: maps Revolut's column layout, parses US-format amounts (`3552.42`), uses the `Started Date` as the transaction date, keeps only `COMPLETED` rows, and skips rows whose currency doesn't match the account
