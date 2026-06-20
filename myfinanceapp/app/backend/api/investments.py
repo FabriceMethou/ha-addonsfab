@@ -67,36 +67,47 @@ def _get_latest_price(symbol: str) -> Optional[float]:
 
         return float(closes.iloc[-1])
 
-    try:
-        proxy_prefix = os.getenv("YAHOO_PROXY_PREFIX", "https://r.jina.ai/http://").strip()
-        if proxy_prefix:
-            import json
-            import requests
-            from urllib.parse import quote
+    proxy_prefix = os.getenv("YAHOO_PROXY_PREFIX", "https://r.jina.ai/http://").strip()
+    if proxy_prefix:
+        import json
+        import time
+        import requests
+        from urllib.parse import quote
 
-            encoded_symbol = quote(symbol, safe="")
-            url = (
-                f"{proxy_prefix}query2.finance.yahoo.com/v8/finance/chart/"
-                f"{encoded_symbol}?interval=1d&range=5d"
-            )
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            text = response.text
-            start_idx = text.find("{")
-            if start_idx != -1:
-                data = json.loads(text[start_idx:])
-                result = (data.get("chart") or {}).get("result") or []
-                if result:
-                    closes = (
-                        (result[0].get("indicators") or {})
-                        .get("quote", [{}])[0]
-                        .get("close", [])
-                    )
-                    for price in reversed(closes):
-                        if price is not None:
-                            return float(price)
-    except Exception as e:
-        logger.warning(f"Proxy price fetch failed for {symbol}: {e}")
+        encoded_symbol = quote(symbol, safe="")
+        url = (
+            f"{proxy_prefix}query2.finance.yahoo.com/v8/finance/chart/"
+            f"{encoded_symbol}?interval=1d&range=5d"
+        )
+        # Retry with backoff: the proxy is the path that actually works for this
+        # server, but it can return 429 (Too Many Requests) under load.
+        for attempt in range(3):
+            try:
+                response = requests.get(url, timeout=15)
+                if response.status_code == 429:
+                    wait = 2 * (attempt + 1)
+                    logger.warning(f"Proxy rate-limited for {symbol} (429), retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+                response.raise_for_status()
+                text = response.text
+                start_idx = text.find("{")
+                if start_idx != -1:
+                    data = json.loads(text[start_idx:])
+                    result = (data.get("chart") or {}).get("result") or []
+                    if result:
+                        closes = (
+                            (result[0].get("indicators") or {})
+                            .get("quote", [{}])[0]
+                            .get("close", [])
+                        )
+                        for price in reversed(closes):
+                            if price is not None:
+                                return float(price)
+                break  # got a valid response but no usable price; stop retrying
+            except Exception as e:
+                logger.warning(f"Proxy price fetch failed for {symbol} (attempt {attempt + 1}): {e}")
+                time.sleep(1 * (attempt + 1))
 
     try:
         info = ticker.info
@@ -794,9 +805,15 @@ async def update_all_prices(current_user: User = Depends(get_current_user)):
     skipped = []
 
     from datetime import datetime
+    import time
+
+    # Delay between Yahoo requests to avoid rate-limiting (429). Configurable via env.
+    request_delay = float(os.getenv("PRICE_UPDATE_DELAY_SECONDS", "1.0"))
+
     conn = db._get_connection()
     cursor = conn.cursor()
 
+    fetched_any = False
     for holding in holdings:
         symbol = holding.get('symbol')
         holding_id = holding.get('id')
@@ -807,6 +824,11 @@ async def update_all_prices(current_user: User = Depends(get_current_user)):
             logger.info(f"Skipping {symbol} ({investment_type}) - requires manual price entry")
             skipped.append({"symbol": symbol, "type": investment_type, "reason": "Manual price entry required"})
             continue
+
+        # Space out network requests to stay under Yahoo's rate limit.
+        if fetched_any and request_delay > 0:
+            time.sleep(request_delay)
+        fetched_any = True
 
         try:
             logger.info(f"Fetching price for {symbol}...")
