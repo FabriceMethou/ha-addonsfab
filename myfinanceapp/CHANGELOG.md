@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.55
+- Investments: fixed "Update all prices" returning a 504 timeout in the browser. The 2.0.54 delay pushed the run past nginx's 60s limit; raised the `/api` `proxy_read_timeout` to 300s and made each lookup much faster (see below)
+- Investments: price lookup now tries the working proxy path **first** instead of after ~5 doomed direct-Yahoo calls (the host's direct Yahoo access is rate-limited/blocked). This removes the repeated "History is empty" / `429 Too Many Requests` log noise and cuts each lookup to a single request, so the bulk update finishes well within the timeout. Reduced the inter-request delay default to 0.3s
+- Investments: holdings with no Yahoo data (HTTP 404) now fail fast and log a clear "manual price entry required" message instead of a misleading 429. Investigation confirmed the holdings that don't auto-update (LYP7.F, AGQUALA.PA, CARINVT.PA, HMGDECC.PA, HMGGLTC.PA, HMGJPNC.PA, INEXESA, JPMEEQA, SOGEJAH, SXAPEX.F — French mutual funds) genuinely have no price on Yahoo and must be entered manually; this was never a rate-limit issue
+
 ## 2.0.54
 - Investments: the transactions list now shows the holding's **name** instead of its ticker symbol (both the desktop table and the mobile cards), falling back to the symbol when no name is set
 - Investments: fixed "Update all prices" failing for many holdings with Yahoo `429 Too Many Requests` errors. The bulk update fired all requests back-to-back and tripped Yahoo's rate limit partway through. Now adds a configurable delay between holdings (`PRICE_UPDATE_DELAY_SECONDS`, default 1.0s) and retries the price fetch with backoff on 429. Note: some French mutual funds (HMG*, AGQUALA.PA, etc.) have no data on Yahoo's chart endpoint and still require manual price entry
