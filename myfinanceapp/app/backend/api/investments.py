@@ -23,11 +23,83 @@ db = FinanceDatabase(db_path=DB_PATH)
 isin_lookup = ISINLookup()
 
 def _get_latest_price(symbol: str) -> Optional[float]:
-    """Get latest price with minimal rate-limit risk."""
+    """Get latest price for a symbol.
+
+    The Yahoo chart endpoint (fetched via an HTTP proxy) is tried first because
+    direct Yahoo calls are commonly IP-blocked/rate-limited on server hosts,
+    while the proxy reliably works. A definitive "no data" (HTTP 404) from the
+    proxy means the symbol simply isn't priced on Yahoo (e.g. many French mutual
+    funds), so we stop immediately instead of falling back to the direct
+    `ticker.info` call that just returns 429 noise. Direct yfinance access is
+    kept as a fallback for environments where the proxy isn't configured.
+    """
     import logging
     logger = logging.getLogger("uvicorn")
 
     symbol = symbol.strip()
+
+    proxy_prefix = os.getenv("YAHOO_PROXY_PREFIX", "https://r.jina.ai/http://").strip()
+    if proxy_prefix:
+        import json
+        import time
+        import requests
+        from urllib.parse import quote
+
+        encoded_symbol = quote(symbol, safe="")
+        url = (
+            f"{proxy_prefix}query2.finance.yahoo.com/v8/finance/chart/"
+            f"{encoded_symbol}?interval=1d&range=5d"
+        )
+        # Retry with backoff: the proxy itself can return 429 under load.
+        for attempt in range(3):
+            try:
+                response = requests.get(url, timeout=15)
+                if response.status_code == 429:
+                    wait = 2 * (attempt + 1)
+                    logger.warning(f"Proxy rate-limited for {symbol} (429), retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+
+                text = response.text
+                start_idx = text.find("{")
+                if start_idx == -1:
+                    logger.warning(f"Proxy returned no JSON for {symbol}")
+                    break
+
+                chart = (json.loads(text[start_idx:]) or {}).get("chart") or {}
+
+                # Definitive "symbol not on Yahoo" -> no point trying anything else.
+                error = chart.get("error")
+                if error:
+                    logger.info(
+                        f"No Yahoo data for {symbol}: {error.get('description', error)} "
+                        f"- manual price entry required"
+                    )
+                    return None
+
+                result = chart.get("result") or []
+                if result:
+                    meta = result[0].get("meta") or {}
+                    closes = (
+                        (result[0].get("indicators") or {})
+                        .get("quote", [{}])[0]
+                        .get("close", [])
+                    )
+                    for price in reversed(closes):
+                        if price is not None:
+                            return float(price)
+                    # No history rows, but the meta block sometimes carries a price.
+                    meta_price = meta.get("regularMarketPrice")
+                    if meta_price is not None:
+                        return float(meta_price)
+                    logger.info(f"Yahoo has no price for {symbol} - manual price entry required")
+                    return None
+                break  # valid response but empty result; stop retrying
+            except Exception as e:
+                logger.warning(f"Proxy price fetch failed for {symbol} (attempt {attempt + 1}): {e}")
+                time.sleep(1 * (attempt + 1))
+
+    # Fallback: direct yfinance (only reaches data where the host isn't blocked).
     ticker = yf.Ticker(symbol)
 
     try:
@@ -50,7 +122,6 @@ def _get_latest_price(symbol: str) -> Optional[float]:
             continue
 
         if history is None or history.empty:
-            logger.warning(f"History is empty for {symbol} ({period}/{interval})")
             continue
 
         if "Close" in history.columns:
@@ -58,56 +129,12 @@ def _get_latest_price(symbol: str) -> Optional[float]:
         elif "Adj Close" in history.columns:
             closes = history["Adj Close"].dropna()
         else:
-            logger.warning(f"No Close or Adj Close column for {symbol} ({period}/{interval})")
             continue
 
         if closes.empty:
-            logger.warning(f"No close prices available for {symbol} ({period}/{interval})")
             continue
 
         return float(closes.iloc[-1])
-
-    proxy_prefix = os.getenv("YAHOO_PROXY_PREFIX", "https://r.jina.ai/http://").strip()
-    if proxy_prefix:
-        import json
-        import time
-        import requests
-        from urllib.parse import quote
-
-        encoded_symbol = quote(symbol, safe="")
-        url = (
-            f"{proxy_prefix}query2.finance.yahoo.com/v8/finance/chart/"
-            f"{encoded_symbol}?interval=1d&range=5d"
-        )
-        # Retry with backoff: the proxy is the path that actually works for this
-        # server, but it can return 429 (Too Many Requests) under load.
-        for attempt in range(3):
-            try:
-                response = requests.get(url, timeout=15)
-                if response.status_code == 429:
-                    wait = 2 * (attempt + 1)
-                    logger.warning(f"Proxy rate-limited for {symbol} (429), retrying in {wait}s...")
-                    time.sleep(wait)
-                    continue
-                response.raise_for_status()
-                text = response.text
-                start_idx = text.find("{")
-                if start_idx != -1:
-                    data = json.loads(text[start_idx:])
-                    result = (data.get("chart") or {}).get("result") or []
-                    if result:
-                        closes = (
-                            (result[0].get("indicators") or {})
-                            .get("quote", [{}])[0]
-                            .get("close", [])
-                        )
-                        for price in reversed(closes):
-                            if price is not None:
-                                return float(price)
-                break  # got a valid response but no usable price; stop retrying
-            except Exception as e:
-                logger.warning(f"Proxy price fetch failed for {symbol} (attempt {attempt + 1}): {e}")
-                time.sleep(1 * (attempt + 1))
 
     try:
         info = ticker.info
@@ -807,8 +834,8 @@ async def update_all_prices(current_user: User = Depends(get_current_user)):
     from datetime import datetime
     import time
 
-    # Delay between Yahoo requests to avoid rate-limiting (429). Configurable via env.
-    request_delay = float(os.getenv("PRICE_UPDATE_DELAY_SECONDS", "1.0"))
+    # Small delay between requests to avoid hammering the price proxy. Configurable via env.
+    request_delay = float(os.getenv("PRICE_UPDATE_DELAY_SECONDS", "0.3"))
 
     conn = db._get_connection()
     cursor = conn.cursor()
