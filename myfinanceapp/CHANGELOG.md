@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.54
+- Investments: the transactions list now shows the holding's **name** instead of its ticker symbol (both the desktop table and the mobile cards), falling back to the symbol when no name is set
+- Investments: fixed "Update all prices" failing for many holdings with Yahoo `429 Too Many Requests` errors. The bulk update fired all requests back-to-back and tripped Yahoo's rate limit partway through. Now adds a configurable delay between holdings (`PRICE_UPDATE_DELAY_SECONDS`, default 1.0s) and retries the price fetch with backoff on 429. Note: some French mutual funds (HMG*, AGQUALA.PA, etc.) have no data on Yahoo's chart endpoint and still require manual price entry
+
 ## 2.0.53
 - Reconcile: amounts now display in the selected account's currency (CSV vs system balances, the Missing/Not-in-CSV/Linked tables, and the Link dialog) instead of always using the global display currency — so reconciling a DKK, SEK, etc. account shows the right currency
 

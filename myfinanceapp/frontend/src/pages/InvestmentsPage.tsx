@@ -1961,7 +1961,7 @@ export default function InvestmentsPage() {
                                 </Badge>
                               </div>
                               <p className="font-medium text-foreground">
-                                {transaction.symbol}
+                                {transaction.name || transaction.symbol}
                               </p>
                             </div>
                             <div className="flex items-center gap-2 flex-shrink-0">
@@ -2062,7 +2062,7 @@ export default function InvestmentsPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Date</TableHead>
-                        <TableHead>Symbol</TableHead>
+                        <TableHead>Name</TableHead>
                         <TableHead>Type</TableHead>
                         <TableHead className="text-right">Quantity</TableHead>
                         <TableHead className="text-right">Price</TableHead>
@@ -2080,7 +2080,7 @@ export default function InvestmentsPage() {
                             {formatDate(transaction.transaction_date)}
                           </TableCell>
                           <TableCell className="font-semibold">
-                            {transaction.symbol}
+                            {transaction.name || transaction.symbol}
                           </TableCell>
                           <TableCell>
                             <Badge
