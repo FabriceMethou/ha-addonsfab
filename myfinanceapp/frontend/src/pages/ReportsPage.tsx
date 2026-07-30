@@ -2,6 +2,8 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
+import CategorySunburst from "../components/CategorySunburst";
+import type { SunburstSlice } from "../components/CategorySunburst";
 import { useIsMobile } from "../hooks/useBreakpoint";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -74,7 +76,6 @@ import {
 
 // Nivo
 import { ResponsivePie } from "@nivo/pie";
-import { ResponsiveSunburst } from "@nivo/sunburst";
 import { ResponsiveSankey } from "@nivo/sankey";
 
 // Enhanced KPI Card with percentage changes (matching Dashboard style)
@@ -143,6 +144,22 @@ function KPICard({
   );
 }
 
+// Category/subcategory breakdowns come back from the API as
+// [{ category, <amountKey>, subcategories: [{ category, <amountKey> }] }]
+function toSunburstSlices(
+  categories: any[] | undefined,
+  amountKey: "total" | "amount",
+): SunburstSlice[] {
+  return (categories || []).map((cat: any) => ({
+    name: cat.category,
+    value: absMoney(cat[amountKey] ?? 0),
+    subcategories: (cat.subcategories || []).map((sub: any) => ({
+      name: sub.category,
+      value: absMoney(sub[amountKey] ?? 0),
+    })),
+  }));
+}
+
 export default function ReportsPage() {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
@@ -151,6 +168,7 @@ export default function ReportsPage() {
     start_date?: string;
     end_date?: string;
     category_name?: string;
+    subcategory_name?: string;
   }) => {
     navigate("/transactions", { state: { presetFilters: filters } });
   };
@@ -181,6 +199,9 @@ export default function ReportsPage() {
     Set<string>
   >(new Set());
   const [expandedExpenseCategories, setExpandedExpenseCategories] = useState<
+    Set<string>
+  >(new Set());
+  const [expandedSummaryCategories, setExpandedSummaryCategories] = useState<
     Set<string>
   >(new Set());
   const [selectedOwner, setSelectedOwner] = useState<string>(""); // Empty = all owners
@@ -510,14 +531,9 @@ export default function ReportsPage() {
     [incomeExpensesData],
   );
 
-  // Prepare data for spending by category pie chart (Nivo format)
-  const spendingChartData = useMemo(
-    () =>
-      spendingData?.categories?.map((cat: any) => ({
-        id: cat.category,
-        label: cat.category,
-        value: absMoney(cat.total ?? 0),
-      })) || [],
+  // Prepare data for the spending by category sunburst (category -> subcategory)
+  const spendingSlices = useMemo(
+    () => toSunburstSlices(spendingData?.categories, "total"),
     [spendingData],
   );
 
@@ -575,25 +591,28 @@ export default function ReportsPage() {
     [transactionsData],
   );
 
-  // Memoize sunburst data for spending trends tab
-  const sunburstData = useMemo(() => {
-    if (!spendingTrendsData?.all_categories?.length) return null;
-    return {
-      name: "Spending",
-      children: spendingTrendsData.all_categories
-        .slice(0, 8)
-        .map((cat: string) => {
-          // Calculate total for this category across all months using precise arithmetic
-          const total = sumMoney(spendingTrendsData.trends, (month: any) =>
-            absMoney(month.categories?.[cat] || 0),
-          );
-          return {
-            name: cat,
-            value: total,
-          };
-        })
-        .filter((item: any) => item.value > 0),
-    };
+  // Memoize sunburst data for spending trends tab (category -> subcategory,
+  // totalled across every month in the selected range)
+  const trendSlices = useMemo((): SunburstSlice[] => {
+    if (!spendingTrendsData?.all_categories?.length) return [];
+    return spendingTrendsData.all_categories
+      .slice(0, 8)
+      .map((cat: string) => ({
+        name: cat,
+        // Calculate total for this category across all months using precise arithmetic
+        value: sumMoney(spendingTrendsData.trends, (month: any) =>
+          absMoney(month.categories?.[cat] || 0),
+        ),
+        subcategories: (spendingTrendsData.all_subcategories?.[cat] || []).map(
+          (sub: string) => ({
+            name: sub,
+            value: sumMoney(spendingTrendsData.trends, (month: any) =>
+              absMoney(month.subcategories?.[cat]?.[sub] || 0),
+            ),
+          }),
+        ),
+      }))
+      .filter((slice: SunburstSlice) => slice.value > 0);
   }, [spendingTrendsData]);
 
   // Memoize sorted trend analysis for spending trends tab
@@ -605,17 +624,21 @@ export default function ReportsPage() {
     );
   }, [spendingTrendsData]);
 
-  // Memoize monthly summary pie chart data
-  const monthlySummaryPieData = useMemo(() => {
-    if (!monthlySummaryData?.spending_by_category) return [];
-    return monthlySummaryData.spending_by_category
-      .slice(0, 8)
-      .map((cat: any) => ({
-        id: cat.category,
-        label: cat.category,
-        value: absMoney(cat.amount),
-      }));
-  }, [monthlySummaryData]);
+  // Memoize monthly summary sunburst data (top categories with subcategories)
+  const monthlySummarySlices = useMemo(
+    () =>
+      toSunburstSlices(
+        monthlySummaryData?.spending_by_category?.slice(0, 8),
+        "amount",
+      ),
+    [monthlySummaryData],
+  );
+
+  // Memoize tag report sunburst data
+  const tagCategorySlices = useMemo(
+    () => toSunburstSlices(tagReportData?.spending_by_category, "amount"),
+    [tagReportData],
+  );
 
   // Memoize filtered income categories for year-by-year tab
   const filteredIncomeCategories = useMemo(() => {
@@ -998,74 +1021,22 @@ export default function ReportsPage() {
                     Spending by Category
                   </h3>
                   <span className="text-xs text-foreground-muted">
-                    Click a slice to view transactions
+                    Inner ring: category — outer ring: subcategory
                   </span>
                 </div>
-                {spendingChartData.length > 0 ? (
-                  <div className="h-[300px] cursor-pointer">
-                    <ResponsivePie
-                      data={spendingChartData}
-                      onClick={(datum) =>
-                        navigateToTransactions({
-                          start_date: startDate,
-                          end_date: endDate,
-                          category_name: datum.id as string,
-                        })
-                      }
-                      margin={{
-                        top: 20,
-                        right: isMobile ? 20 : 80,
-                        bottom: 20,
-                        left: isMobile ? 20 : 80,
-                      }}
-                      innerRadius={0.5}
-                      padAngle={0.7}
-                      cornerRadius={3}
-                      activeOuterRadiusOffset={8}
-                      colors={[
-                        "#ef4444",
-                        "#f59e0b",
-                        "#f97316",
-                        "#ec4899",
-                        "#d946ef",
-                        "#a855f7",
-                        "#8b5cf6",
-                        "#6366f1",
-                      ]}
-                      borderWidth={1}
-                      borderColor={{
-                        from: "color",
-                        modifiers: [["darker", 0.2]],
-                      }}
-                      arcLinkLabelsSkipAngle={10}
-                      arcLinkLabelsTextColor="#888888"
-                      arcLinkLabelsThickness={2}
-                      arcLinkLabelsColor={{ from: "color" }}
-                      arcLabelsSkipAngle={10}
-                      arcLabelsTextColor={{
-                        from: "color",
-                        modifiers: [["darker", 2]],
-                      }}
-                      valueFormat={(value) => formatCurrency(value)}
-                      theme={{
-                        tooltip: {
-                          container: {
-                            background: "#0a0a0a",
-                            border: "1px solid #2a2a2a",
-                            borderRadius: "8px",
-                            fontSize: "12px",
-                          },
-                        },
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <div className="flex justify-center items-center h-[300px]">
-                    <p className="text-foreground-muted">
-                      No spending data for this period
-                    </p>
-                  </div>
-                )}
+                <CategorySunburst
+                  slices={spendingSlices}
+                  formatValue={formatCurrency}
+                  emptyMessage="No spending data for this period"
+                  onSelect={({ category, subcategory }) =>
+                    navigateToTransactions({
+                      start_date: startDate,
+                      end_date: endDate,
+                      category_name: category,
+                      subcategory_name: subcategory,
+                    })
+                  }
+                />
               </Card>
             </div>
 
@@ -1281,71 +1252,34 @@ export default function ReportsPage() {
             ) : spendingTrendsData ? (
               <>
                 {/* Spending Breakdown Sunburst */}
-                {spendingTrendsData.all_categories?.length > 0 && (
+                {trendSlices.length > 0 && (
                   <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
                     <div className="flex items-baseline justify-between mb-4">
                       <h3 className="text-lg font-semibold text-foreground">
                         Spending Distribution
                       </h3>
                       <span className="text-xs text-foreground-muted">
-                        Click a segment to view transactions
+                        Inner ring: category — outer ring: subcategory
                       </span>
                     </div>
-                    <div className="h-[400px] cursor-pointer">
-                      <ResponsiveSunburst
-                        data={sunburstData!}
-                        onClick={(node) => {
-                          if ((node.id as string) === "Spending") return;
-                          const trendsEnd = format(new Date(), "yyyy-MM-dd");
-                          const trendsStart = format(
-                            subMonths(new Date(), Number(trendMonths)),
-                            "yyyy-MM-dd",
-                          );
-                          navigateToTransactions({
-                            start_date: trendsStart,
-                            end_date: trendsEnd,
-                            category_name: node.id as string,
-                          });
-                        }}
-                        margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
-                        id="name"
-                        value="value"
-                        cornerRadius={2}
-                        borderWidth={2}
-                        borderColor="#0a0a0a"
-                        colors={[
-                          "#ef4444",
-                          "#f59e0b",
-                          "#f97316",
-                          "#ec4899",
-                          "#d946ef",
-                          "#a855f7",
-                          "#8b5cf6",
-                          "#6366f1",
-                        ]}
-                        childColor={{
-                          from: "color",
-                          modifiers: [["brighter", 0.3]],
-                        }}
-                        enableArcLabels={true}
-                        arcLabelsSkipAngle={15}
-                        arcLabelsTextColor={{
-                          from: "color",
-                          modifiers: [["darker", 2.5]],
-                        }}
-                        animate={true}
-                        theme={{
-                          tooltip: {
-                            container: {
-                              background: "#0a0a0a",
-                              border: "1px solid #2a2a2a",
-                              borderRadius: "8px",
-                              fontSize: "12px",
-                            },
-                          },
-                        }}
-                      />
-                    </div>
+                    <CategorySunburst
+                      slices={trendSlices}
+                      formatValue={formatCurrency}
+                      height={400}
+                      onSelect={({ category, subcategory }) => {
+                        const trendsEnd = format(new Date(), "yyyy-MM-dd");
+                        const trendsStart = format(
+                          subMonths(new Date(), Number(trendMonths)),
+                          "yyyy-MM-dd",
+                        );
+                        navigateToTransactions({
+                          start_date: trendsStart,
+                          end_date: trendsEnd,
+                          category_name: category,
+                          subcategory_name: subcategory,
+                        });
+                      }}
+                    />
                   </Card>
                 )}
 
@@ -1727,9 +1661,14 @@ export default function ReportsPage() {
                 {monthlySummaryData.spending_by_category?.length > 0 && (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-                      <h3 className="text-lg font-semibold text-foreground mb-4">
-                        Top Spending Categories
-                      </h3>
+                      <div className="flex items-baseline justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-foreground">
+                          Top Spending Categories
+                        </h3>
+                        <span className="text-xs text-foreground-muted">
+                          Click a row for subcategories
+                        </span>
+                      </div>
                       <Card className="overflow-hidden border border-border rounded-lg">
                         <Table>
                           <TableHeader>
@@ -1746,21 +1685,76 @@ export default function ReportsPage() {
                           <TableBody>
                             {monthlySummaryData.spending_by_category
                               .slice(0, 10)
-                              .map((cat: any) => (
-                                <TableRow key={cat.category}>
-                                  <TableCell>{cat.category}</TableCell>
-                                  <TableCell className="text-right">
-                                    {formatCurrency(cat.amount)}
-                                  </TableCell>
-                                  <TableCell className="text-right">
-                                    {percentOf(
-                                      cat.amount,
-                                      monthlySummaryData.expenses,
-                                    )}
-                                    %
-                                  </TableCell>
-                                </TableRow>
-                              ))}
+                              .map((cat: any) => {
+                                const isExpanded =
+                                  expandedSummaryCategories.has(cat.category);
+                                const hasSubcategories =
+                                  cat.subcategories?.length > 0;
+                                return (
+                                  <React.Fragment key={cat.category}>
+                                    <TableRow
+                                      className={
+                                        hasSubcategories
+                                          ? "cursor-pointer hover:bg-muted/50"
+                                          : ""
+                                      }
+                                      onClick={() => {
+                                        if (!hasSubcategories) return;
+                                        setExpandedSummaryCategories((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(cat.category)) {
+                                            next.delete(cat.category);
+                                          } else {
+                                            next.add(cat.category);
+                                          }
+                                          return next;
+                                        });
+                                      }}
+                                    >
+                                      <TableCell className="flex items-center gap-2">
+                                        {hasSubcategories &&
+                                          (isExpanded ? (
+                                            <ChevronDown className="w-4 h-4" />
+                                          ) : (
+                                            <ChevronRight className="w-4 h-4" />
+                                          ))}
+                                        <span>{cat.category}</span>
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        {formatCurrency(cat.amount)}
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        {percentOf(
+                                          cat.amount,
+                                          monthlySummaryData.expenses,
+                                        )}
+                                        %
+                                      </TableCell>
+                                    </TableRow>
+                                    {isExpanded &&
+                                      cat.subcategories.map((sub: any) => (
+                                        <TableRow
+                                          key={`${cat.category}-${sub.category}`}
+                                          className="bg-muted/30"
+                                        >
+                                          <TableCell className="pl-10 text-foreground-muted">
+                                            {sub.category}
+                                          </TableCell>
+                                          <TableCell className="text-right text-foreground-muted">
+                                            {formatCurrency(sub.amount)}
+                                          </TableCell>
+                                          <TableCell className="text-right text-foreground-muted">
+                                            {percentOf(
+                                              sub.amount,
+                                              monthlySummaryData.expenses,
+                                            )}
+                                            %
+                                          </TableCell>
+                                        </TableRow>
+                                      ))}
+                                  </React.Fragment>
+                                );
+                              })}
                           </TableBody>
                         </Table>
                       </Card>
@@ -1772,84 +1766,30 @@ export default function ReportsPage() {
                           Category Distribution
                         </h3>
                         <span className="text-xs text-foreground-muted">
-                          Click a slice to view transactions
+                          Inner ring: category — outer ring: subcategory
                         </span>
                       </div>
-                      <div className="h-[300px] cursor-pointer">
-                        <ResponsivePie
-                          data={monthlySummaryPieData}
-                          onClick={(datum) => {
-                            const monthStart = format(
-                              new Date(
-                                Number(summaryYear),
-                                Number(summaryMonth) - 1,
-                                1,
-                              ),
+                      <CategorySunburst
+                        slices={monthlySummarySlices}
+                        formatValue={formatCurrency}
+                        emptyMessage="No spending data for this month"
+                        onSelect={({ category, subcategory }) => {
+                          const selectedMonth = new Date(
+                            Number(summaryYear),
+                            Number(summaryMonth) - 1,
+                            1,
+                          );
+                          navigateToTransactions({
+                            start_date: format(selectedMonth, "yyyy-MM-dd"),
+                            end_date: format(
+                              endOfMonth(selectedMonth),
                               "yyyy-MM-dd",
-                            );
-                            const monthEnd = format(
-                              endOfMonth(
-                                new Date(
-                                  Number(summaryYear),
-                                  Number(summaryMonth) - 1,
-                                  1,
-                                ),
-                              ),
-                              "yyyy-MM-dd",
-                            );
-                            navigateToTransactions({
-                              start_date: monthStart,
-                              end_date: monthEnd,
-                              category_name: datum.id as string,
-                            });
-                          }}
-                          margin={{
-                            top: 20,
-                            right: isMobile ? 20 : 80,
-                            bottom: 20,
-                            left: isMobile ? 20 : 80,
-                          }}
-                          innerRadius={0.5}
-                          padAngle={0.7}
-                          cornerRadius={3}
-                          activeOuterRadiusOffset={8}
-                          colors={[
-                            "#ef4444",
-                            "#f59e0b",
-                            "#f97316",
-                            "#ec4899",
-                            "#d946ef",
-                            "#a855f7",
-                            "#8b5cf6",
-                            "#6366f1",
-                          ]}
-                          borderWidth={1}
-                          borderColor={{
-                            from: "color",
-                            modifiers: [["darker", 0.2]],
-                          }}
-                          arcLinkLabelsSkipAngle={10}
-                          arcLinkLabelsTextColor="#888888"
-                          arcLinkLabelsThickness={2}
-                          arcLinkLabelsColor={{ from: "color" }}
-                          arcLabelsSkipAngle={10}
-                          arcLabelsTextColor={{
-                            from: "color",
-                            modifiers: [["darker", 2]],
-                          }}
-                          valueFormat={(value) => formatCurrency(value)}
-                          theme={{
-                            tooltip: {
-                              container: {
-                                background: "#0a0a0a",
-                                border: "1px solid #2a2a2a",
-                                borderRadius: "8px",
-                                fontSize: "12px",
-                              },
-                            },
-                          }}
-                        />
-                      </div>
+                            ),
+                            category_name: category,
+                            subcategory_name: subcategory,
+                          });
+                        }}
+                      />
                     </Card>
                   </div>
                 )}
@@ -2688,73 +2628,18 @@ export default function ReportsPage() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   {/* Spending by Category */}
                   <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-                    <h3 className="text-lg font-semibold text-foreground mb-4">
-                      Spending by Category
-                    </h3>
-                    {tagReportData.spending_by_category?.length > 0 ? (
-                      <div className="h-[300px]">
-                        <ResponsivePie
-                          data={tagReportData.spending_by_category.map(
-                            (cat: any) => ({
-                              id: cat.category,
-                              label: cat.category,
-                              value: absMoney(cat.amount),
-                            }),
-                          )}
-                          margin={{
-                            top: 20,
-                            right: isMobile ? 20 : 80,
-                            bottom: 20,
-                            left: isMobile ? 20 : 80,
-                          }}
-                          innerRadius={0.5}
-                          padAngle={0.7}
-                          cornerRadius={3}
-                          activeOuterRadiusOffset={8}
-                          colors={[
-                            "#ef4444",
-                            "#f59e0b",
-                            "#f97316",
-                            "#ec4899",
-                            "#d946ef",
-                            "#a855f7",
-                            "#8b5cf6",
-                            "#6366f1",
-                          ]}
-                          borderWidth={1}
-                          borderColor={{
-                            from: "color",
-                            modifiers: [["darker", 0.2]],
-                          }}
-                          arcLinkLabelsSkipAngle={10}
-                          arcLinkLabelsTextColor="#888888"
-                          arcLinkLabelsThickness={2}
-                          arcLinkLabelsColor={{ from: "color" }}
-                          arcLabelsSkipAngle={10}
-                          arcLabelsTextColor={{
-                            from: "color",
-                            modifiers: [["darker", 2]],
-                          }}
-                          valueFormat={(value) => formatCurrency(value)}
-                          theme={{
-                            tooltip: {
-                              container: {
-                                background: "#0a0a0a",
-                                border: "1px solid #2a2a2a",
-                                borderRadius: "8px",
-                                fontSize: "12px",
-                              },
-                            },
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="flex justify-center items-center h-[300px]">
-                        <p className="text-foreground-muted">
-                          No category data
-                        </p>
-                      </div>
-                    )}
+                    <div className="flex items-baseline justify-between mb-4">
+                      <h3 className="text-lg font-semibold text-foreground">
+                        Spending by Category
+                      </h3>
+                      <span className="text-xs text-foreground-muted">
+                        Inner ring: category — outer ring: subcategory
+                      </span>
+                    </div>
+                    <CategorySunburst
+                      slices={tagCategorySlices}
+                      formatValue={formatCurrency}
+                    />
                   </Card>
 
                   {/* Distribution by Account */}

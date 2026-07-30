@@ -2,7 +2,7 @@
 Reports API endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import sys, os
@@ -19,6 +19,47 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
 DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 db = FinanceDatabase(db_path=DB_PATH)
+
+UNCATEGORIZED = 'Uncategorized'
+NO_SUBCATEGORY = 'Other'
+
+
+def _accumulate_category(breakdown: Dict[str, Any], transaction: Dict[str, Any], amount: float) -> None:
+    """Add an amount to a category -> subcategory breakdown map.
+
+    Reports aggregate on the full category hierarchy: the main category
+    (transaction_types.name) and the subcategory (transaction_subtypes.name).
+    """
+    category = transaction.get('type_name') or UNCATEGORIZED
+    subcategory = transaction.get('subtype_name') or NO_SUBCATEGORY
+
+    entry = breakdown.setdefault(category, {'total': 0, 'subcategories': {}})
+    entry['total'] += amount
+    entry['subcategories'][subcategory] = entry['subcategories'].get(subcategory, 0) + amount
+
+
+def _format_breakdown(breakdown: Dict[str, Any], amount_key: str = 'total') -> List[Dict[str, Any]]:
+    """Format a breakdown map as a list sorted by amount, with nested subcategories."""
+    return sorted(
+        [
+            {
+                "category": category,
+                amount_key: entry['total'],
+                "subcategories": sorted(
+                    [
+                        {"category": subcategory, amount_key: sub_amount}
+                        for subcategory, sub_amount in entry['subcategories'].items()
+                    ],
+                    key=lambda sub: sub[amount_key],
+                    reverse=True
+                )
+            }
+            for category, entry in breakdown.items()
+        ],
+        key=lambda cat: cat[amount_key],
+        reverse=True
+    )
+
 
 @router.get("/net-worth")
 async def net_worth(
@@ -78,24 +119,18 @@ async def spending_by_category(
         filters['owner_id'] = owner_id
     transactions = db.get_transactions(filters=filters if filters else None)
 
-    # Group by category (exclude transfers)
+    # Group by category and subcategory (exclude transfers)
     category_spending = {}
     for t in transactions:
         if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
-            category = t.get('type_name', 'Uncategorized')
-            if category not in category_spending:
-                category_spending[category] = 0
             # Convert transaction amount to display currency
             account_currency = t.get('account_currency', 'EUR')
             converted_amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
-            category_spending[category] += converted_amount
+            _accumulate_category(category_spending, t, converted_amount)
 
     return {
-        "categories": [
-            {"category": cat, "total": amt}
-            for cat, amt in category_spending.items()
-        ],
-        "total": sum(category_spending.values()),
+        "categories": _format_breakdown(category_spending),
+        "total": sum(entry['total'] for entry in category_spending.values()),
         "currency": display_currency,
         "owner_id": owner_id
     }
@@ -131,25 +166,19 @@ async def income_vs_expenses(
         for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
     )
 
-    # Also group income by category
+    # Also group income by category and subcategory
     income_categories = {}
     for t in transactions:
         if t['amount'] > 0 and t.get('category') != 'transfer':  # Only income, exclude transfers
-            category = t.get('type_name', 'Uncategorized')
-            if category not in income_categories:
-                income_categories[category] = 0
             account_currency = t.get('account_currency', 'EUR')
             converted_amount = db.convert_currency(t['amount'], account_currency, display_currency)
-            income_categories[category] += converted_amount
+            _accumulate_category(income_categories, t, converted_amount)
 
     return {
         "income": income,
         "expenses": expenses,
         "net": income - expenses,
-        "income_categories": [
-            {"category": cat, "total": amt}
-            for cat, amt in income_categories.items()
-        ],
+        "income_categories": _format_breakdown(income_categories),
         "start_date": start_date,
         "end_date": end_date,
         "currency": display_currency,
@@ -287,15 +316,12 @@ async def monthly_summary(
         # Get budget vs actual
         budget_data = db.get_budget_vs_actual(year, month)
 
-        # Spending by category with currency conversion (exclude transfers)
+        # Spending by category and subcategory with currency conversion (exclude transfers)
         category_spending = {}
         for t in transactions:
             if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
-                category = t.get('type_name', 'Uncategorized')
-                if category not in category_spending:
-                    category_spending[category] = 0
                 converted_amount = db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
-                category_spending[category] += converted_amount
+                _accumulate_category(category_spending, t, converted_amount)
 
         return {
             "year": year,
@@ -305,10 +331,7 @@ async def monthly_summary(
             "net": income - expenses,
             "transaction_count": len(transactions),
             "budget_vs_actual": budget_data,
-            "spending_by_category": [
-                {"category": cat, "amount": amt}
-                for cat, amt in sorted(category_spending.items(), key=lambda x: x[1], reverse=True)
-            ],
+            "spending_by_category": _format_breakdown(category_spending, amount_key='amount'),
             "currency": display_currency
         }
     except Exception as e:
@@ -366,15 +389,12 @@ async def tag_report(
             for t in tagged_transactions if t['amount'] < 0 and t.get('category') != 'transfer'
         )
 
-        # Spending by category with currency conversion (exclude transfers)
+        # Spending by category and subcategory with currency conversion (exclude transfers)
         category_spending = {}
         for t in tagged_transactions:
             if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
-                category = t.get('type_name', 'Uncategorized')
-                if category not in category_spending:
-                    category_spending[category] = 0
                 converted_amount = db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
-                category_spending[category] += converted_amount
+                _accumulate_category(category_spending, t, converted_amount)
 
         # Distribution by account with currency conversion
         account_distribution = {}
@@ -415,10 +435,7 @@ async def tag_report(
             "total_expenses": total_expenses,
             "net": total_income - total_expenses,
             "transactions": tagged_transactions,
-            "spending_by_category": [
-                {"category": cat, "amount": amt}
-                for cat, amt in sorted(category_spending.items(), key=lambda x: x[1], reverse=True)
-            ],
+            "spending_by_category": _format_breakdown(category_spending, amount_key='amount'),
             "distribution_by_account": [
                 {"account": acc, "amount": amt}
                 for acc, amt in sorted(account_distribution.items(), key=lambda x: x[1], reverse=True)
@@ -444,27 +461,25 @@ async def spending_trends(
         end_date = datetime.now()
         trends = []
 
-        # Get all categories if filtering
+        # Categories/subcategories seen across the whole period
         categories_set = set()
+        subcategories_map = {}
 
-        for i in range(months, 0, -1):
-            target_date = end_date - relativedelta(months=i)
-            month_start = target_date.replace(day=1)
-            month_end = month_start + relativedelta(months=1) - timedelta(days=1)
-
+        def build_month(month_start: datetime, period_end: datetime) -> Dict[str, Any]:
+            """Aggregate one month of spending by category and subcategory."""
             filters = {
                 'start_date': month_start.strftime('%Y-%m-%d'),
-                'end_date': month_end.strftime('%Y-%m-%d')
+                'end_date': period_end.strftime('%Y-%m-%d')
             }
             if owner_id:
                 filters['owner_id'] = owner_id
             transactions = db.get_transactions(filters=filters)
 
-            # Calculate spending by category for this month with currency conversion
             month_data = {
                 "month": month_start.strftime('%B %Y'),
                 "date": month_start.strftime('%Y-%m'),
-                "categories": {}
+                "categories": {},
+                "subcategories": {}
             }
 
             total_expenses = 0
@@ -473,17 +488,19 @@ async def spending_trends(
                 account_currency = t.get('account_currency', 'EUR')
                 # Calculate expenses (exclude transfers)
                 if t['amount'] < 0 and t.get('category') != 'transfer':
-                    cat = t.get('type_name', 'Uncategorized')
+                    cat = t.get('type_name') or UNCATEGORIZED
+                    subcat = t.get('subtype_name') or NO_SUBCATEGORY
                     categories_set.add(cat)
+                    subcategories_map.setdefault(cat, set()).add(subcat)
 
                     # If filtering by category, only include that category
                     if category and cat != category:
                         continue
 
                     converted_amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
-                    if cat not in month_data["categories"]:
-                        month_data["categories"][cat] = 0
-                    month_data["categories"][cat] += converted_amount
+                    month_data["categories"][cat] = month_data["categories"].get(cat, 0) + converted_amount
+                    month_subcats = month_data["subcategories"].setdefault(cat, {})
+                    month_subcats[subcat] = month_subcats.get(subcat, 0) + converted_amount
                     total_expenses += converted_amount
 
                 # Calculate income (exclude transfers)
@@ -493,50 +510,15 @@ async def spending_trends(
 
             month_data["total_expenses"] = total_expenses
             month_data["total_income"] = total_income
-            trends.append(month_data)
+            return month_data
 
-        # Include current month
-        current_month_start = end_date.replace(day=1)
-        filters = {
-            'start_date': current_month_start.strftime('%Y-%m-%d'),
-            'end_date': end_date.strftime('%Y-%m-%d')
-        }
-        if owner_id:
-            filters['owner_id'] = owner_id
-        transactions = db.get_transactions(filters=filters)
+        for i in range(months, 0, -1):
+            month_start = (end_date - relativedelta(months=i)).replace(day=1)
+            month_end = month_start + relativedelta(months=1) - timedelta(days=1)
+            trends.append(build_month(month_start, month_end))
 
-        month_data = {
-            "month": current_month_start.strftime('%B %Y'),
-            "date": current_month_start.strftime('%Y-%m'),
-            "categories": {}
-        }
-
-        total_expenses = 0
-        total_income = 0
-        for t in transactions:
-            account_currency = t.get('account_currency', 'EUR')
-            # Calculate expenses (exclude transfers)
-            if t['amount'] < 0 and t.get('category') != 'transfer':
-                cat = t.get('type_name', 'Uncategorized')
-                categories_set.add(cat)
-
-                if category and cat != category:
-                    continue
-
-                converted_amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
-                if cat not in month_data["categories"]:
-                    month_data["categories"][cat] = 0
-                month_data["categories"][cat] += converted_amount
-                total_expenses += converted_amount
-
-            # Calculate income (exclude transfers)
-            elif t['amount'] > 0 and t.get('category') != 'transfer':
-                converted_amount = db.convert_currency(t['amount'], account_currency, display_currency)
-                total_income += converted_amount
-
-        month_data["total_expenses"] = total_expenses
-        month_data["total_income"] = total_income
-        trends.append(month_data)
+        # Include current month (up to today)
+        trends.append(build_month(end_date.replace(day=1), end_date))
 
         # Calculate trend direction (increasing/decreasing) for each category
         trend_analysis = {}
@@ -566,6 +548,9 @@ async def spending_trends(
             "category_filter": category,
             "trends": trends,
             "all_categories": sorted(list(categories_set)),
+            "all_subcategories": {
+                cat: sorted(subs) for cat, subs in subcategories_map.items()
+            },
             "trend_analysis": trend_analysis,
             "currency": display_currency
         }

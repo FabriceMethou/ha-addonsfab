@@ -2578,6 +2578,9 @@ class FinanceDatabase:
             if 'type_id' in filters:
                 query += " AND t.type_id = ?"
                 params.append(filters['type_id'])
+            if 'subtype_id' in filters:
+                query += " AND t.subtype_id = ?"
+                params.append(filters['subtype_id'])
             if 'destinataire' in filters:
                 query += " AND t.destinataire = ?"
                 params.append(filters['destinataire'])
@@ -2628,6 +2631,9 @@ class FinanceDatabase:
             if 'type_id' in filters:
                 query += " AND t.type_id = ?"
                 params.append(filters['type_id'])
+            if 'subtype_id' in filters:
+                query += " AND t.subtype_id = ?"
+                params.append(filters['subtype_id'])
             if 'owner_id' in filters:
                 query += " AND COALESCE(t.owner_id, a.owner_id) = ?"
                 params.append(filters['owner_id'])

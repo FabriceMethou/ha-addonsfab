@@ -4,7 +4,12 @@ import PageHeader from "../components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { transactionsAPI, accountsAPI, categoriesAPI, debtsAPI } from "../services/api";
+import {
+  transactionsAPI,
+  accountsAPI,
+  categoriesAPI,
+  debtsAPI,
+} from "../services/api";
 import { format } from "date-fns";
 import { useToast } from "../contexts/ToastContext";
 import {
@@ -117,6 +122,7 @@ export default function TransactionsPage() {
     account_id: "",
     owner_id: "",
     category_id: "",
+    subcategory_id: "",
     start_date: "",
     end_date: "",
     recipient: "",
@@ -128,6 +134,7 @@ export default function TransactionsPage() {
     account_id: "",
     owner_id: "",
     category_id: "",
+    subcategory_id: "",
     start_date: "",
     end_date: "",
     recipient: "",
@@ -135,7 +142,10 @@ export default function TransactionsPage() {
   });
 
   const [fromReports, setFromReports] = useState(false);
-  const [pendingCategoryName, setPendingCategoryName] = useState<string | null>(null);
+  const [pendingCategoryName, setPendingCategoryName] = useState<{
+    category: string;
+    subcategory?: string;
+  } | null>(null);
 
   // Check if pending filters differ from applied filters
   const hasUnappliedChanges =
@@ -203,6 +213,7 @@ export default function TransactionsPage() {
         account_id: "",
         owner_id: "",
         category_id: "",
+        subcategory_id: "",
         start_date: preset.start_date || "",
         end_date: preset.end_date || "",
         recipient: "",
@@ -213,7 +224,10 @@ export default function TransactionsPage() {
       setShowFilters(true);
       setFromReports(true);
       if (preset.category_name) {
-        setPendingCategoryName(preset.category_name);
+        setPendingCategoryName({
+          category: preset.category_name,
+          subcategory: preset.subcategory_name,
+        });
       }
       // Clear state so back-navigation doesn't re-apply
       window.history.replaceState({}, document.title);
@@ -238,6 +252,8 @@ export default function TransactionsPage() {
           params.owner_id = debouncedFilters.owner_id;
         if (debouncedFilters.category_id)
           params.type_id = debouncedFilters.category_id;
+        if (debouncedFilters.subcategory_id)
+          params.subtype_id = debouncedFilters.subcategory_id;
         if (debouncedFilters.recipient)
           params.recipient = debouncedFilters.recipient;
         if (debouncedFilters.tags) params.tags = debouncedFilters.tags;
@@ -281,15 +297,25 @@ export default function TransactionsPage() {
     staleTime: 30 * 60 * 1000,
   });
 
-  // Resolve category name → ID once categories are loaded (set by navigation from Reports)
+  // Resolve category/subcategory names → IDs once categories are loaded
+  // (set by navigation from Reports)
   useEffect(() => {
     if (!pendingCategoryName || !categoriesData) return;
     const cat = categoriesData.find(
-      (c: any) => c.name === pendingCategoryName,
+      (c: any) => c.name === pendingCategoryName.category,
     );
     if (cat) {
-      setPendingFilters((prev) => ({ ...prev, category_id: cat.id.toString() }));
-      setAppliedFilters((prev) => ({ ...prev, category_id: cat.id.toString() }));
+      const sub = pendingCategoryName.subcategory
+        ? cat.subtypes?.find(
+            (s: any) => s.name === pendingCategoryName.subcategory,
+          )
+        : undefined;
+      const resolved = {
+        category_id: cat.id.toString(),
+        subcategory_id: sub ? sub.id.toString() : "",
+      };
+      setPendingFilters((prev) => ({ ...prev, ...resolved }));
+      setAppliedFilters((prev) => ({ ...prev, ...resolved }));
     }
     setPendingCategoryName(null);
   }, [pendingCategoryName, categoriesData]);
@@ -594,6 +620,7 @@ export default function TransactionsPage() {
       account_id: "",
       owner_id: "",
       category_id: "",
+      subcategory_id: "",
       start_date: "",
       end_date: "",
       recipient: "",
@@ -611,7 +638,8 @@ export default function TransactionsPage() {
   const handleEdit = (transaction: any) => {
     setEditingTransaction(transaction);
     // Pre-select the owner: prefer explicit transaction owner_id, fall back to account's owner
-    const effectiveOwnerId = transaction.owner_id ?? transaction.effective_owner_id;
+    const effectiveOwnerId =
+      transaction.owner_id ?? transaction.effective_owner_id;
     setSelectedFormOwner(effectiveOwnerId?.toString() || "");
     resetForm({
       account_id: transaction.account_id.toString(),
@@ -637,7 +665,6 @@ export default function TransactionsPage() {
   );
   const isTransfer = selectedType?.category === "transfer";
 
-
   const sourceAccount = accountsData?.find(
     (a: any) => a.id === parseInt(formData.account_id || "0"),
   );
@@ -660,7 +687,10 @@ export default function TransactionsPage() {
     setAutoCategorizingDescription(true);
     setAutoCategorizerConfidence(null);
     try {
-      const response = await transactionsAPI.autoCategorize(recipient, description);
+      const response = await transactionsAPI.autoCategorize(
+        recipient,
+        description,
+      );
       const data = response.data;
 
       if (data.type_id) {
@@ -706,7 +736,10 @@ export default function TransactionsPage() {
       is_pending: false,
       tags: formValues.tags || null,
       owner_id: selectedFormOwner ? parseInt(selectedFormOwner) : null,
-      debt_id: !editingTransaction && formValues.debt_id ? parseInt(formValues.debt_id) : null,
+      debt_id:
+        !editingTransaction && formValues.debt_id
+          ? parseInt(formValues.debt_id)
+          : null,
     };
 
     if (editingTransaction) {
@@ -969,7 +1002,12 @@ export default function TransactionsPage() {
               <Select
                 value={pendingFilters.category_id}
                 onValueChange={(value) =>
-                  setPendingFilters({ ...pendingFilters, category_id: value })
+                  // A subcategory only makes sense within its parent category
+                  setPendingFilters({
+                    ...pendingFilters,
+                    category_id: value,
+                    subcategory_id: "",
+                  })
                 }
               >
                 <SelectTrigger id="filter-category">
@@ -985,6 +1023,39 @@ export default function TransactionsPage() {
                       {category.name}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="filter-subcategory">Subcategory</Label>
+              <Select
+                value={pendingFilters.subcategory_id}
+                onValueChange={(value) =>
+                  setPendingFilters({
+                    ...pendingFilters,
+                    subcategory_id: value,
+                  })
+                }
+                disabled={!pendingFilters.category_id}
+              >
+                <SelectTrigger id="filter-subcategory">
+                  <SelectValue placeholder="All Subcategories" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All Subcategories</SelectItem>
+                  {categoriesData
+                    ?.find(
+                      (c: any) =>
+                        c.id.toString() === pendingFilters.category_id,
+                    )
+                    ?.subtypes?.map((subtype: any) => (
+                      <SelectItem
+                        key={subtype.id}
+                        value={subtype.id.toString()}
+                      >
+                        {subtype.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -1603,7 +1674,9 @@ export default function TransactionsPage() {
               {/* Auto-categorizer confidence feedback */}
               {autoCategorizerConfidence !== null && (
                 <div className="sm:col-span-2 flex items-center gap-2 text-xs">
-                  <span className="text-foreground-muted">Based on history:</span>
+                  <span className="text-foreground-muted">
+                    Based on history:
+                  </span>
                   <span
                     className={`px-2 py-0.5 rounded-full font-medium ${
                       autoCategorizerConfidence >= 0.7
@@ -1613,7 +1686,8 @@ export default function TransactionsPage() {
                           : "bg-error/15 text-error"
                     }`}
                   >
-                    {Math.round(autoCategorizerConfidence * 100)}% of past transactions
+                    {Math.round(autoCategorizerConfidence * 100)}% of past
+                    transactions
                     {autoCategorizerConfidence < 0.4 && " — verify manually"}
                   </span>
                 </div>
@@ -1749,31 +1823,51 @@ export default function TransactionsPage() {
               </div>
 
               {/* Loan Payment Field - only for new non-transfer transactions */}
-              {!editingTransaction && !isTransfer && activeDebtsData && activeDebtsData.length > 0 && (
-                <FormField label="Loan Payment (Optional)" className="sm:col-span-2">
-                  <Controller
-                    name="debt_id"
-                    control={control}
-                    render={({ field }) => (
-                      <Select value={field.value || ""} onValueChange={field.onChange}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Not a loan payment" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="">Not a loan payment</SelectItem>
-                          {activeDebtsData
-                            .filter((d: any) => d.is_active === 1 || d.status === "active")
-                            .map((debt: any) => (
-                              <SelectItem key={debt.id} value={debt.id.toString()}>
-                                {debt.creditor} — {formatCurrency(debt.current_balance, debt.currency)} remaining
-                              </SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                </FormField>
-              )}
+              {!editingTransaction &&
+                !isTransfer &&
+                activeDebtsData &&
+                activeDebtsData.length > 0 && (
+                  <FormField
+                    label="Loan Payment (Optional)"
+                    className="sm:col-span-2"
+                  >
+                    <Controller
+                      name="debt_id"
+                      control={control}
+                      render={({ field }) => (
+                        <Select
+                          value={field.value || ""}
+                          onValueChange={field.onChange}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Not a loan payment" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">Not a loan payment</SelectItem>
+                            {activeDebtsData
+                              .filter(
+                                (d: any) =>
+                                  d.is_active === 1 || d.status === "active",
+                              )
+                              .map((debt: any) => (
+                                <SelectItem
+                                  key={debt.id}
+                                  value={debt.id.toString()}
+                                >
+                                  {debt.creditor} —{" "}
+                                  {formatCurrency(
+                                    debt.current_balance,
+                                    debt.currency,
+                                  )}{" "}
+                                  remaining
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  </FormField>
+                )}
             </div>
             <DialogFooter>
               <Button

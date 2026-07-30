@@ -1,6 +1,10 @@
 # Changelog
 
-## 2.0.55
+## 2.0.56
+- Reports: every category breakdown now includes the **subcategory** level, not just the main category. "Spending by Category" (Overview), "Spending Distribution" (Spending Trends), "Category Distribution" (Monthly Summary) and the Tag report chart are now two-ring sunbursts — inner ring is the main category, outer ring its subcategories. The Year-by-Year tab already had this
+- Reports: "Top Spending Categories" (Monthly Summary) rows are now expandable to show each subcategory's amount and share of total
+- Reports: clicking a chart segment drills through to Transactions filtered on that exact subcategory (clicking the inner ring still filters on the whole category)
+- Transactions: added a **Subcategory** filter next to the Category filter. The `subtype_id` API filter was previously accepted but silently ignored by the query layer, so it never actually filtered anything
 - Investments: fixed "Update all prices" returning a 504 timeout in the browser. The 2.0.54 delay pushed the run past nginx's 60s limit; raised the `/api` `proxy_read_timeout` to 300s and made each lookup much faster (see below)
 - Investments: price lookup now tries the working proxy path **first** instead of after ~5 doomed direct-Yahoo calls (the host's direct Yahoo access is rate-limited/blocked). This removes the repeated "History is empty" / `429 Too Many Requests` log noise and cuts each lookup to a single request, so the bulk update finishes well within the timeout. Reduced the inter-request delay default to 0.3s
 - Investments: holdings with no Yahoo data (HTTP 404) now fail fast and log a clear "manual price entry required" message instead of a misleading 429. Investigation confirmed the holdings that don't auto-update (LYP7.F, AGQUALA.PA, CARINVT.PA, HMGDECC.PA, HMGGLTC.PA, HMGJPNC.PA, INEXESA, JPMEEQA, SOGEJAH, SXAPEX.F — French mutual funds) genuinely have no price on Yahoo and must be entered manually; this was never a rate-limit issue
