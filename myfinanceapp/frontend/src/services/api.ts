@@ -399,7 +399,6 @@ export const investmentsAPI = {
   fixDividendTotals: () => api.post("/api/investments/fix-dividend-totals"),
 };
 
-
 // Work Profiles API
 export const workProfilesAPI = {
   getAll: (displayCurrency?: string) =>
@@ -504,6 +503,15 @@ export const reportsAPI = {
     if (category) params.category = category;
     if (ownerId) params.owner_id = ownerId;
     return api.get("/api/reports/spending-trends", { params });
+  },
+  getCategoryBreakdown: (
+    typeId: number,
+    months: number = 6,
+    ownerId?: number,
+  ) => {
+    const params: Record<string, unknown> = { type_id: typeId, months };
+    if (ownerId) params.owner_id = ownerId;
+    return api.get("/api/reports/category-breakdown", { params });
   },
   getYearByYear: (year: number, month?: number) =>
     api.get(

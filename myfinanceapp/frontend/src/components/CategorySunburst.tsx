@@ -43,6 +43,8 @@ interface SunburstNode {
   category?: string;
   subcategory?: string;
   value?: number;
+  /** Category total, carried on children so the tooltip can show their share */
+  parentValue?: number;
   children?: SunburstNode[];
 }
 
@@ -59,6 +61,7 @@ function buildTree(slices: SunburstSlice[]): SunburstNode {
           category: slice.name,
           subcategory: sub.name,
           value: sub.value,
+          parentValue: slice.value,
         }));
 
       // Without subcategories the category itself is the leaf.
@@ -80,6 +83,12 @@ function buildTree(slices: SunburstSlice[]): SunburstNode {
   return { id: "Total", label: "Total", children };
 }
 
+/** How many subcategories to list before collapsing the rest into "+N more". */
+const TOOLTIP_SUBCATEGORY_LIMIT = 8;
+
+const share = (part: number, whole: number) =>
+  whole > 0 ? `${((part / whole) * 100).toFixed(1)}%` : "—";
+
 export default function CategorySunburst({
   slices,
   formatValue,
@@ -88,6 +97,55 @@ export default function CategorySunburst({
   emptyMessage = "No category data",
 }: CategorySunburstProps) {
   const data = useMemo(() => buildTree(slices), [slices]);
+
+  // Hovering a category lists its subcategories; hovering a subcategory shows
+  // its share of the parent category.
+  const Tooltip = useMemo(
+    () =>
+      function SunburstTooltip(node: any) {
+        const datum: SunburstNode = node?.data ?? {};
+        const children = datum.children ?? [];
+        const shown = children.slice(0, TOOLTIP_SUBCATEGORY_LIMIT);
+        const hidden = children.length - shown.length;
+
+        return (
+          <div className="min-w-[180px] text-foreground">
+            <div className="font-semibold">{datum.label ?? node.id}</div>
+            <div className="text-foreground-muted">
+              {formatValue(node.value)} · {node.percentage?.toFixed(1)}% of
+              total
+            </div>
+
+            {shown.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-border space-y-0.5">
+                {shown.map((child) => (
+                  <div key={child.id} className="flex justify-between gap-4">
+                    <span className="text-foreground-muted">{child.label}</span>
+                    <span>
+                      {formatValue(child.value ?? 0)}
+                      <span className="text-foreground-muted">
+                        {" "}
+                        ({share(child.value ?? 0, node.value)})
+                      </span>
+                    </span>
+                  </div>
+                ))}
+                {hidden > 0 && (
+                  <div className="text-foreground-muted">+{hidden} more</div>
+                )}
+              </div>
+            )}
+
+            {datum.subcategory && (
+              <div className="mt-2 pt-2 border-t border-border text-foreground-muted">
+                {share(node.value, datum.parentValue ?? 0)} of {datum.category}
+              </div>
+            )}
+          </div>
+        );
+      },
+    [formatValue],
+  );
 
   if (!data.children?.length) {
     return (
@@ -101,7 +159,10 @@ export default function CategorySunburst({
   }
 
   return (
-    <div style={{ height: `${height}px` }} className={onSelect ? "cursor-pointer" : ""}>
+    <div
+      style={{ height: `${height}px` }}
+      className={onSelect ? "cursor-pointer" : ""}
+    >
       <ResponsiveSunburst
         data={data}
         id="id"
@@ -125,6 +186,7 @@ export default function CategorySunburst({
         arcLabel={(node: any) => node.data?.label ?? node.id}
         arcLabelsSkipAngle={15}
         arcLabelsTextColor={{ from: "color", modifiers: [["darker", 2.5]] }}
+        tooltip={Tooltip}
         animate={true}
         theme={{
           tooltip: {

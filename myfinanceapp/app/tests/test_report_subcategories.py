@@ -246,6 +246,82 @@ class TestIncomeVsExpenses:
             {"category": sub_a_name, "total": 1500.0}]
 
 
+class TestCategoryBreakdown:
+    def test_reports_subcategories_for_the_selected_category(self):
+        db = make_db()
+        use_test_db(db)
+        acc = add_account(db)
+        type_id, subs = subtype_ids(db)
+        type_name, sub_a_name = names_for(db, type_id, subs[0])
+        _, sub_b_name = names_for(db, type_id, subs[1])
+
+        from datetime import datetime
+        today = datetime.now().strftime('%Y-%m-%d')
+        add_txn(db, acc, -60.0, today, type_id, subs[0])
+        add_txn(db, acc, -30.0, today, type_id, subs[0])
+        add_txn(db, acc, -10.0, today, type_id, subs[1])
+
+        result = asyncio.run(reports_api.category_breakdown(
+            type_id=type_id, months=3, current_user=None))
+
+        assert result["category"]["name"] == type_name
+        assert result["summary"]["total"] == 100.0
+        assert result["summary"]["transaction_count"] == 3
+        assert result["summary"]["subcategory_count"] == 2
+        assert result["summary"]["monthly_average"] == 100.0 / 3
+
+        by_name = {s["name"]: s for s in result["subcategories"]}
+        assert by_name[sub_a_name]["amount"] == 90.0
+        assert by_name[sub_a_name]["transaction_count"] == 2
+        assert by_name[sub_a_name]["percentage"] == 90.0
+        assert by_name[sub_b_name]["amount"] == 10.0
+
+    def test_excludes_other_categories(self):
+        db = make_db()
+        use_test_db(db)
+        acc = add_account(db)
+        expense_type, expense_subs = subtype_ids(db, category="expense")
+        income_type, income_subs = subtype_ids(db, category="income")
+
+        from datetime import datetime
+        today = datetime.now().strftime('%Y-%m-%d')
+        add_txn(db, acc, -40.0, today, expense_type, expense_subs[0])
+        add_txn(db, acc, 900.0, today, income_type, income_subs[0])
+
+        result = asyncio.run(reports_api.category_breakdown(
+            type_id=expense_type, months=3, current_user=None))
+
+        assert result["summary"]["total"] == 40.0
+        assert result["summary"]["transaction_count"] == 1
+
+    def test_monthly_trend_has_one_bucket_per_month(self):
+        db = make_db()
+        use_test_db(db)
+        type_id, _ = subtype_ids(db)
+
+        result = asyncio.run(reports_api.category_breakdown(
+            type_id=type_id, months=6, current_user=None))
+
+        assert len(result["monthly_trend"]) == 6
+        # Oldest first, ending with the current month
+        from datetime import datetime
+        assert result["monthly_trend"][-1]["date"] == datetime.now().strftime('%Y-%m')
+        assert all(bucket["total"] == 0 for bucket in result["monthly_trend"])
+
+    def test_unknown_category_returns_404(self):
+        import pytest
+        from fastapi import HTTPException
+
+        db = make_db()
+        use_test_db(db)
+
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(reports_api.category_breakdown(
+                type_id=999999, months=6, current_user=None))
+
+        assert excinfo.value.status_code == 404
+
+
 # ── transaction filtering (drill-down from a report subcategory) ─────────────
 
 

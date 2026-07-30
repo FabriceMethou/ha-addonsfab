@@ -2,6 +2,8 @@
 
 ## 2.0.56
 - Reports: every category breakdown now includes the **subcategory** level, not just the main category. "Spending by Category" (Overview), "Spending Distribution" (Spending Trends), "Category Distribution" (Monthly Summary) and the Tag report chart are now two-ring sunbursts — inner ring is the main category, outer ring its subcategories. The Year-by-Year tab already had this
+- Reports: hovering a category in any of these charts now lists its subcategories with amounts and their share of the category, so you can read the split without clicking. Hovering a subcategory shows its share of its parent category
+- Reports: new **By Category** tab — pick one category and a period (3/6/12/24 months) and get its own report: total, monthly average, transaction count, subcategory count; a subcategory distribution chart and table (amount, transaction count, share); and a monthly trend stacked by subcategory
 - Reports: "Top Spending Categories" (Monthly Summary) rows are now expandable to show each subcategory's amount and share of total
 - Reports: clicking a chart segment drills through to Transactions filtered on that exact subcategory (clicking the inner ring still filters on the whole category)
 - Transactions: added a **Subcategory** filter next to the Category filter. The `subtype_id` API filter was previously accepted but silently ignored by the query layer, so it never actually filtered anything

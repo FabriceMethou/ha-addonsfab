@@ -57,12 +57,14 @@ import {
   Users,
   ChevronDown,
   ChevronRight,
+  Layers,
 } from "lucide-react";
 import {
   reportsAPI,
   transactionsAPI,
   settingsAPI,
   accountsAPI,
+  categoriesAPI,
 } from "../services/api";
 import { format, subMonths, startOfMonth, endOfMonth } from "date-fns";
 import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
@@ -144,6 +146,18 @@ function KPICard({
   );
 }
 
+// Series colors for the stacked monthly subcategory chart
+const SUBCATEGORY_COLORS = [
+  "#ef4444",
+  "#f59e0b",
+  "#10b981",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ec4899",
+  "#06b6d4",
+  "#84cc16",
+];
+
 // Category/subcategory breakdowns come back from the API as
 // [{ category, <amountKey>, subcategories: [{ category, <amountKey> }] }]
 function toSunburstSlices(
@@ -205,6 +219,8 @@ export default function ReportsPage() {
     Set<string>
   >(new Set());
   const [selectedOwner, setSelectedOwner] = useState<string>(""); // Empty = all owners
+  const [categoryReportType, setCategoryReportType] = useState<string>("");
+  const [categoryReportMonths, setCategoryReportMonths] = useState("6");
 
   // Draft values for the custom-range date inputs. A native <input type="date">
   // fires onChange for every intermediate valid date while the year is being
@@ -395,6 +411,37 @@ export default function ReportsPage() {
         return response.data;
       },
       enabled: currentTab === "networth",
+    });
+
+  // Categories for the "By Category" selector
+  const { data: categoryOptions } = useQuery({
+    queryKey: ["categories-hierarchy"],
+    queryFn: async () => {
+      const response = await categoriesAPI.getHierarchy();
+      return response.data.categories || [];
+    },
+    staleTime: 30 * 60 * 1000,
+    enabled: currentTab === "bycategory",
+  });
+
+  // Fetch the report for the selected category
+  const { data: categoryReportData, isLoading: categoryReportLoading } =
+    useQuery({
+      queryKey: [
+        "category-breakdown",
+        categoryReportType,
+        categoryReportMonths,
+        selectedOwner,
+      ],
+      queryFn: async () => {
+        const response = await reportsAPI.getCategoryBreakdown(
+          Number(categoryReportType),
+          Number(categoryReportMonths),
+          ownerIdParam,
+        );
+        return response.data;
+      },
+      enabled: currentTab === "bycategory" && !!categoryReportType,
     });
 
   // Fetch year-by-year stats
@@ -640,6 +687,41 @@ export default function ReportsPage() {
     [tagReportData],
   );
 
+  // "By Category" tab: the selected category's subcategories become the slices,
+  // so the chart is a single ring of subcategories.
+  const categoryReportSlices = useMemo(
+    (): SunburstSlice[] =>
+      (categoryReportData?.subcategories || []).map((sub: any) => ({
+        name: sub.name,
+        value: absMoney(sub.amount ?? 0),
+      })),
+    [categoryReportData],
+  );
+
+  // Subcategories charted as stacked monthly series (top 8 by total)
+  const categoryReportSeries = useMemo(
+    () =>
+      (categoryReportData?.subcategories || [])
+        .slice(0, 8)
+        .map((sub: any) => sub.name),
+    [categoryReportData],
+  );
+
+  // Flatten the monthly trend into recharts rows: { month, <sub>: amount, ... }
+  const categoryReportTrend = useMemo(
+    () =>
+      (categoryReportData?.monthly_trend || []).map((entry: any) => ({
+        month: entry.month,
+        ...Object.fromEntries(
+          categoryReportSeries.map((name: string) => [
+            name,
+            absMoney(entry.subcategories?.[name] ?? 0),
+          ]),
+        ),
+      })),
+    [categoryReportData, categoryReportSeries],
+  );
+
   // Memoize filtered income categories for year-by-year tab
   const filteredIncomeCategories = useMemo(() => {
     if (!yearByYearData?.categories?.income) return [];
@@ -719,6 +801,10 @@ export default function ReportsPage() {
           <TabsTrigger value="trends">Spending Trends</TabsTrigger>
           <TabsTrigger value="monthly">Monthly Summary</TabsTrigger>
           <TabsTrigger value="networth">Net Worth History</TabsTrigger>
+          <TabsTrigger value="bycategory" className="flex items-center gap-1">
+            <Layers className="w-4 h-4" />
+            By Category
+          </TabsTrigger>
           <TabsTrigger value="yearbyyear" className="flex items-center gap-1">
             <Calendar className="w-4 h-4" />
             Money Flow
@@ -1980,6 +2066,240 @@ export default function ReportsPage() {
                 </p>
               </div>
             )}
+          </div>
+        </TabsContent>
+
+        {/* By Category Tab */}
+        <TabsContent value="bycategory">
+          <div className="space-y-6 mt-4">
+            {/* Controls */}
+            <div className="flex flex-wrap gap-2">
+              <Select value={selectedOwner} onValueChange={setSelectedOwner}>
+                <SelectTrigger className="w-full sm:w-[150px]">
+                  <Users className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="All Owners" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">All Owners</SelectItem>
+                  {owners?.map((owner: any) => (
+                    <SelectItem key={owner.id} value={String(owner.id)}>
+                      {owner.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select
+                value={categoryReportType}
+                onValueChange={setCategoryReportType}
+              >
+                <SelectTrigger className="w-full sm:w-[250px]">
+                  <SelectValue placeholder="Select a category" />
+                </SelectTrigger>
+                <SelectContent>
+                  {categoryOptions?.map((category: any) => (
+                    <SelectItem key={category.id} value={String(category.id)}>
+                      {category.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select
+                value={categoryReportMonths}
+                onValueChange={setCategoryReportMonths}
+              >
+                <SelectTrigger className="w-full sm:w-[150px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="3">3 Months</SelectItem>
+                  <SelectItem value="6">6 Months</SelectItem>
+                  <SelectItem value="12">12 Months</SelectItem>
+                  <SelectItem value="24">24 Months</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {!categoryReportType ? (
+              <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
+                <p className="text-foreground-muted">
+                  Select a category to see its subcategory breakdown
+                </p>
+              </div>
+            ) : categoryReportLoading ? (
+              <div className="flex justify-center items-center min-h-[40vh]">
+                <Spinner size="lg" />
+              </div>
+            ) : categoryReportData ? (
+              <>
+                {/* KPIs */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <KPICard
+                    title={`Total — ${categoryReportData.category.name}`}
+                    value={formatCurrency(categoryReportData.summary.total)}
+                    icon={<Layers size={24} className="text-cyan-500" />}
+                    iconColor="bg-cyan-500"
+                    colorClass="text-foreground"
+                  />
+                  <KPICard
+                    title="Monthly Average"
+                    value={formatCurrency(
+                      categoryReportData.summary.monthly_average,
+                    )}
+                    icon={<Calendar size={24} className="text-blue-500" />}
+                    iconColor="bg-blue-500"
+                    colorClass="text-foreground"
+                  />
+                  <KPICard
+                    title="Transactions"
+                    value={categoryReportData.summary.transaction_count}
+                    icon={<Wallet size={24} className="text-violet-500" />}
+                    iconColor="bg-violet-500"
+                    colorClass="text-foreground"
+                  />
+                  <KPICard
+                    title="Subcategories"
+                    value={categoryReportData.summary.subcategory_count}
+                    icon={<Tag size={24} className="text-amber-500" />}
+                    iconColor="bg-amber-500"
+                    colorClass="text-foreground"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Subcategory distribution */}
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                    <div className="flex items-baseline justify-between mb-4">
+                      <h3 className="text-lg font-semibold text-foreground">
+                        Subcategory Distribution
+                      </h3>
+                      <span className="text-xs text-foreground-muted">
+                        Click a slice to view transactions
+                      </span>
+                    </div>
+                    <CategorySunburst
+                      slices={categoryReportSlices}
+                      formatValue={formatCurrency}
+                      emptyMessage="No transactions in this category"
+                      onSelect={({ category: subcategoryName }) =>
+                        navigateToTransactions({
+                          start_date: categoryReportData.start_date,
+                          end_date: categoryReportData.end_date,
+                          category_name: categoryReportData.category.name,
+                          subcategory_name: subcategoryName,
+                        })
+                      }
+                    />
+                  </Card>
+
+                  {/* Subcategory table */}
+                  <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                    <h3 className="text-lg font-semibold text-foreground mb-4">
+                      Subcategories
+                    </h3>
+                    <div className="max-h-[300px] overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Subcategory</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                            <TableHead className="text-right">Trx</TableHead>
+                            <TableHead className="text-right">Share</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {categoryReportData.subcategories.map((sub: any) => (
+                            <TableRow key={sub.name}>
+                              <TableCell>{sub.name}</TableCell>
+                              <TableCell className="text-right">
+                                {formatCurrency(sub.amount)}
+                              </TableCell>
+                              <TableCell className="text-right text-foreground-muted">
+                                {sub.transaction_count}
+                              </TableCell>
+                              <TableCell className="text-right text-foreground-muted">
+                                {sub.percentage}%
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {categoryReportData.subcategories.length === 0 && (
+                            <TableRow>
+                              <TableCell
+                                colSpan={4}
+                                className="text-center text-foreground-muted"
+                              >
+                                No transactions in this period
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+                </div>
+
+                {/* Monthly trend, stacked by subcategory */}
+                <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                  <h3 className="text-lg font-semibold text-foreground mb-4">
+                    Monthly Trend by Subcategory
+                  </h3>
+                  <ResponsiveContainer width="100%" height={350}>
+                    <BarChart data={categoryReportTrend}>
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke="#2a2a2a"
+                        opacity={0.2}
+                        horizontal={true}
+                        vertical={false}
+                      />
+                      <XAxis
+                        dataKey="month"
+                        stroke="#888888"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        stroke="#888888"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(value) =>
+                          `${(value / 1000).toFixed(0)}k`
+                        }
+                      />
+                      <Tooltip
+                        cursor={false}
+                        contentStyle={{
+                          backgroundColor: "#0a0a0a",
+                          border: "1px solid #2a2a2a",
+                          borderRadius: "8px",
+                          fontSize: "12px",
+                        }}
+                        labelStyle={{ color: "#888888" }}
+                        itemStyle={{ color: "#e5e5e5" }}
+                        formatter={(value: any) => formatCurrency(value)}
+                      />
+                      <Legend
+                        iconType="circle"
+                        wrapperStyle={{ paddingTop: "10px", fontSize: "12px" }}
+                      />
+                      {categoryReportSeries.map((name: string, idx: number) => (
+                        <Bar
+                          key={name}
+                          dataKey={name}
+                          stackId="subcategories"
+                          fill={
+                            SUBCATEGORY_COLORS[idx % SUBCATEGORY_COLORS.length]
+                          }
+                        />
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </Card>
+              </>
+            ) : null}
           </div>
         </TabsContent>
 

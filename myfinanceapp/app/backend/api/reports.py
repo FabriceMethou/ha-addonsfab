@@ -557,6 +557,126 @@ async def spending_trends(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Spending trends failed: {str(e)}")
 
+@router.get("/category-breakdown")
+async def category_breakdown(
+    type_id: int,
+    months: int = 6,
+    owner_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Detailed report for a single category: subcategory split and monthly trend.
+
+    Args:
+        type_id: The transaction type (main category) to report on
+        months: Number of months to cover, ending with the current (partial) month
+        owner_id: Optional owner filter
+    """
+    try:
+        display_currency = db.get_preference('display_currency', 'EUR')
+
+        with db.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, name, category FROM transaction_types WHERE id = ?",
+                (type_id,)
+            )
+            type_row = cursor.fetchone()
+
+        if not type_row:
+            raise HTTPException(status_code=404, detail=f"Category {type_id} not found")
+
+        # Month buckets, oldest first, ending with the current (partial) month
+        end_date = datetime.now()
+        first_month = (end_date - relativedelta(months=months - 1)).replace(day=1)
+        month_keys = [
+            (first_month + relativedelta(months=i)).strftime('%Y-%m')
+            for i in range(months)
+        ]
+
+        filters = {
+            'start_date': first_month.strftime('%Y-%m-%d'),
+            'end_date': end_date.strftime('%Y-%m-%d'),
+            'type_id': type_id
+        }
+        if owner_id:
+            filters['owner_id'] = owner_id
+        transactions = db.get_transactions(filters=filters)
+
+        # Aggregate by subcategory and by month. Amounts are absolute so income
+        # and expense categories both read as a positive magnitude.
+        subcategory_totals = {}
+        monthly = {key: {'total': 0, 'subcategories': {}} for key in month_keys}
+        total = 0
+
+        for t in transactions:
+            amount = db.convert_currency(
+                abs(t['amount']), t.get('account_currency', 'EUR'), display_currency
+            )
+            subcategory = t.get('subtype_name') or NO_SUBCATEGORY
+
+            entry = subcategory_totals.setdefault(
+                subcategory, {'amount': 0, 'transaction_count': 0}
+            )
+            entry['amount'] += amount
+            entry['transaction_count'] += 1
+            total += amount
+
+            month_key = t['transaction_date'][:7]
+            if month_key in monthly:
+                bucket = monthly[month_key]
+                bucket['total'] += amount
+                bucket['subcategories'][subcategory] = \
+                    bucket['subcategories'].get(subcategory, 0) + amount
+
+        subcategories = sorted(
+            [
+                {
+                    "name": name,
+                    "amount": data['amount'],
+                    "transaction_count": data['transaction_count'],
+                    "percentage": round(data['amount'] / total * 100, 1) if total else 0
+                }
+                for name, data in subcategory_totals.items()
+            ],
+            key=lambda s: s['amount'],
+            reverse=True
+        )
+
+        monthly_trend = [
+            {
+                "date": key,
+                "month": datetime.strptime(key, '%Y-%m').strftime('%b %Y'),
+                "total": monthly[key]['total'],
+                "subcategories": monthly[key]['subcategories']
+            }
+            for key in month_keys
+        ]
+
+        return {
+            "category": {
+                "id": type_row['id'],
+                "name": type_row['name'],
+                "kind": type_row['category']
+            },
+            "months": months,
+            "owner_id": owner_id,
+            "start_date": first_month.strftime('%Y-%m-%d'),
+            "end_date": end_date.strftime('%Y-%m-%d'),
+            "currency": display_currency,
+            "summary": {
+                "total": total,
+                "transaction_count": len(transactions),
+                "monthly_average": total / months if months else 0,
+                "subcategory_count": len(subcategories)
+            },
+            "subcategories": subcategories,
+            "monthly_trend": monthly_trend
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Category breakdown failed: {str(e)}")
+
 @router.get("/year-by-year")
 async def year_by_year_stats(
     year: int,
