@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.60
+- Reports: every time filter on the page now offers a **Custom Range** option with start/end date pickers, matching the Overview filter that already had one. This covers Spending Trends, Monthly Summary, Net Worth History, By Category and Money Flow
+- Reports: on Monthly Summary and Money Flow, "Custom Range" sits at the end of the month dropdown; picking it hides the year selector, since an explicit range supersedes it
+- Reports: the date inputs only apply a complete 4-digit-year date, and only after you pause typing — the same guard the Overview filter uses, so a half-typed year never triggers a refetch
+- Reports API: `spending-trends`, `net-worth/trend`, `category-breakdown`, `monthly-summary` and `year-by-year` all accept `start_date`/`end_date`, which override the `months`/`year` presets. Existing preset behaviour is unchanged
+- Note: budget-vs-actual is defined per calendar month, so it is omitted from a Monthly Summary custom range
+
 ## 2.0.59
 - Reports: removed the subcategory outer ring from the category charts entirely — "Spending by Category" (Overview), "Spending Distribution" (Spending Trends), "Category Distribution" (Monthly Summary) and the Tag report chart are now a single ring of main categories that never changes shape on hover
 - Reports: the subcategory split is read from the hover panel instead. Hovering a category shows its amount and share of the total, then each subcategory with its amount and share of the category (up to 12, then "+N more")

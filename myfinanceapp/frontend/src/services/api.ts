@@ -473,50 +473,41 @@ export const budgetsAPI = {
 };
 
 // Reports API
+// Period-based reports accept either a duration (months / year+month) or an
+// explicit start_date+end_date range — the "Custom Range" option on the
+// Reports page. Undefined entries are dropped by axios, so callers can pass
+// whichever half applies.
+export interface ReportPeriodParams {
+  months?: number;
+  year?: number;
+  month?: number;
+  start_date?: string;
+  end_date?: string;
+  owner_id?: number;
+}
+
 export const reportsAPI = {
   getNetWorth: (params?: { owner_id?: number }) =>
     api.get("/api/reports/net-worth", { params }),
-  getNetWorthTrend: (months: number = 12, ownerId?: number) => {
-    const params: Record<string, unknown> = { months };
-    if (ownerId) params.owner_id = ownerId;
-    return api.get("/api/reports/net-worth/trend", { params });
-  },
+  getNetWorthTrend: (params: ReportPeriodParams = { months: 12 }) =>
+    api.get("/api/reports/net-worth/trend", { params }),
   getSpendingByCategory: (params?: Record<string, unknown>) =>
     api.get("/api/reports/spending-by-category", { params }),
   getIncomeVsExpenses: (params?: Record<string, unknown>) =>
     api.get("/api/reports/income-vs-expenses", { params }),
   getSpendingPrediction: (monthsAhead: number = 1) =>
     api.get(`/api/reports/spending-prediction?months_ahead=${monthsAhead}`),
-  getMonthlySummary: (year: number, month: number, ownerId?: number) => {
-    const params: Record<string, unknown> = { year, month };
-    if (ownerId) params.owner_id = ownerId;
-    return api.get("/api/reports/monthly-summary", { params });
-  },
+  getMonthlySummary: (params: ReportPeriodParams) =>
+    api.get("/api/reports/monthly-summary", { params }),
   getTagReport: (tag: string, params?: Record<string, unknown>) =>
     api.get(`/api/reports/tags/${tag}`, { params }),
   getSpendingTrends: (
-    months: number = 6,
-    category?: string,
-    ownerId?: number,
-  ) => {
-    const params: Record<string, unknown> = { months };
-    if (category) params.category = category;
-    if (ownerId) params.owner_id = ownerId;
-    return api.get("/api/reports/spending-trends", { params });
-  },
-  getCategoryBreakdown: (
-    typeId: number,
-    months: number = 6,
-    ownerId?: number,
-  ) => {
-    const params: Record<string, unknown> = { type_id: typeId, months };
-    if (ownerId) params.owner_id = ownerId;
-    return api.get("/api/reports/category-breakdown", { params });
-  },
-  getYearByYear: (year: number, month?: number) =>
-    api.get(
-      `/api/reports/year-by-year?year=${year}${month ? `&month=${month}` : ""}`,
-    ),
+    params: ReportPeriodParams & { category?: string } = { months: 6 },
+  ) => api.get("/api/reports/spending-trends", { params }),
+  getCategoryBreakdown: (params: ReportPeriodParams & { type_id: number }) =>
+    api.get("/api/reports/category-breakdown", { params }),
+  getYearByYear: (params: ReportPeriodParams) =>
+    api.get("/api/reports/year-by-year", { params }),
 };
 
 // Alerts API

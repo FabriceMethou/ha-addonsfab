@@ -24,6 +24,37 @@ UNCATEGORIZED = 'Uncategorized'
 NO_SUBCATEGORY = 'Other'
 
 
+def _resolve_period(months_back: int, start_date: Optional[str], end_date: Optional[str]):
+    """Resolve a report period to (range_start, range_end) datetimes.
+
+    An explicit start/end pair always wins — that is how the "Custom Range"
+    option on the Reports page is expressed. Otherwise the range runs from the
+    first day of the month `months_back` months ago up to now.
+    """
+    if start_date and end_date:
+        return (datetime.strptime(start_date, '%Y-%m-%d'),
+                datetime.strptime(end_date, '%Y-%m-%d'))
+
+    range_end = datetime.now()
+    return (range_end - relativedelta(months=months_back)).replace(day=1), range_end
+
+
+def _month_windows(range_start: datetime, range_end: datetime):
+    """Split a range into per-month windows clipped to the range.
+
+    Returns (calendar_month_start, window_start, window_end) tuples so labels
+    read as whole calendar months while queries stay inside the requested range
+    — a custom range starting mid-month must not pull in the earlier days.
+    """
+    windows = []
+    cursor = range_start.replace(day=1)
+    while cursor <= range_end:
+        month_end = cursor + relativedelta(months=1) - timedelta(days=1)
+        windows.append((cursor, max(cursor, range_start), min(month_end, range_end)))
+        cursor += relativedelta(months=1)
+    return windows
+
+
 def _accumulate_category(breakdown: Dict[str, Any], transaction: Dict[str, Any], amount: float) -> None:
     """Add an amount to a category -> subcategory breakdown map.
 
@@ -231,6 +262,8 @@ async def spending_prediction(
 async def net_worth_trend(
     months: int = 12,
     owner_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
     """Get net worth trend over time in user's preferred currency.
@@ -241,14 +274,19 @@ async def net_worth_trend(
     - Forward calculation from opening balance + transactions
     """
     try:
-        # Calculate date range based on months parameter
-        end_date = datetime.now()
-        start_date = end_date - relativedelta(months=months)
+        # An explicit start/end pair (the "Custom Range" option) wins, otherwise
+        # the range is the last `months` months up to now.
+        if start_date and end_date:
+            range_start, range_end = start_date, end_date
+        else:
+            now = datetime.now()
+            range_start = (now - relativedelta(months=months)).strftime('%Y-%m-%d')
+            range_end = now.strftime('%Y-%m-%d')
 
         # Use the database method that properly handles opening dates
         result = db.get_net_worth_trend(
-            start_date=start_date.strftime('%Y-%m-%d'),
-            end_date=end_date.strftime('%Y-%m-%d'),
+            start_date=range_start,
+            end_date=range_end,
             frequency='monthly',
             owner_id=owner_id
         )
@@ -270,6 +308,8 @@ async def net_worth_trend(
 
         return {
             "months": months,
+            "start_date": range_start,
+            "end_date": range_end,
             "trend": trends,
             "current_net_worth": current_net_worth,
             "currency": result['currency']
@@ -279,26 +319,43 @@ async def net_worth_trend(
 
 @router.get("/monthly-summary")
 async def monthly_summary(
-    year: int,
-    month: int,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     owner_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get comprehensive monthly summary with budgets in user's preferred currency"""
+    """Get a comprehensive period summary in the user's preferred currency.
+
+    Accepts either a year/month pair or an explicit start_date/end_date range
+    (the "Custom Range" option on the Reports page).
+    """
     try:
         # Get user's preferred display currency
         display_currency = db.get_preference('display_currency', 'EUR')
 
-        # Build date range for the month
-        start_date = datetime(year, month, 1).strftime('%Y-%m-%d')
-        if month == 12:
-            end_date = datetime(year + 1, 1, 1) - timedelta(days=1)
+        if start_date and end_date:
+            # Budget vs actual is defined per calendar month, so it has no
+            # meaning for an arbitrary range.
+            period_start, period_end = start_date, end_date
+            budget_data = []
+        elif year and month:
+            period_start = datetime(year, month, 1).strftime('%Y-%m-%d')
+            if month == 12:
+                period_end = datetime(year + 1, 1, 1) - timedelta(days=1)
+            else:
+                period_end = datetime(year, month + 1, 1) - timedelta(days=1)
+            period_end = period_end.strftime('%Y-%m-%d')
+            budget_data = db.get_budget_vs_actual(year, month)
         else:
-            end_date = datetime(year, month + 1, 1) - timedelta(days=1)
-        end_date = end_date.strftime('%Y-%m-%d')
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either year and month, or start_date and end_date"
+            )
 
-        # Get transactions for the month
-        filters = {'start_date': start_date, 'end_date': end_date}
+        # Get transactions for the period
+        filters = {'start_date': period_start, 'end_date': period_end}
         if owner_id:
             filters['owner_id'] = owner_id
         transactions = db.get_transactions(filters=filters)
@@ -313,9 +370,6 @@ async def monthly_summary(
             for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
         )
 
-        # Get budget vs actual
-        budget_data = db.get_budget_vs_actual(year, month)
-
         # Spending by category and subcategory with currency conversion (exclude transfers)
         category_spending = {}
         for t in transactions:
@@ -326,6 +380,8 @@ async def monthly_summary(
         return {
             "year": year,
             "month": month,
+            "start_date": period_start,
+            "end_date": period_end,
             "income": income,
             "expenses": expenses,
             "net": income - expenses,
@@ -334,6 +390,8 @@ async def monthly_summary(
             "spending_by_category": _format_breakdown(category_spending, amount_key='amount'),
             "currency": display_currency
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Summary calculation failed: {str(e)}")
 
@@ -451,24 +509,32 @@ async def spending_trends(
     months: int = 6,
     category: Optional[str] = None,
     owner_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get spending trends by category over time in user's preferred currency"""
+    """Get spending trends by category over time in user's preferred currency.
+
+    Covers the last `months` months, or an explicit start_date/end_date range
+    (the "Custom Range" option on the Reports page).
+    """
     try:
         # Get user's preferred display currency
         display_currency = db.get_preference('display_currency', 'EUR')
 
-        end_date = datetime.now()
+        range_start, range_end = _resolve_period(months, start_date, end_date)
         trends = []
 
         # Categories/subcategories seen across the whole period
         categories_set = set()
         subcategories_map = {}
 
-        def build_month(month_start: datetime, period_end: datetime) -> Dict[str, Any]:
+        def build_month(
+            month_start: datetime, period_start: datetime, period_end: datetime
+        ) -> Dict[str, Any]:
             """Aggregate one month of spending by category and subcategory."""
             filters = {
-                'start_date': month_start.strftime('%Y-%m-%d'),
+                'start_date': period_start.strftime('%Y-%m-%d'),
                 'end_date': period_end.strftime('%Y-%m-%d')
             }
             if owner_id:
@@ -512,13 +578,8 @@ async def spending_trends(
             month_data["total_income"] = total_income
             return month_data
 
-        for i in range(months, 0, -1):
-            month_start = (end_date - relativedelta(months=i)).replace(day=1)
-            month_end = month_start + relativedelta(months=1) - timedelta(days=1)
-            trends.append(build_month(month_start, month_end))
-
-        # Include current month (up to today)
-        trends.append(build_month(end_date.replace(day=1), end_date))
+        for month_start, window_start, window_end in _month_windows(range_start, range_end):
+            trends.append(build_month(month_start, window_start, window_end))
 
         # Calculate trend direction (increasing/decreasing) for each category
         trend_analysis = {}
@@ -545,6 +606,8 @@ async def spending_trends(
 
         return {
             "months": months,
+            "start_date": range_start.strftime('%Y-%m-%d'),
+            "end_date": range_end.strftime('%Y-%m-%d'),
             "category_filter": category,
             "trends": trends,
             "all_categories": sorted(list(categories_set)),
@@ -562,6 +625,8 @@ async def category_breakdown(
     type_id: int,
     months: int = 6,
     owner_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
     """Detailed report for a single category: subcategory split and monthly trend.
@@ -570,6 +635,7 @@ async def category_breakdown(
         type_id: The transaction type (main category) to report on
         months: Number of months to cover, ending with the current (partial) month
         owner_id: Optional owner filter
+        start_date/end_date: Explicit range, overriding `months`
     """
     try:
         display_currency = db.get_preference('display_currency', 'EUR')
@@ -586,16 +652,13 @@ async def category_breakdown(
             raise HTTPException(status_code=404, detail=f"Category {type_id} not found")
 
         # Month buckets, oldest first, ending with the current (partial) month
-        end_date = datetime.now()
-        first_month = (end_date - relativedelta(months=months - 1)).replace(day=1)
-        month_keys = [
-            (first_month + relativedelta(months=i)).strftime('%Y-%m')
-            for i in range(months)
-        ]
+        range_start, range_end = _resolve_period(months - 1, start_date, end_date)
+        windows = _month_windows(range_start, range_end)
+        month_keys = [month_start.strftime('%Y-%m') for month_start, _, _ in windows]
 
         filters = {
-            'start_date': first_month.strftime('%Y-%m-%d'),
-            'end_date': end_date.strftime('%Y-%m-%d'),
+            'start_date': range_start.strftime('%Y-%m-%d'),
+            'end_date': range_end.strftime('%Y-%m-%d'),
             'type_id': type_id
         }
         if owner_id:
@@ -658,15 +721,15 @@ async def category_breakdown(
                 "name": type_row['name'],
                 "kind": type_row['category']
             },
-            "months": months,
+            "months": len(windows),
             "owner_id": owner_id,
-            "start_date": first_month.strftime('%Y-%m-%d'),
-            "end_date": end_date.strftime('%Y-%m-%d'),
+            "start_date": range_start.strftime('%Y-%m-%d'),
+            "end_date": range_end.strftime('%Y-%m-%d'),
             "currency": display_currency,
             "summary": {
                 "total": total,
                 "transaction_count": len(transactions),
-                "monthly_average": total / months if months else 0,
+                "monthly_average": total / len(windows) if windows else 0,
                 "subcategory_count": len(subcategories)
             },
             "subcategories": subcategories,
@@ -679,39 +742,48 @@ async def category_breakdown(
 
 @router.get("/year-by-year")
 async def year_by_year_stats(
-    year: int,
+    year: Optional[int] = None,
     month: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get year-by-year income/expense breakdown by category, entity (destinataire), and tag.
+    """Get income/expense breakdown by category, entity (destinataire), and tag.
 
     Args:
         year: The year to get stats for
         month: Optional month (1-12) to filter to a specific month
+        start_date/end_date: Explicit range, overriding year/month
+            (the "Custom Range" option on the Reports page)
     """
     try:
         display_currency = db.get_preference('display_currency', 'EUR')
 
-        # Get date range for the year or specific month
-        if month:
-            # Specific month selected
-            start_date = f"{year}-{month:02d}-01"
+        # Get date range from the explicit range, the month, or the whole year
+        if start_date and end_date:
+            period_start, period_end = start_date, end_date
+        elif year and month:
+            period_start = f"{year}-{month:02d}-01"
             if month == 12:
-                end_date = f"{year}-12-31"
+                period_end = f"{year}-12-31"
             else:
                 # Last day of the selected month
                 next_month = datetime(year, month + 1, 1)
                 last_day = (next_month - timedelta(days=1)).day
-                end_date = f"{year}-{month:02d}-{last_day:02d}"
+                period_end = f"{year}-{month:02d}-{last_day:02d}"
+        elif year:
+            period_start = f"{year}-01-01"
+            period_end = f"{year}-12-31"
         else:
-            # Full year
-            start_date = f"{year}-01-01"
-            end_date = f"{year}-12-31"
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either year, or start_date and end_date"
+            )
 
-        # Fetch all transactions for the year
+        # Fetch all transactions for the period
         transactions = db.get_transactions({
-            'start_date': start_date,
-            'end_date': end_date
+            'start_date': period_start,
+            'end_date': period_end
         })
 
         # Get year of first transaction
@@ -860,6 +932,8 @@ async def year_by_year_stats(
         return {
             "year": year,
             "month": month,
+            "start_date": period_start,
+            "end_date": period_end,
             "year_of_first_transaction": first_trx_year,
             "currency": display_currency,
             "summary": {
@@ -896,5 +970,7 @@ async def year_by_year_stats(
                 "links": sankey_links
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Year-by-year stats failed: {str(e)}")

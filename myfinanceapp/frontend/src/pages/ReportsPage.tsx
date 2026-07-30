@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import CategorySunburst from "../components/CategorySunburst";
 import type { SunburstSlice } from "../components/CategorySunburst";
+import PeriodFilter from "../components/PeriodFilter";
+import { usePeriodFilter } from "../hooks/usePeriodFilter";
 import { useIsMobile } from "../hooks/useBreakpoint";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -146,6 +148,38 @@ function KPICard({
   );
 }
 
+// Duration presets for the period filters ("Custom Range" is appended by the
+// PeriodFilter component itself)
+const MONTH_PRESETS = [
+  { value: "3", label: "3 Months" },
+  { value: "6", label: "6 Months" },
+  { value: "12", label: "12 Months" },
+  { value: "24", label: "24 Months" },
+];
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+].map((label, idx) => ({ value: (idx + 1).toString(), label }));
+
+const NET_WORTH_PRESETS = [
+  { value: "6", label: "6 Months" },
+  { value: "12", label: "12 Months" },
+  { value: "24", label: "2 Years" },
+  { value: "36", label: "3 Years" },
+  { value: "60", label: "5 Years" },
+];
+
 // Series colors for the stacked monthly subcategory chart
 const SUBCATEGORY_COLORS = [
   "#ef4444",
@@ -195,19 +229,25 @@ export default function ReportsPage() {
     format(endOfMonth(new Date()), "yyyy-MM-dd"),
   );
   const [selectedTag, setSelectedTag] = useState<string>("");
-  const [trendMonths, setTrendMonths] = useState("6");
   const [trendCategory, setTrendCategory] = useState<string>("");
-  const [netWorthMonths, setNetWorthMonths] = useState("12");
   const [summaryYear, setSummaryYear] = useState(
     new Date().getFullYear().toString(),
   );
-  const [summaryMonth, setSummaryMonth] = useState(
+
+  // Time filters: each offers presets plus a custom start/end range. For the
+  // Monthly Summary and Money Flow tabs the preset is a month rather than a
+  // duration, so "Custom Range" sits at the end of their month dropdown.
+  const trendPeriod = usePeriodFilter("6", 6);
+  const netWorthPeriod = usePeriodFilter("12", 12);
+  const categoryPeriod = usePeriodFilter("6", 6);
+  const summaryPeriod = usePeriodFilter(
     (new Date().getMonth() + 1).toString(),
+    1,
   );
+  const moneyFlowPeriod = usePeriodFilter("", 12); // "" = the whole year
   const [yearByYearSelected, setYearByYearSelected] = useState(
     new Date().getFullYear().toString(),
   );
-  const [yearByYearMonth, setYearByYearMonth] = useState<string>(""); // Empty string = all year
   const [yearByYearSearch, setYearByYearSearch] = useState("");
   const [expandedIncomeCategories, setExpandedIncomeCategories] = useState<
     Set<string>
@@ -220,7 +260,6 @@ export default function ReportsPage() {
   >(new Set());
   const [selectedOwner, setSelectedOwner] = useState<string>(""); // Empty = all owners
   const [categoryReportType, setCategoryReportType] = useState<string>("");
-  const [categoryReportMonths, setCategoryReportMonths] = useState("6");
 
   // Draft values for the custom-range date inputs. A native <input type="date">
   // fires onChange for every intermediate valid date while the year is being
@@ -371,29 +410,57 @@ export default function ReportsPage() {
     enabled: !!selectedTag,
   });
 
+  // A custom range is sent as start/end dates; otherwise the preset is a
+  // month count. Only one half is ever populated.
+  const periodParams = (period: typeof trendPeriod) =>
+    period.isCustom
+      ? { start_date: period.startDate, end_date: period.endDate }
+      : { months: Number(period.preset) };
+
   // Fetch spending trends data
   const { data: spendingTrendsData, isLoading: trendsLoading } = useQuery({
-    queryKey: ["spending-trends", trendMonths, trendCategory, selectedOwner],
+    queryKey: [
+      "spending-trends",
+      trendPeriod.preset,
+      trendPeriod.startDate,
+      trendPeriod.endDate,
+      trendCategory,
+      selectedOwner,
+    ],
     queryFn: async () => {
-      const response = await reportsAPI.getSpendingTrends(
-        Number(trendMonths),
-        trendCategory || undefined,
-        ownerIdParam,
-      );
+      const response = await reportsAPI.getSpendingTrends({
+        ...periodParams(trendPeriod),
+        category: trendCategory || undefined,
+        owner_id: ownerIdParam,
+      });
       return response.data;
     },
     enabled: currentTab === "trends",
   });
 
-  // Fetch monthly summary data
+  // Fetch monthly summary data (a single month, or a custom range)
   const { data: monthlySummaryData, isLoading: summaryLoading } = useQuery({
-    queryKey: ["monthly-summary", summaryYear, summaryMonth, selectedOwner],
+    queryKey: [
+      "monthly-summary",
+      summaryYear,
+      summaryPeriod.preset,
+      summaryPeriod.startDate,
+      summaryPeriod.endDate,
+      selectedOwner,
+    ],
     queryFn: async () => {
-      const response = await reportsAPI.getMonthlySummary(
-        Number(summaryYear),
-        Number(summaryMonth),
-        ownerIdParam,
-      );
+      const response = await reportsAPI.getMonthlySummary({
+        ...(summaryPeriod.isCustom
+          ? {
+              start_date: summaryPeriod.startDate,
+              end_date: summaryPeriod.endDate,
+            }
+          : {
+              year: Number(summaryYear),
+              month: Number(summaryPeriod.preset),
+            }),
+        owner_id: ownerIdParam,
+      });
       return response.data;
     },
     enabled: currentTab === "monthly",
@@ -402,12 +469,18 @@ export default function ReportsPage() {
   // Fetch extended net worth trend data
   const { data: extendedNetWorthData, isLoading: extendedNetWorthLoading } =
     useQuery({
-      queryKey: ["net-worth-trend-extended", netWorthMonths, selectedOwner],
+      queryKey: [
+        "net-worth-trend-extended",
+        netWorthPeriod.preset,
+        netWorthPeriod.startDate,
+        netWorthPeriod.endDate,
+        selectedOwner,
+      ],
       queryFn: async () => {
-        const response = await reportsAPI.getNetWorthTrend(
-          Number(netWorthMonths),
-          ownerIdParam,
-        );
+        const response = await reportsAPI.getNetWorthTrend({
+          ...periodParams(netWorthPeriod),
+          owner_id: ownerIdParam,
+        });
         return response.data;
       },
       enabled: currentTab === "networth",
@@ -430,15 +503,17 @@ export default function ReportsPage() {
       queryKey: [
         "category-breakdown",
         categoryReportType,
-        categoryReportMonths,
+        categoryPeriod.preset,
+        categoryPeriod.startDate,
+        categoryPeriod.endDate,
         selectedOwner,
       ],
       queryFn: async () => {
-        const response = await reportsAPI.getCategoryBreakdown(
-          Number(categoryReportType),
-          Number(categoryReportMonths),
-          ownerIdParam,
-        );
+        const response = await reportsAPI.getCategoryBreakdown({
+          type_id: Number(categoryReportType),
+          ...periodParams(categoryPeriod),
+          owner_id: ownerIdParam,
+        });
         return response.data;
       },
       enabled: currentTab === "bycategory" && !!categoryReportType,
@@ -446,12 +521,26 @@ export default function ReportsPage() {
 
   // Fetch year-by-year stats
   const { data: yearByYearData, isLoading: yearByYearLoading } = useQuery({
-    queryKey: ["year-by-year", yearByYearSelected, yearByYearMonth],
+    queryKey: [
+      "year-by-year",
+      yearByYearSelected,
+      moneyFlowPeriod.preset,
+      moneyFlowPeriod.startDate,
+      moneyFlowPeriod.endDate,
+    ],
     queryFn: async () => {
-      const month = yearByYearMonth ? Number(yearByYearMonth) : undefined;
       const response = await reportsAPI.getYearByYear(
-        Number(yearByYearSelected),
-        month,
+        moneyFlowPeriod.isCustom
+          ? {
+              start_date: moneyFlowPeriod.startDate,
+              end_date: moneyFlowPeriod.endDate,
+            }
+          : {
+              year: Number(yearByYearSelected),
+              month: moneyFlowPeriod.preset
+                ? Number(moneyFlowPeriod.preset)
+                : undefined,
+            },
       );
       return response.data;
     },
@@ -522,7 +611,7 @@ export default function ReportsPage() {
   const { data: netWorthTrendForComparison } = useQuery({
     queryKey: ["net-worth-trend-comparison"],
     queryFn: async () => {
-      const response = await reportsAPI.getNetWorthTrend(2);
+      const response = await reportsAPI.getNetWorthTrend({ months: 2 });
       return response.data.trend;
     },
   });
@@ -1309,17 +1398,7 @@ export default function ReportsPage() {
                 </SelectContent>
               </Select>
 
-              <Select value={trendMonths} onValueChange={setTrendMonths}>
-                <SelectTrigger className="w-full sm:w-[150px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="3">3 Months</SelectItem>
-                  <SelectItem value="6">6 Months</SelectItem>
-                  <SelectItem value="12">12 Months</SelectItem>
-                  <SelectItem value="24">24 Months</SelectItem>
-                </SelectContent>
-              </Select>
+              <PeriodFilter period={trendPeriod} options={MONTH_PRESETS} />
 
               <Autocomplete
                 options={spendingTrendsData?.all_categories || []}
@@ -1351,18 +1430,15 @@ export default function ReportsPage() {
                       slices={trendSlices}
                       formatValue={formatCurrency}
                       height={400}
-                      onSelect={({ category }) => {
-                        const trendsEnd = format(new Date(), "yyyy-MM-dd");
-                        const trendsStart = format(
-                          subMonths(new Date(), Number(trendMonths)),
-                          "yyyy-MM-dd",
-                        );
+                      onSelect={({ category }) =>
+                        // The API echoes back the range it actually covered,
+                        // which is correct for both presets and custom ranges.
                         navigateToTransactions({
-                          start_date: trendsStart,
-                          end_date: trendsEnd,
+                          start_date: spendingTrendsData.start_date,
+                          end_date: spendingTrendsData.end_date,
                           category_name: category,
-                        });
-                      }}
+                        })
+                      }
                     />
                   </Card>
                 )}
@@ -1643,47 +1719,26 @@ export default function ReportsPage() {
                 </SelectContent>
               </Select>
 
-              <Select value={summaryYear} onValueChange={setSummaryYear}>
-                <SelectTrigger className="w-full sm:w-[120px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {[...Array(5)].map((_, i) => {
-                    const year = new Date().getFullYear() - i;
-                    return (
-                      <SelectItem key={year} value={year.toString()}>
-                        {year}
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
+              {/* The year only applies when a specific month is selected */}
+              {!summaryPeriod.isCustom && (
+                <Select value={summaryYear} onValueChange={setSummaryYear}>
+                  <SelectTrigger className="w-full sm:w-[120px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[...Array(5)].map((_, i) => {
+                      const year = new Date().getFullYear() - i;
+                      return (
+                        <SelectItem key={year} value={year.toString()}>
+                          {year}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              )}
 
-              <Select value={summaryMonth} onValueChange={setSummaryMonth}>
-                <SelectTrigger className="w-full sm:w-[150px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {[
-                    "January",
-                    "February",
-                    "March",
-                    "April",
-                    "May",
-                    "June",
-                    "July",
-                    "August",
-                    "September",
-                    "October",
-                    "November",
-                    "December",
-                  ].map((month, idx) => (
-                    <SelectItem key={idx + 1} value={(idx + 1).toString()}>
-                      {month}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <PeriodFilter period={summaryPeriod} options={MONTH_NAMES} />
             </div>
 
             {summaryLoading ? (
@@ -1856,22 +1911,14 @@ export default function ReportsPage() {
                       <CategorySunburst
                         slices={monthlySummarySlices}
                         formatValue={formatCurrency}
-                        emptyMessage="No spending data for this month"
-                        onSelect={({ category }) => {
-                          const selectedMonth = new Date(
-                            Number(summaryYear),
-                            Number(summaryMonth) - 1,
-                            1,
-                          );
+                        emptyMessage="No spending data for this period"
+                        onSelect={({ category }) =>
                           navigateToTransactions({
-                            start_date: format(selectedMonth, "yyyy-MM-dd"),
-                            end_date: format(
-                              endOfMonth(selectedMonth),
-                              "yyyy-MM-dd",
-                            ),
+                            start_date: monthlySummaryData.start_date,
+                            end_date: monthlySummaryData.end_date,
                             category_name: category,
-                          });
-                        }}
+                          })
+                        }
                       />
                     </Card>
                   </div>
@@ -1907,18 +1954,10 @@ export default function ReportsPage() {
                 </SelectContent>
               </Select>
 
-              <Select value={netWorthMonths} onValueChange={setNetWorthMonths}>
-                <SelectTrigger className="w-full sm:w-[150px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="6">6 Months</SelectItem>
-                  <SelectItem value="12">12 Months</SelectItem>
-                  <SelectItem value="24">2 Years</SelectItem>
-                  <SelectItem value="36">3 Years</SelectItem>
-                  <SelectItem value="60">5 Years</SelectItem>
-                </SelectContent>
-              </Select>
+              <PeriodFilter
+                period={netWorthPeriod}
+                options={NET_WORTH_PRESETS}
+              />
             </div>
 
             {extendedNetWorthLoading ? (
@@ -2102,20 +2141,7 @@ export default function ReportsPage() {
                 </SelectContent>
               </Select>
 
-              <Select
-                value={categoryReportMonths}
-                onValueChange={setCategoryReportMonths}
-              >
-                <SelectTrigger className="w-full sm:w-[150px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="3">3 Months</SelectItem>
-                  <SelectItem value="6">6 Months</SelectItem>
-                  <SelectItem value="12">12 Months</SelectItem>
-                  <SelectItem value="24">24 Months</SelectItem>
-                </SelectContent>
-              </Select>
+              <PeriodFilter period={categoryPeriod} options={MONTH_PRESETS} />
             </div>
 
             {!categoryReportType ? (
@@ -2305,32 +2331,27 @@ export default function ReportsPage() {
           <div className="space-y-6 mt-4">
             {/* Year and Month Selector */}
             <div className="flex flex-wrap gap-2 items-center">
-              <Autocomplete
-                options={yearByYearOptions}
-                value={yearByYearSelected}
-                onChange={(value) => setYearByYearSelected(value)}
-                placeholder="Select year"
-                className="w-full sm:w-[150px]"
+              {/* The year only applies when not using an explicit range */}
+              {!moneyFlowPeriod.isCustom && (
+                <Autocomplete
+                  options={yearByYearOptions}
+                  value={yearByYearSelected}
+                  onChange={(value) => setYearByYearSelected(value)}
+                  placeholder="Select year"
+                  className="w-full sm:w-[150px]"
+                />
+              )}
+              <PeriodFilter
+                period={moneyFlowPeriod}
+                options={monthOptions}
+                placeholder="All Year"
               />
-              <Select
-                value={yearByYearMonth}
-                onValueChange={setYearByYearMonth}
-              >
-                <SelectTrigger className="w-full sm:w-[150px]">
-                  <SelectValue placeholder="All Year" />
-                </SelectTrigger>
-                <SelectContent>
-                  {monthOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
               <span className="text-foreground-muted text-sm">
-                {yearByYearMonth
-                  ? `${monthOptions.find((m) => m.value === yearByYearMonth)?.label} ${yearByYearSelected}`
-                  : `Full year ${yearByYearSelected}`}
+                {moneyFlowPeriod.isCustom
+                  ? `${yearByYearData?.start_date ?? ""} → ${yearByYearData?.end_date ?? ""}`
+                  : moneyFlowPeriod.preset
+                    ? `${monthOptions.find((m) => m.value === moneyFlowPeriod.preset)?.label} ${yearByYearSelected}`
+                    : `Full year ${yearByYearSelected}`}
               </span>
             </div>
 

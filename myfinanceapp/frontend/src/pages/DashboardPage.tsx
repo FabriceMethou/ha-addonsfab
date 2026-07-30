@@ -158,7 +158,7 @@ export default function DashboardPage() {
   const { data: netWorthTrend } = useQuery({
     queryKey: ["net-worth-trend"],
     queryFn: async () => {
-      const response = await reportsAPI.getNetWorthTrend(2);
+      const response = await reportsAPI.getNetWorthTrend({ months: 2 });
       return response.data.trend;
     },
   });
@@ -167,7 +167,7 @@ export default function DashboardPage() {
   const { data: spendingTrends } = useQuery({
     queryKey: ["spending-trends"],
     queryFn: async () => {
-      const response = await reportsAPI.getSpendingTrends(6);
+      const response = await reportsAPI.getSpendingTrends({ months: 6 });
       return response.data.trends || [];
     },
   });
@@ -1013,7 +1013,8 @@ export default function DashboardPage() {
           </div>
 
           {/* Recurring / non-recurring split */}
-          {(spendingPrediction.recurring_total > 0 || spendingPrediction.non_recurring_total > 0) && (
+          {(spendingPrediction.recurring_total > 0 ||
+            spendingPrediction.non_recurring_total > 0) && (
             <div className="grid grid-cols-2 gap-3 mb-5">
               <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-surface border border-border">
                 <RefreshCw className="w-4 h-4 text-primary shrink-0" />
@@ -1029,7 +1030,9 @@ export default function DashboardPage() {
                 <div className="min-w-0">
                   <p className="text-xs text-foreground-muted">Variable</p>
                   <p className="text-sm font-semibold text-foreground truncate">
-                    {formatCurrency(spendingPrediction.non_recurring_total || 0)}
+                    {formatCurrency(
+                      spendingPrediction.non_recurring_total || 0,
+                    )}
                   </p>
                 </div>
               </div>
@@ -1096,22 +1099,23 @@ export default function DashboardPage() {
                           </span>
                         </div>
                         {/* Show split only when both portions exist */}
-                        {cat.recurring_amount > 0 && cat.non_recurring_amount > 0 && (
-                          <div className="flex items-center gap-2 pl-30">
-                            <span className="w-28 shrink-0" />
-                            <div className="flex gap-2 text-xs text-foreground-muted">
-                              <span className="flex items-center gap-1">
-                                <RefreshCw className="w-2.5 h-2.5" />
-                                {formatCurrency(cat.recurring_amount)}
-                              </span>
-                              <span>+</span>
-                              <span className="flex items-center gap-1">
-                                <Shuffle className="w-2.5 h-2.5" />
-                                {formatCurrency(cat.non_recurring_amount)}
-                              </span>
+                        {cat.recurring_amount > 0 &&
+                          cat.non_recurring_amount > 0 && (
+                            <div className="flex items-center gap-2 pl-30">
+                              <span className="w-28 shrink-0" />
+                              <div className="flex gap-2 text-xs text-foreground-muted">
+                                <span className="flex items-center gap-1">
+                                  <RefreshCw className="w-2.5 h-2.5" />
+                                  {formatCurrency(cat.recurring_amount)}
+                                </span>
+                                <span>+</span>
+                                <span className="flex items-center gap-1">
+                                  <Shuffle className="w-2.5 h-2.5" />
+                                  {formatCurrency(cat.non_recurring_amount)}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          )}
                         {/* Badge for purely recurring categories */}
                         {cat.is_recurring && cat.non_recurring_amount === 0 && (
                           <div className="flex items-center gap-2">
