@@ -1,4 +1,6 @@
 # Changelog
+## 2.0.57 
+  - mix in the 2.0.56
 
 ## 2.0.56
 - Reports: every category breakdown now includes the **subcategory** level, not just the main category. "Spending by Category" (Overview), "Spending Distribution" (Spending Trends), "Category Distribution" (Monthly Summary) and the Tag report chart are now two-ring sunbursts — inner ring is the main category, outer ring its subcategories. The Year-by-Year tab already had this
