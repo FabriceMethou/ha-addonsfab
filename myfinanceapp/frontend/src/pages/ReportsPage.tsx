@@ -1107,19 +1107,18 @@ export default function ReportsPage() {
                     Spending by Category
                   </h3>
                   <span className="text-xs text-foreground-muted">
-                    Hover a category to expand its subcategories
+                    Hover a category for its subcategory split
                   </span>
                 </div>
                 <CategorySunburst
                   slices={spendingSlices}
                   formatValue={formatCurrency}
                   emptyMessage="No spending data for this period"
-                  onSelect={({ category, subcategory }) =>
+                  onSelect={({ category }) =>
                     navigateToTransactions({
                       start_date: startDate,
                       end_date: endDate,
                       category_name: category,
-                      subcategory_name: subcategory,
                     })
                   }
                 />
@@ -1345,14 +1344,14 @@ export default function ReportsPage() {
                         Spending Distribution
                       </h3>
                       <span className="text-xs text-foreground-muted">
-                        Hover a category to expand its subcategories
+                        Hover a category for its subcategory split
                       </span>
                     </div>
                     <CategorySunburst
                       slices={trendSlices}
                       formatValue={formatCurrency}
                       height={400}
-                      onSelect={({ category, subcategory }) => {
+                      onSelect={({ category }) => {
                         const trendsEnd = format(new Date(), "yyyy-MM-dd");
                         const trendsStart = format(
                           subMonths(new Date(), Number(trendMonths)),
@@ -1362,7 +1361,6 @@ export default function ReportsPage() {
                           start_date: trendsStart,
                           end_date: trendsEnd,
                           category_name: category,
-                          subcategory_name: subcategory,
                         });
                       }}
                     />
@@ -1852,14 +1850,14 @@ export default function ReportsPage() {
                           Category Distribution
                         </h3>
                         <span className="text-xs text-foreground-muted">
-                          Hover a category to expand its subcategories
+                          Hover a category for its subcategory split
                         </span>
                       </div>
                       <CategorySunburst
                         slices={monthlySummarySlices}
                         formatValue={formatCurrency}
                         emptyMessage="No spending data for this month"
-                        onSelect={({ category, subcategory }) => {
+                        onSelect={({ category }) => {
                           const selectedMonth = new Date(
                             Number(summaryYear),
                             Number(summaryMonth) - 1,
@@ -1872,7 +1870,6 @@ export default function ReportsPage() {
                               "yyyy-MM-dd",
                             ),
                             category_name: category,
-                            subcategory_name: subcategory,
                           });
                         }}
                       />
@@ -2953,7 +2950,7 @@ export default function ReportsPage() {
                         Spending by Category
                       </h3>
                       <span className="text-xs text-foreground-muted">
-                        Hover a category to expand its subcategories
+                        Hover a category for its subcategory split
                       </span>
                     </div>
                     <CategorySunburst

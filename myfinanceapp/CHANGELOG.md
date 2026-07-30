@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.59
+- Reports: removed the subcategory outer ring from the category charts entirely — "Spending by Category" (Overview), "Spending Distribution" (Spending Trends), "Category Distribution" (Monthly Summary) and the Tag report chart are now a single ring of main categories that never changes shape on hover
+- Reports: the subcategory split is read from the hover panel instead. Hovering a category shows its amount and share of the total, then each subcategory with its amount and share of the category (up to 12, then "+N more")
+- Reports: the hover panel is no longer see-through. It now uses the app's popover style — opaque `background-paper`, app border, rounded corners and the glass shadow — matching the dropdown menus rather than the translucent card surface
+- Note: with no outer ring, clicking a chart segment now always filters Transactions on the whole category. To drill into a single subcategory use the **By Category** tab, the expandable Monthly Summary rows, or the Subcategory filter on the Transactions page
+
 ## 2.0.58 
 -outer ring subcategory fix
 
