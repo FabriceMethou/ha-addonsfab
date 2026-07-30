@@ -1107,7 +1107,7 @@ export default function ReportsPage() {
                     Spending by Category
                   </h3>
                   <span className="text-xs text-foreground-muted">
-                    Inner ring: category — outer ring: subcategory
+                    Hover a category to expand its subcategories
                   </span>
                 </div>
                 <CategorySunburst
@@ -1345,7 +1345,7 @@ export default function ReportsPage() {
                         Spending Distribution
                       </h3>
                       <span className="text-xs text-foreground-muted">
-                        Inner ring: category — outer ring: subcategory
+                        Hover a category to expand its subcategories
                       </span>
                     </div>
                     <CategorySunburst
@@ -1852,7 +1852,7 @@ export default function ReportsPage() {
                           Category Distribution
                         </h3>
                         <span className="text-xs text-foreground-muted">
-                          Inner ring: category — outer ring: subcategory
+                          Hover a category to expand its subcategories
                         </span>
                       </div>
                       <CategorySunburst
@@ -2953,7 +2953,7 @@ export default function ReportsPage() {
                         Spending by Category
                       </h3>
                       <span className="text-xs text-foreground-muted">
-                        Inner ring: category — outer ring: subcategory
+                        Hover a category to expand its subcategories
                       </span>
                     </div>
                     <CategorySunburst

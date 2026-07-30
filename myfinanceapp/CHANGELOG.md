@@ -1,13 +1,17 @@
 # Changelog
+
+## 2.0.58 
+-outer ring subcategory fix
+
 ## 2.0.57 
   - mix in the 2.0.56
 
 ## 2.0.56
-- Reports: every category breakdown now includes the **subcategory** level, not just the main category. "Spending by Category" (Overview), "Spending Distribution" (Spending Trends), "Category Distribution" (Monthly Summary) and the Tag report chart are now two-ring sunbursts — inner ring is the main category, outer ring its subcategories. The Year-by-Year tab already had this
-- Reports: hovering a category in any of these charts now lists its subcategories with amounts and their share of the category, so you can read the split without clicking. Hovering a subcategory shows its share of its parent category
+- Reports: every category breakdown now includes the **subcategory** level, not just the main category. This covers "Spending by Category" (Overview), "Spending Distribution" (Spending Trends), "Category Distribution" (Monthly Summary) and the Tag report chart. The Year-by-Year tab already had this
+- Reports: those charts stay a single clean ring of main categories — hovering a category expands **just that one** into an outer ring of its subcategories, and it collapses again when you move off the chart. The tooltip lists the same split with amounts and each subcategory's share; hovering a subcategory shows its share of its parent category
 - Reports: new **By Category** tab — pick one category and a period (3/6/12/24 months) and get its own report: total, monthly average, transaction count, subcategory count; a subcategory distribution chart and table (amount, transaction count, share); and a monthly trend stacked by subcategory
 - Reports: "Top Spending Categories" (Monthly Summary) rows are now expandable to show each subcategory's amount and share of total
-- Reports: clicking a chart segment drills through to Transactions filtered on that exact subcategory (clicking the inner ring still filters on the whole category)
+- Reports: clicking a chart segment drills through to Transactions filtered on that exact subcategory (clicking a category arc still filters on the whole category)
 - Transactions: added a **Subcategory** filter next to the Category filter. The `subtype_id` API filter was previously accepted but silently ignored by the query layer, so it never actually filtered anything
 - Investments: fixed "Update all prices" returning a 504 timeout in the browser. The 2.0.54 delay pushed the run past nginx's 60s limit; raised the `/api` `proxy_read_timeout` to 300s and made each lookup much faster (see below)
 - Investments: price lookup now tries the working proxy path **first** instead of after ~5 doomed direct-Yahoo calls (the host's direct Yahoo access is rate-limited/blocked). This removes the repeated "History is empty" / `429 Too Many Requests` log noise and cuts each lookup to a single request, so the bulk update finishes well within the timeout. Reduced the inter-request delay default to 0.3s
