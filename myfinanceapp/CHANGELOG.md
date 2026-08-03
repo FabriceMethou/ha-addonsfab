@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.61
+- Transactions: fixed the **Total Income**, **Total Expenses** and **Net Change** cards showing figures that disagreed with the Dashboard. They were summed from the transactions *visible on the current page* (25/50/100 rows), so the totals changed every time you turned a page or switched page size. They now cover every transaction matching the active filters, regardless of pagination
+- Transactions: those same cards now convert foreign-currency amounts to your display currency instead of adding raw amounts together and labelling the result EUR — DKK and SEK transactions were previously counted at face value (e.g. 3,695 DKK added as 3,695 EUR instead of ~495 EUR)
+- Transactions: **Net Change** is now displayed signed — a negative net change previously rendered as a positive amount, with only the icon colour indicating the loss
+- Transactions API: `GET /api/transactions/stats/summary` accepts the full filter set (`owner_id`, `type_id`, `subtype_id`, `recipient`, `tags`) alongside the existing `start_date`/`end_date`/`account_id`, so summary totals can mirror any transaction list view. Existing callers are unaffected
+- Performance: the summary endpoint loads all exchange rates in one query instead of running two SQL lookups per transaction while converting
+
 ## 2.0.60
 - Reports: every time filter on the page now offers a **Custom Range** option with start/end date pickers, matching the Overview filter that already had one. This covers Spending Trends, Monthly Summary, Net Worth History, By Category and Money Flow
 - Reports: on Monthly Summary and Money Flow, "Custom Range" sits at the end of the month dropdown; picking it hides the year selector, since an explicit range supersedes it

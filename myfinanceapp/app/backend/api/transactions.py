@@ -593,9 +593,19 @@ async def get_transaction_summary(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     account_id: Optional[int] = None,
+    owner_id: Optional[int] = None,
+    type_id: Optional[int] = None,
+    subtype_id: Optional[int] = None,
+    recipient: Optional[str] = None,
+    tags: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get transaction statistics summary in user's preferred currency"""
+    """Get transaction statistics summary in user's preferred currency.
+
+    Accepts the same filters as the transaction list endpoint so that the
+    Transactions page KPI cards can show totals for the whole filtered set,
+    not just the transactions on the current page.
+    """
     # Get user's preferred display currency
     display_currency = db.get_preference('display_currency', 'EUR')
 
@@ -606,17 +616,32 @@ async def get_transaction_summary(
         filters['start_date'] = start_date
     if end_date:
         filters['end_date'] = end_date
+    if owner_id:
+        filters['owner_id'] = owner_id
+    if type_id:
+        filters['type_id'] = type_id
+    if subtype_id:
+        filters['subtype_id'] = subtype_id
+    if recipient:
+        filters['destinataire'] = recipient
+    if tags:
+        filters['tags'] = tags
 
+    # No limit/offset: the summary always covers every matching transaction
     transactions = db.get_transactions(filters=filters if filters else None)
 
-    # Convert all transaction amounts to display currency
+    # Load every exchange rate once instead of hitting the DB per transaction
+    rates = db.get_exchange_rates_map()
+
     # Exclude transfers from income/expense calculations
     total_income = sum(
-        db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
+        db.convert_with_rates(t['amount'], t.get('account_currency', 'EUR'),
+                              display_currency, rates)
         for t in transactions if t['amount'] > 0 and t.get('category') != 'transfer'
     )
     total_expense = sum(
-        db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+        db.convert_with_rates(abs(t['amount']), t.get('account_currency', 'EUR'),
+                              display_currency, rates)
         for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
     )
     net_change = total_income - total_expense

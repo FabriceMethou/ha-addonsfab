@@ -17,7 +17,7 @@ import {
   type TransactionFormData,
 } from "../lib/validations";
 import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
-import { sumMoney, subtractMoney, absMoney } from "../lib/money";
+import { subtractMoney, absMoney } from "../lib/money";
 import {
   Card,
   Button,
@@ -234,29 +234,30 @@ export default function TransactionsPage() {
     }
   }, []);
 
+  // Translate the UI filters into API query params. Shared by the paginated
+  // list and the summary so both always describe the same set of transactions.
+  const buildFilterParams = (f: typeof appliedFilters) => {
+    const params: any = {};
+    if (f.start_date) params.start_date = f.start_date;
+    if (f.end_date) params.end_date = f.end_date;
+    if (f.account_id) params.account_id = f.account_id;
+    if (f.owner_id) params.owner_id = f.owner_id;
+    if (f.category_id) params.type_id = f.category_id;
+    if (f.subcategory_id) params.subtype_id = f.subcategory_id;
+    if (f.recipient) params.recipient = f.recipient;
+    if (f.tags) params.tags = f.tags;
+    return params;
+  };
+
   const { data: transactionsResponse, isLoading: transactionsLoading } =
     useQuery({
       queryKey: ["transactions", debouncedFilters, currentPage, pageSize],
       queryFn: async () => {
-        const params: any = {
+        const params = {
+          ...buildFilterParams(debouncedFilters),
           limit: pageSize,
           offset: (currentPage - 1) * pageSize,
         };
-        if (debouncedFilters.start_date)
-          params.start_date = debouncedFilters.start_date;
-        if (debouncedFilters.end_date)
-          params.end_date = debouncedFilters.end_date;
-        if (debouncedFilters.account_id)
-          params.account_id = debouncedFilters.account_id;
-        if (debouncedFilters.owner_id)
-          params.owner_id = debouncedFilters.owner_id;
-        if (debouncedFilters.category_id)
-          params.type_id = debouncedFilters.category_id;
-        if (debouncedFilters.subcategory_id)
-          params.subtype_id = debouncedFilters.subcategory_id;
-        if (debouncedFilters.recipient)
-          params.recipient = debouncedFilters.recipient;
-        if (debouncedFilters.tags) params.tags = debouncedFilters.tags;
 
         const response = await transactionsAPI.getAll(params);
         const transactions = response.data.transactions;
@@ -267,6 +268,19 @@ export default function TransactionsPage() {
       },
       placeholderData: (prev) => prev,
     });
+
+  // Totals for the whole filtered set — deliberately NOT derived from the
+  // current page, and converted to the display currency server-side.
+  const { data: summaryData, isLoading: summaryLoading } = useQuery({
+    queryKey: ["transactions-summary", "filtered", debouncedFilters],
+    queryFn: async () => {
+      const response = await transactionsAPI.getSummary(
+        buildFilterParams(debouncedFilters),
+      );
+      return response.data;
+    },
+    placeholderData: (prev) => prev,
+  });
 
   const transactionsData = transactionsResponse?.transactions;
 
@@ -829,22 +843,19 @@ export default function TransactionsPage() {
     URL.revokeObjectURL(url);
   };
 
-  // Calculate summary statistics using precise decimal arithmetic
-  const { totalIncome, totalExpenses, netChange } = useMemo(() => {
-    const income = (transactionsData || []).filter(
-      (t: any) => t.amount > 0 && t.category !== "transfer",
-    );
-    const expense = (transactionsData || []).filter(
-      (t: any) => t.amount < 0 && t.category !== "transfer",
-    );
-    const inc = sumMoney(income, (t: any) => t.amount);
-    const exp = absMoney(sumMoney(expense, (t: any) => t.amount));
-    return {
-      totalIncome: inc,
-      totalExpenses: exp,
-      netChange: subtractMoney(inc, exp),
-    };
-  }, [transactionsData]);
+  // Summary statistics for every transaction matching the current filters,
+  // already converted to the display currency by the backend.
+  const { totalIncome, totalExpenses, netChange, summaryCurrency } =
+    useMemo(() => {
+      const inc = summaryData?.total_income ?? 0;
+      const exp = absMoney(summaryData?.total_expense ?? 0);
+      return {
+        totalIncome: inc,
+        totalExpenses: exp,
+        netChange: subtractMoney(inc, exp),
+        summaryCurrency: summaryData?.currency ?? "EUR",
+      };
+    }, [summaryData]);
 
   // Pagination logic — server-side, total from API
   const totalTransactions = transactionsResponse?.total || 0;
@@ -879,21 +890,22 @@ export default function TransactionsPage() {
         />
         <KPICard
           title="Total Income"
-          value={formatCurrency(totalIncome)}
+          value={formatCurrency(totalIncome, summaryCurrency)}
           icon={<ArrowUpCircle size={24} className="text-emerald-500" />}
           iconColor="bg-emerald-500"
-          loading={transactionsLoading}
+          loading={summaryLoading}
         />
         <KPICard
           title="Total Expenses"
-          value={formatCurrency(totalExpenses)}
+          value={formatCurrency(totalExpenses, summaryCurrency)}
           icon={<ArrowDownCircle size={24} className="text-rose-500" />}
           iconColor="bg-rose-500"
-          loading={transactionsLoading}
+          loading={summaryLoading}
         />
         <KPICard
           title="Net Change"
-          value={formatCurrency(netChange)}
+          // Signed on purpose: a negative net change must not read as a gain
+          value={formatCurrencyUtil(netChange, summaryCurrency)}
           icon={
             <Wallet
               size={24}
@@ -901,7 +913,7 @@ export default function TransactionsPage() {
             />
           }
           iconColor={netChange >= 0 ? "bg-emerald-500" : "bg-rose-500"}
-          loading={transactionsLoading}
+          loading={summaryLoading}
         />
       </div>
 
