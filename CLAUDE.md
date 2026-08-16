@@ -71,13 +71,44 @@ business logic may live under `lib/features/`.
 - Transactions carry both `transaction_date` and a `date` alias for the website; prefer `transaction_date`.
 - `limit` on `/api/transactions/` caps at 1000; `total` is returned for paging.
 
-## Tests
+## Build and test
+
+**Generated code is not committed.** `*.freezed.dart` and `*.g.dart` are
+gitignored, so a fresh clone does not compile until you run codegen. Do this
+first, and again after touching anything in `lib/domain/models/`:
+
+```bash
+dart run build_runner build
+```
+
+```bash
+flutter analyze     # must be clean; no warnings tolerated
+flutter test        # hermetic, needs nothing running
+flutter build apk --debug
+```
+
+`android/app/build.gradle.kts` pins `compileSdk = 37` rather than following
+`flutter.compileSdkVersion`, because flutter_secure_storage requires it. AGP
+warns that 36 is its highest recommended value; that warning is expected.
+
+### Fixtures
 
 `test/fixtures/` holds real API responses, anonymised — see its README. Model
 tests run against them, so a change in the backend's response shape turns a test
 red instead of surfacing as a crash on the phone.
 
+### Live tests
+
+`test/live/` drives the real HTTP stack against a running backend. It skips
+itself unless pointed at one, so the ordinary suite stays hermetic. Run it after
+touching anything in `lib/core/net/`, where a fixture cannot tell you whether
+the wire format is still right:
+
 ```bash
-flutter analyze
-flutter test
+MYFINANCE_LIVE=http://127.0.0.1:8199 \
+MYFINANCE_USER=… MYFINANCE_PASS=… flutter test test/live
 ```
+
+It caught two things fixtures could not: booleans arriving from SQLite as `0`
+and `1` rather than `true`/`false`, and `ApiException` being buried inside
+`DioException` so that every `catch` upstream missed it.

@@ -6,7 +6,11 @@ plugins {
 
 android {
     namespace = "com.methou.myfinance"
-    compileSdk = flutter.compileSdkVersion
+    // Pinned above flutter.compileSdkVersion (36) because flutter_secure_storage
+    // requires 37. AGP 9.1 warns that 36 is its highest recommended value; the
+    // warning is expected and the build is clean. Revert to
+    // flutter.compileSdkVersion once Flutter's default catches up.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
