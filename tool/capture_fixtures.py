@@ -49,7 +49,8 @@ st, err422 = call("POST", "/api/auth/token", body={"nimporte": "quoi"}, form=Tru
 check("erreur 422 -> detail est une LISTE (piege 4)", isinstance(err422.get("detail"), list), type(err422.get("detail")).__name__)
 
 print("\n=== §4.2 Ressources de lecture ===")
-Y, M = 2025, 11
+Y = int(os.environ.get("FIXTURE_YEAR", "2026"))
+M = int(os.environ.get("FIXTURE_MONTH", "5"))
 endpoints = {
     "health":                  ("GET", "/health", False),
     "auth_me":                 ("GET", "/api/auth/me", True),
@@ -61,8 +62,8 @@ endpoints = {
     "accounts_balances":       ("GET", "/api/accounts/summary/balances", True),
     "reports_net_worth":       ("GET", "/api/reports/net-worth", True),
     "reports_monthly_summary": ("GET", f"/api/reports/monthly-summary?year={Y}&month={M}", True),
-    "reports_by_category":     ("GET", "/api/reports/spending-by-category?start_date=2025-11-01&end_date=2025-11-30", True),
-    "reports_income_expenses": ("GET", "/api/reports/income-vs-expenses?start_date=2025-11-01&end_date=2025-11-30", True),
+    "reports_by_category":     ("GET", f"/api/reports/spending-by-category?start_date={Y}-{M:02d}-01&end_date={Y}-{M:02d}-28", True),
+    "reports_income_expenses": ("GET", f"/api/reports/income-vs-expenses?start_date={Y}-{M:02d}-01&end_date={Y}-{M:02d}-28", True),
     "reports_net_worth_trend": ("GET", "/api/reports/net-worth/trend?months=6", True),
     "categories_hierarchy":    ("GET", "/api/categories/hierarchy", True),
     "settings":                ("GET", "/api/settings/", True),
