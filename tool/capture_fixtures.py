@@ -50,11 +50,16 @@ check("erreur 422 -> detail est une LISTE (piege 4)", isinstance(err422.get("det
 
 print("\n=== §4.2 Ressources de lecture ===")
 Y = int(os.environ.get("FIXTURE_YEAR", "2026"))
-M = int(os.environ.get("FIXTURE_MONTH", "5"))
+M = int(os.environ.get("FIXTURE_MONTH", "8"))
+# Un second mois, choisi pour contenir des budgets dans les trois etats de
+# couleur : le mois courant est souvent trop sage pour tester le rendu.
+Y2 = int(os.environ.get("FIXTURE_YEAR_ALT", "2026"))
+M2 = int(os.environ.get("FIXTURE_MONTH_ALT", "7"))
 endpoints = {
     "health":                  ("GET", "/health", False),
     "auth_me":                 ("GET", "/api/auth/me", True),
     "budgets_vs_actual":       ("GET", f"/api/budgets/vs-actual/{Y}/{M}", True),
+    "budgets_vs_actual_over":  ("GET", f"/api/budgets/vs-actual/{Y2}/{M2}", True),
     "budgets_list":            ("GET", "/api/budgets/", True),
     "transactions":            ("GET", "/api/transactions/?limit=50", True),
     "transactions_stats":      ("GET", "/api/transactions/stats/summary", True),

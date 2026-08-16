@@ -24,20 +24,30 @@ python3 tool/anonymize_fixtures.py /tmp/raw test/fixtures
 
 ## What this dataset exercises
 
-The source database was chosen because it covers the cases a smaller one hides:
+Captured from the most recent backup, taken 16 August 2026. It covers the cases
+a smaller dataset hides:
 
 - **Four currencies** — EUR, DKK, SEK and NOK across 18 accounts, so the
   server-side conversion paths are actually represented.
-- **Two owners with parallel budgets** — each owns a Food, Housing and Transport
-  budget. Every budget is owner-scoped, so summing them for the overall ring is
-  correct here. Careful: a budget with a null `owner_id` spans *all* owners, so
-  mixing scoped and unscoped budgets for the same category would double-count.
-  The pace engine has to defend against that even though this data doesn't
-  trigger it.
-- **Budgets over limit** — several categories sit past 100 %, one at 196 %, so
-  over-budget rendering has real values to work with.
-- **750 transactions spanning 18 months**, including transactions on the last
-  day of a month, which is what the budget date fix was about.
+- **1100 transactions spanning 20 months**, up to two days before capture, so
+  the *current* month has real data — which is the case the widget lives in.
+- **Budgets scoped to all owners.** Every active budget here has a null
+  `owner_id`, meaning it spans every owner. An earlier snapshot of the same
+  database had the opposite: every budget owner-scoped, one set per person.
+  Both configurations are real, and they must not be mixed blindly — an
+  all-owners budget already contains what an owner-scoped budget on the same
+  category counts, so summing both double-counts. The pace engine guards
+  against this regardless of what today's data happens to look like.
+
+### Two budget months, on purpose
+
+| File | Month | Why |
+|---|---|---|
+| `budgets_vs_actual.json` | 2026-08 | The live case: current month, everything under budget and well behind pace (11 % spent at 52 % through the month). |
+| `budgets_vs_actual_over.json` | 2026-07 | All three colour states in one payload: three categories over (max 163 %), one at 90 %, one at 15 %. |
+
+The current month is what the app actually renders, but a month where nothing is
+over budget cannot test over-budget rendering — hence the second fixture.
 
 ## What was anonymised
 
