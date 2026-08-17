@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Widget metadata. minWidth/minHeight are the smallest the launcher will let it
+  be placed at; the layouts inside adapt above that. resizeMode allows both
+  axes so one widget covers the 2x2, 4x2 and 4x4 shapes rather than shipping
+  three separate ones.
+
+  updatePeriodMillis is 0 on purpose. Android caps that mechanism at 30 minutes
+  and wakes the device to honour it; refreshing is driven by WorkManager
+  instead, which batches with other work and respects battery state.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:maxResizeWidth="320dp"
+    android:maxResizeHeight="320dp"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:previewImage="@mipmap/ic_launcher"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/budget_widget_description" />
