@@ -11,7 +11,9 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-DB_PATH = os.getenv('DATABASE_PATH', 'data/finance.db')
+import paths
+
+DB_PATH = str(paths.DB_PATH)
 
 def migrate():
     """Make account_id optional in envelope_transactions"""

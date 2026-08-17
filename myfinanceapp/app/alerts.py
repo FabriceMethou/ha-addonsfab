@@ -11,12 +11,14 @@ import json
 import os
 from pathlib import Path
 
+import paths
+
 
 class AlertManager:
     """Manage financial alerts and notifications."""
 
-    def __init__(self, config_path: str = "data/alerts_config.json"):
-        self.config_path = Path(config_path)
+    def __init__(self, config_path: str = None):
+        self.config_path = Path(config_path) if config_path is not None else paths.ALERTS_CONFIG
         self.config = self._load_config()
         self._session_password = None  # Temporary storage for password during session
 

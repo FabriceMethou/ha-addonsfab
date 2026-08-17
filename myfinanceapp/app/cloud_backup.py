@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import List, Dict, Optional
 import json
 
+import paths
+
 
 class CloudStorageAdapter(ABC):
     """Abstract base class for cloud storage providers."""
@@ -120,9 +122,9 @@ class WebDAVAdapter(CloudStorageAdapter):
 class CloudBackupManager:
     """Manage cloud backup operations."""
 
-    def __init__(self, adapter: CloudStorageAdapter, config_path: str = "data/cloud_config.json"):
+    def __init__(self, adapter: CloudStorageAdapter, config_path: str = None):
         self.adapter = adapter
-        self.config_path = Path(config_path)
+        self.config_path = Path(config_path) if config_path is not None else paths.CLOUD_CONFIG
         self.config = self._load_config()
 
     def _load_config(self) -> Dict:

@@ -6,7 +6,10 @@ import os
 import sys
 
 # Get database path from environment or use default
-DB_PATH = os.getenv("DATABASE_PATH", "/home/fab/Documents/Development/myfinanceapp/data/finance.db")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import paths
+
+DB_PATH = str(paths.DB_PATH)
 
 def add_tax_column():
     """Add tax column to investment_transactions table if it doesn't exist"""

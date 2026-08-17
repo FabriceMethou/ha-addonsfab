@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 import time
 import yfinance as yf
+
+import paths
 from contextlib import contextmanager
 from functools import wraps
 
@@ -185,8 +187,16 @@ class SimpleCRUD:
 class FinanceDatabase:
     """Handle all database operations for Finance Tracker."""
 
-    def __init__(self, db_path: str = "data/finance.db"):
-        """Initialize database connection."""
+    def __init__(self, db_path: str = None):
+        """Initialize database connection.
+
+        db_path defaults to the absolute path from paths.py — never a
+        cwd-relative one, which would put the database wherever the process
+        happened to be started.
+        """
+        if db_path is None:
+            db_path = str(paths.DB_PATH)
+
         # Ensure data directory exists
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 

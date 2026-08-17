@@ -13,6 +13,8 @@ import hmac
 import struct
 import time
 
+import paths
+
 # Optional: pyotp for TOTP MFA (install with: pip install pyotp)
 try:
     import pyotp
@@ -24,8 +26,8 @@ except ImportError:
 class AuthManager:
     """Manages user authentication and MFA."""
 
-    def __init__(self, db_path: str = "data/finance.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path if db_path is not None else str(paths.DB_PATH)
         self._ensure_auth_tables()
 
     def _get_connection(self) -> sqlite3.Connection:

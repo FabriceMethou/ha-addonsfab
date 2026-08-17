@@ -42,6 +42,13 @@ backup_metadata.json
 alerts_config.json
 cloud_config.json
 
+# ... and the known data roots wholesale, to catch extensionless files too.
+# app/data is where paths.py resolves DATA_DIR when the env var is unset;
+# the other two are legacy locations left by cwd-relative defaults.
+myfinanceapp/app/data/
+myfinanceapp/app/backend/data/
+myfinanceapp/data/
+
 # OS / editor
 .DS_Store
 *.swp

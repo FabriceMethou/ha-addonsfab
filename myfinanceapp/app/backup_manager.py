@@ -13,16 +13,23 @@ import hashlib
 import os
 import logging
 
+import paths
+
 logger = logging.getLogger(__name__)
 
 
 class BackupManager:
     """Manage database backups with versioning."""
 
-    def __init__(self, db_path: str = "data/finance.db",
-                 backup_dir: str = "data/backups"):
-        self.db_path = Path(db_path)
-        self.backup_dir = Path(backup_dir)
+    def __init__(self, db_path: str = None, backup_dir: str = None):
+        """Both paths default to the absolute locations from paths.py.
+
+        backup_dir in particular used to default to the relative "data/backups",
+        and callers routinely passed db_path without it — which is how backups
+        ended up written next to whatever directory the server was started from.
+        """
+        self.db_path = Path(db_path) if db_path is not None else paths.DB_PATH
+        self.backup_dir = Path(backup_dir) if backup_dir is not None else paths.BACKUP_DIR
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_file = self.backup_dir / "backup_metadata.json"
         self.metadata = self._load_metadata()

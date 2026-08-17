@@ -9,8 +9,12 @@ when deleting transactions.
 
 import sqlite3
 import os
+import sys
 
-DB_PATH = os.getenv("DATABASE_PATH", "/home/fab/Documents/Development/myfinanceapp/data/finance.db")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import paths
+
+DB_PATH = str(paths.DB_PATH)
 
 def fix_investment_transaction_signs():
     """

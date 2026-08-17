@@ -41,6 +41,9 @@ fi
 # Set Environment Variables
 # =============================================================================
 export PYTHONPATH="/app"
+# DATA_DIR is the single root every runtime path derives from (see app/paths.py).
+# /app/data is a symlink into the add-on's persistent /data volume, set up above.
+export DATA_DIR="/app/data"
 export DATABASE_PATH="/app/data/finance.db"
 
 # Get JWT secret from options or use default (not recommended for production)

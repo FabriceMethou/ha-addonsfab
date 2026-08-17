@@ -3,6 +3,8 @@ from typing import Dict, List, Optional, Tuple
 import joblib
 from pathlib import Path
 
+import paths
+
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.naive_bayes import MultinomialNB
@@ -15,8 +17,8 @@ except ImportError:
 class TransactionCategorizer:
     """Auto-categorize transactions using ML."""
 
-    def __init__(self, model_path: str = "data/categorizer_model.pkl"):
-        self.model_path = Path(model_path)
+    def __init__(self, model_path: str = None):
+        self.model_path = Path(model_path) if model_path is not None else paths.MODEL_PATH
         self.model = None
         self.type_mapping = {}
         self.subtype_mapping = {}
