@@ -694,10 +694,52 @@ class FinanceDatabase:
                         FOREIGN KEY (transaction_id) REFERENCES transactions(id)
                     )
                 """)
-                cursor.execute("INSERT INTO debt_payments SELECT * FROM debt_payments_old")
+                # Column names must be listed explicitly: the new table gained a
+                # 'notes' column, so `SELECT *` supplies one value too few and
+                # the statement fails.
+                cursor.execute("""
+                    INSERT INTO debt_payments
+                        (id, debt_id, transaction_id, payment_date, amount,
+                         principal_paid, interest_paid, extra_payment, created_at)
+                    SELECT id, debt_id, transaction_id, payment_date, amount,
+                           principal_paid, interest_paid, extra_payment, created_at
+                    FROM debt_payments_old
+                """)
                 cursor.execute("DROP TABLE debt_payments_old")
                 conn.commit()
                 logger.info("Migrated debt_payments: made transaction_id nullable")
+
+            # Recovery for databases that ran the broken version of the migration
+            # above. It raised on the INSERT after the rename had already been
+            # committed, so debt_payments_old survived with its rows stranded --
+            # and on the next start the guard above sees a nullable column and
+            # skips, leaving the data unreachable with no path back.
+            cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='debt_payments_old'"
+            )
+            if cursor.fetchone():
+                # Both column lists come from PRAGMA on our own tables, never
+                # from user input.
+                cursor.execute("PRAGMA table_info(debt_payments)")
+                new_cols = [c[1] for c in cursor.fetchall()]
+                cursor.execute("PRAGMA table_info(debt_payments_old)")
+                old_cols = {c[1] for c in cursor.fetchall()}
+                shared = ", ".join(c for c in new_cols if c in old_cols)
+                cursor.execute(f"""
+                    INSERT INTO debt_payments ({shared})
+                    SELECT {shared} FROM debt_payments_old
+                    WHERE id NOT IN (SELECT id FROM debt_payments)
+                """)
+                recovered = cursor.rowcount
+                cursor.execute("DROP TABLE debt_payments_old")
+                conn.commit()
+                if recovered:
+                    logger.warning(
+                        "Recovered %d debt payment(s) stranded in debt_payments_old "
+                        "by a failed migration", recovered
+                    )
+                else:
+                    logger.info("Dropped empty debt_payments_old left by an earlier migration")
 
             # Migration: Add linked_transfer_id column for double-entry transfers
             cursor.execute("PRAGMA table_info(transactions)")
