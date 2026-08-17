@@ -89,3 +89,101 @@ abstract class CategorySpend with _$CategorySpend {
   factory CategorySpend.fromJson(Map<String, dynamic> json) =>
       _$CategorySpendFromJson(json);
 }
+
+/// One point on the net-worth curve.
+@freezed
+abstract class NetWorthPoint with _$NetWorthPoint {
+  const factory NetWorthPoint({
+    @Default('') String date,
+
+    /// Already formatted by the server, e.g. "February 2026".
+    @Default('') String month,
+    @Default(0.0) double assets,
+    @Default(0.0) double debts,
+    @JsonKey(name: 'net_worth') @Default(0.0) double netWorth,
+  }) = _NetWorthPoint;
+
+  const NetWorthPoint._();
+
+  factory NetWorthPoint.fromJson(Map<String, dynamic> json) =>
+      _$NetWorthPointFromJson(json);
+
+  DateTime? get parsedDate => DateTime.tryParse(date);
+}
+
+/// Net worth over time.
+///
+/// The backend builds this from account opening dates and opening balances
+/// rather than by walking backwards from today, so points before an account
+/// existed are not filled in with a balance it never had.
+@freezed
+abstract class NetWorthTrend with _$NetWorthTrend {
+  const factory NetWorthTrend({
+    @Default(<NetWorthPoint>[]) List<NetWorthPoint> trend,
+    @JsonKey(name: 'current_net_worth') @Default(0.0) double currentNetWorth,
+    @Default('EUR') String currency,
+  }) = _NetWorthTrend;
+
+  const NetWorthTrend._();
+
+  factory NetWorthTrend.fromJson(Map<String, dynamic> json) =>
+      _$NetWorthTrendFromJson(json);
+
+  bool get hasData => trend.length >= 2;
+
+  double get minimum =>
+      trend.map((p) => p.netWorth).reduce((a, b) => a < b ? a : b);
+
+  double get maximum =>
+      trend.map((p) => p.netWorth).reduce((a, b) => a > b ? a : b);
+
+  /// Change from the first point to the last, or null when there is nothing to
+  /// compare against.
+  double? get change =>
+      hasData ? trend.last.netWorth - trend.first.netWorth : null;
+}
+
+/// What came in against what went out, over an arbitrary range.
+@freezed
+abstract class IncomeVsExpenses with _$IncomeVsExpenses {
+  const factory IncomeVsExpenses({
+    @Default(0.0) double income,
+
+    /// Positive, like [MonthlySummary.expenses].
+    @Default(0.0) double expenses,
+    @Default(0.0) double net,
+    @JsonKey(name: 'income_categories')
+    @Default(<CategorySpend>[])
+    List<CategorySpend> incomeCategories,
+    @Default('EUR') String currency,
+  }) = _IncomeVsExpenses;
+
+  const IncomeVsExpenses._();
+
+  factory IncomeVsExpenses.fromJson(Map<String, dynamic> json) =>
+      _$IncomeVsExpensesFromJson(json);
+
+  bool get isPositive => net >= 0;
+}
+
+/// Spending grouped by category, over an arbitrary range.
+@freezed
+abstract class SpendingByCategory with _$SpendingByCategory {
+  const factory SpendingByCategory({
+    @Default(<CategorySpend>[]) List<CategorySpend> categories,
+    @Default(0.0) double total,
+    @Default('EUR') String currency,
+  }) = _SpendingByCategory;
+
+  const SpendingByCategory._();
+
+  factory SpendingByCategory.fromJson(Map<String, dynamic> json) =>
+      _$SpendingByCategoryFromJson(json);
+
+  /// Largest first, which is the only order worth showing.
+  List<CategorySpend> get ranked =>
+      [...categories]..sort((a, b) => b.amount.compareTo(a.amount));
+
+  /// Share of the total this category accounts for, in `[0, 1]`.
+  double shareOf(CategorySpend c) => total > 0 ? c.amount / total : 0;
+}

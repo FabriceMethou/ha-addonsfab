@@ -183,6 +183,52 @@ class FinanceApi {
         return MonthlySummary.fromJson(r.data ?? const {});
       });
 
+  /// Spending grouped by category over a date range.
+  Future<SpendingByCategory> spendingByCategory({
+    required String startDate,
+    required String endDate,
+    int? ownerId,
+  }) =>
+      _unwrapped(() async {
+        final r = await _dio.get<Map<String, dynamic>>(
+          '/api/reports/spending-by-category',
+          queryParameters: {
+            'start_date': startDate,
+            'end_date': endDate,
+            'owner_id': ?ownerId,
+          },
+        );
+        return SpendingByCategory.fromJson(r.data ?? const {});
+      });
+
+  /// Income against expenses over a date range.
+  Future<IncomeVsExpenses> incomeVsExpenses({
+    required String startDate,
+    required String endDate,
+    int? ownerId,
+  }) =>
+      _unwrapped(() async {
+        final r = await _dio.get<Map<String, dynamic>>(
+          '/api/reports/income-vs-expenses',
+          queryParameters: {
+            'start_date': startDate,
+            'end_date': endDate,
+            'owner_id': ?ownerId,
+          },
+        );
+        return IncomeVsExpenses.fromJson(r.data ?? const {});
+      });
+
+  /// Net worth month by month.
+  Future<NetWorthTrend> netWorthTrend({int months = 12, int? ownerId}) =>
+      _unwrapped(() async {
+        final r = await _dio.get<Map<String, dynamic>>(
+          '/api/reports/net-worth/trend',
+          queryParameters: {'months': months, 'owner_id': ?ownerId},
+        );
+        return NetWorthTrend.fromJson(r.data ?? const {});
+      });
+
   // -------------------------------------------------------------- budgets
 
   /// A month of budgets against actual spending.

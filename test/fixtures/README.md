@@ -72,11 +72,17 @@ They are hand-typed labels, though, so they are worth reading after every
 regeneration: most are generic (`Groceries`, `Rent`, `Fuel`), but one arrived
 naming family members and had to be replaced by hand.
 
-## Two properties the tests depend on
+## Three properties the tests depend on
 
 **Ratios survive.** Amounts are scaled by a single constant, so every
 `actual / budget` ratio — and therefore every `percentage` the server sent — is
 still exact. The pace engine can be tested on this data.
+
+**Derived figures can be a cent out.** Every amount is scaled and then rounded
+to two places independently, so a total does not always equal the sum of its
+own parts here — `net_worth` can land a cent away from `assets - debts`. Real
+responses reconcile exactly; tests that check an identity allow a cent, and say
+so where they do.
 
 **The fixtures agree with each other.** Pseudonyms are assigned sequentially
 from a registry rather than by hashing, so two distinct real values can never
@@ -84,4 +90,4 @@ collapse onto the same fake one. `owner_id` → `owner_name` stays bijective, an
 every `type_name` in `budgets_vs_actual.json` and `transactions.json` exists in
 `categories_hierarchy.json`.
 
-Both properties are asserted by the anonymiser itself when it runs.
+The first and third are asserted by the anonymiser itself when it runs.
