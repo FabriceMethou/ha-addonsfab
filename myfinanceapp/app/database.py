@@ -3875,6 +3875,11 @@ class FinanceDatabase:
         start_date = date(year, month, 1)
         last_day = calendar.monthrange(year, month)[1]
         end_date = date(year, month, last_day)
+        # Exclusive upper bound for the spending query below. Comparing against
+        # end_date would drop transactions dated on the last day of the month,
+        # making budget actuals disagree with every other report, which filters
+        # through get_transactions and includes end_date.
+        next_month_start = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
 
         # Get user's display currency for UI formatting
         display_currency = self.get_preference('display_currency', 'EUR')
@@ -3908,7 +3913,7 @@ class FinanceDatabase:
               AND t.transaction_date >= ?
               AND t.transaction_date < ?
             GROUP BY t.type_id, a.owner_id, a.currency
-        """, (start_date.isoformat(), end_date.isoformat()))
+        """, (start_date.isoformat(), next_month_start.isoformat()))
         rows = cursor.fetchall()
         conn.close()
 
