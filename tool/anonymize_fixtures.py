@@ -4,13 +4,13 @@ ATTENTION : les noms de categories et de sous-categories passent en clair,
 volontairement. Les budgets et la hierarchie se referencent par ces noms, donc
 les renommer casserait la coherence entre fixtures. Mais ce sont des libelles
 saisis a la main : apres chaque regeneration, les relire et remplacer ceux qui
-identifient quelqu'un. Un « a loan named after relatives » s'est deja glisse la.
+nomment une personne ou un proche. C'est deja arrive une fois.
 
 Les montants sont multiplies par un facteur constant : les ratios, et donc
 tous les pourcentages de budget, restent exacts, ce qui garde les fixtures
 utiles pour tester le moteur de rythme, sans exposer de vrais montants.
 """
-import json, sys, hashlib, pathlib
+import json, os, sys, hashlib, pathlib
 
 SCALE = 0.7314
 RAW = pathlib.Path(sys.argv[1]) / "_raw.json"
@@ -104,10 +104,19 @@ for n, s in sorted(written):
 
 # controles d'anonymisation
 blob = json.dumps([json.loads((OUT / f'{n}.json').read_text()) for n, _ in written])
-leaks = [w for w in ["<witnesses supplied at run time>"]
-         if w.lower() in blob.lower()]
+# Les temoins viennent de l'environnement et ne sont jamais versionnes : les
+# ecrire ici reviendrait a publier, dans le detecteur, exactement ce qu'il
+# cherche a empecher de sortir.
+witnesses = [w.strip() for w in os.environ.get("ANONYMIZE_WITNESSES", "").split(",") if w.strip()]
+leaks = [w for w in witnesses if w.lower() in blob.lower()]
 print()
-print("FUITE DETECTEE : " + ", ".join(leaks) if leaks else "aucune fuite detectee sur les temoins connus")
+if leaks:
+    print("FUITE DETECTEE : " + ", ".join(leaks))
+elif witnesses:
+    print(f"aucune fuite detectee sur les {len(witnesses)} temoins fournis")
+else:
+    print("ATTENTION : aucun temoin fourni, controle de fuite non effectue.\n"
+          "  Relancer avec ANONYMIZE_WITNESSES='nom1,nom2,...' pour verifier.")
 
 # le ratio budget/actual doit survivre a la mise a l'echelle
 src = raw["budgets_vs_actual"]["categories"][0]

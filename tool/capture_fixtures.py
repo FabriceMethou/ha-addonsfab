@@ -30,16 +30,21 @@ def check(label, cond, detail=""):
     print(f"  [{'OK ' if cond else 'NON'}] {label}{(' — ' + detail) if detail else ''}")
 
 print("=== §4.1 Authentification ===")
-st, tok = call("POST", "/api/auth/token", body={"username": "<user>", "password": "<password>"}, form=True)
+USER = os.environ.get("MYFINANCE_USER")
+PASS = os.environ.get("MYFINANCE_PASS")
+if not USER or not PASS:
+    sys.exit("Definir MYFINANCE_USER et MYFINANCE_PASS (jamais d'identifiants en dur ici).")
+
+st, tok = call("POST", "/api/auth/token", body={"username": USER, "password": PASS}, form=True)
 check("POST /token accepte form-urlencoded", st == 200, f"HTTP {st}")
-st_json, _ = call("POST", "/api/auth/token", body={"username": "<user>", "password": "<password>"}, form=False)
+st_json, _ = call("POST", "/api/auth/token", body={"username": USER, "password": PASS}, form=False)
 check("POST /token refuse du JSON (piege 1)", st_json == 422, f"HTTP {st_json}")
 access, refresh = tok.get("access_token"), tok.get("refresh_token")
 check("reponse porte access_token + refresh_token", bool(access and refresh))
 check("user.mfa_required absent (MFA off)", "mfa_required" not in tok.get("user", {}))
 
 st, me = call("GET", "/api/auth/me", token=access)
-check("GET /me", st == 200 and me.get("username") == "<user>")
+check("GET /me", st == 200 and me.get("username") == USER)
 st, ref = call("POST", "/api/auth/refresh", body={"refresh_token": refresh})
 check("POST /refresh en JSON", st == 200 and "access_token" in ref)
 st, err = call("GET", "/api/budgets/", token="jeton-invalide")

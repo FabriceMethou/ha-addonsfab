@@ -56,3 +56,10 @@ __pycache__/
 # or after touching a model — nothing compiles without them.
 *.freezed.dart
 *.g.dart
+
+# Test fixtures and the Kotlin golden file are derived from real financial
+# data. Anonymised, but the structure, dates and ratios are genuine, and this
+# repository is public. Regenerate them locally instead — see
+# test/fixtures/README.md.
+test/fixtures/*.json
+android/app/src/test/resources/
