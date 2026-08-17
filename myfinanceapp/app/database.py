@@ -266,11 +266,19 @@ class FinanceDatabase:
                 conn.rollback()
             logger.error(f"Database integrity error: {e}")
             raise DatabaseIntegrityError(f"Data integrity violation: {e}") from e
-        except Exception as e:
+        except sqlite3.Error as e:
             if conn:
                 conn.rollback()
             logger.error(f"Database error: {e}")
             raise DatabaseError(f"Database operation failed: {e}") from e
+        except Exception:
+            # Not a database failure — application-level errors such as the
+            # ValueError raised for an unknown transaction type. Roll back, but
+            # let the original exception through: the API routers catch
+            # ValueError to answer 400, and wrapping it would turn those into 500.
+            if conn:
+                conn.rollback()
+            raise
         finally:
             if conn:
                 conn.close()
@@ -1697,7 +1705,6 @@ class FinanceDatabase:
         cursor.execute("SELECT opening_date, opening_balance, balance FROM accounts WHERE id = ?", (account_id,))
         account = cursor.fetchone()
         if not account:
-            conn.close()
             raise ValueError(f"Account {account_id} not found")
 
         # Determine start date and starting balance
@@ -4433,7 +4440,6 @@ class FinanceDatabase:
         count = cursor.fetchone()[0]
         
         if count > 0:
-            conn.close()
             raise ValueError("Cannot delete security that is used by existing holdings")
         
         cursor.execute("DELETE FROM securities WHERE id = ?", (security_id,))
@@ -4742,7 +4748,11 @@ class FinanceDatabase:
         4. Deletes investment transactions
         5. Deletes the holding
         """
-        conn = self._get_connection()
+        with self.db_connection(commit=True) as conn:
+            return self._delete_investment_holding(conn, holding_id)
+
+    def _delete_investment_holding(self, conn, holding_id: int) -> bool:
+        """Body of delete_investment_holding, inside a managed connection."""
         cursor = conn.cursor()
 
         # Get holding info for logging
@@ -4755,7 +4765,6 @@ class FinanceDatabase:
         holding = cursor.fetchone()
 
         if not holding:
-            conn.close()
             return False
 
         holding = dict(holding)
@@ -4773,6 +4782,7 @@ class FinanceDatabase:
             WHERE holding_id = ?
         """, (holding_id,))
         transactions = [dict(row) for row in cursor.fetchall()]
+        linked_transaction_ids = []
 
         # Process each transaction - reverse balance impact and delete linked transaction
         for trans in transactions:
@@ -4809,18 +4819,20 @@ class FinanceDatabase:
                         WHERE id = ?
                     """, (cash_impact, linked_account_id))
 
-                # Delete the linked transaction from the transactions table
-                cursor.execute("DELETE FROM transactions WHERE id = ?", (trans['linked_transaction_id'],))
+                # Collect rather than delete: investment_transactions still holds
+                # a foreign key to this row, so it has to go first.
+                linked_transaction_ids.append(trans['linked_transaction_id'])
 
-        # Delete all investment transactions for this holding
+        # Delete all investment transactions for this holding, then the cash rows
+        # they referenced.
         cursor.execute("DELETE FROM investment_transactions WHERE holding_id = ?", (holding_id,))
+        for linked_id in linked_transaction_ids:
+            cursor.execute("DELETE FROM transactions WHERE id = ?", (linked_id,))
 
         # Delete the holding itself
         cursor.execute("DELETE FROM investment_holdings WHERE id = ?", (holding_id,))
 
         success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
 
         if success:
             logger.info(f"Deleted investment holding: {symbol} (ID: {holding_id}) with {len(transactions)} transactions")
@@ -4840,7 +4852,16 @@ class FinanceDatabase:
         # Ensure required investment transaction types exist
         self.ensure_investment_types_exist()
 
-        conn = self._get_connection()
+        with self.db_connection(commit=True) as conn:
+            return self._add_investment_transaction(conn, trans_data)
+
+    def _add_investment_transaction(self, conn, trans_data: Dict[str, Any]) -> int:
+        """Body of add_investment_transaction, inside a managed connection.
+
+        Writes the investment row, the linked cash row and the holding update as
+        one unit — a partial write here desynchronises the portfolio from the
+        cash account.
+        """
         cursor = conn.cursor()
 
         # Get the holding's investment account_id
@@ -4852,7 +4873,6 @@ class FinanceDatabase:
         """, (trans_data['holding_id'],))
         holding_result = cursor.fetchone()
         if not holding_result:
-            conn.close()
             raise ValueError(f"Holding ID {trans_data['holding_id']} not found")
 
         investment_account_id = holding_result['account_id']
@@ -4864,7 +4884,6 @@ class FinanceDatabase:
         inv_account = cursor.fetchone()
 
         if not inv_account or not inv_account['linked_account_id']:
-            conn.close()
             raise ValueError(f"Investment account must have a linked account for cash movements")
 
         linked_account_id = inv_account['linked_account_id']
@@ -4891,7 +4910,6 @@ class FinanceDatabase:
             """)
             type_info = cursor.fetchone()
             if not type_info:
-                conn.close()
                 raise ValueError("Transaction type 'Investments - Securities Purchase' not found in database")
 
             # Cash impact: negative (money leaving linked account)
@@ -4909,7 +4927,6 @@ class FinanceDatabase:
             """)
             type_info = cursor.fetchone()
             if not type_info:
-                conn.close()
                 raise ValueError("Transaction type 'Investment Income - Sale Proceeds' not found in database")
 
             # Cash impact: positive (money coming into linked account)
@@ -4927,7 +4944,6 @@ class FinanceDatabase:
             """)
             type_info = cursor.fetchone()
             if not type_info:
-                conn.close()
                 raise ValueError("Transaction type 'Investment Income - Dividends' not found in database")
 
             # Cash impact: positive (money coming into linked account)
@@ -4936,7 +4952,6 @@ class FinanceDatabase:
             destinataire = holding_name
 
         else:
-            conn.close()
             raise ValueError(f"Unknown transaction type: {transaction_type}")
 
         # Create the regular transaction in the LINKED account (not investment account)
@@ -4996,8 +5011,6 @@ class FinanceDatabase:
         ))
 
         trans_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
 
         logger.info(f"Added investment transaction: {transaction_type}, cash impact: {cash_impact} on linked account {linked_account_id}, linked to transaction {linked_transaction_id}")
         return trans_id
@@ -5041,7 +5054,16 @@ class FinanceDatabase:
         3. Updates the linked regular transaction
         4. Applies the new transaction's balance impact
         """
-        conn = self._get_connection()
+        with self.db_connection(commit=True) as conn:
+            return self._update_investment_transaction(conn, transaction_id, trans_data)
+
+    def _update_investment_transaction(self, conn, transaction_id: int,
+                                       trans_data: Dict[str, Any]) -> bool:
+        """Body of update_investment_transaction, inside a managed connection.
+
+        Reverses the old cash impact and applies the new one; both have to land
+        in the same transaction or the linked account keeps only half the edit.
+        """
         cursor = conn.cursor()
 
         # Get the old transaction data
@@ -5055,7 +5077,6 @@ class FinanceDatabase:
         old_trans = cursor.fetchone()
 
         if not old_trans:
-            conn.close()
             return False
 
         old_trans = dict(old_trans)
@@ -5105,7 +5126,6 @@ class FinanceDatabase:
         holding_result = cursor.fetchone()
 
         if not holding_result:
-            conn.close()
             raise ValueError(f"Holding ID {trans_data['holding_id']} not found")
 
         new_investment_account_id = holding_result['account_id']
@@ -5117,7 +5137,6 @@ class FinanceDatabase:
         new_inv_account = cursor.fetchone()
 
         if not new_inv_account or not new_inv_account['linked_account_id']:
-            conn.close()
             raise ValueError(f"Investment account must have a linked account for cash movements")
 
         new_linked_account_id = new_inv_account['linked_account_id']
@@ -5169,7 +5188,6 @@ class FinanceDatabase:
             description = f"Dividend from {symbol}"
             destinataire = holding_name
         else:
-            conn.close()
             raise ValueError(f"Unknown transaction type: {transaction_type}")
 
         # Update the linked regular transaction
@@ -5242,8 +5260,6 @@ class FinanceDatabase:
         ))
 
         success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
 
         if success:
             logger.info(f"Updated investment transaction {transaction_id}")
@@ -5258,7 +5274,11 @@ class FinanceDatabase:
         2. Deletes the linked regular transaction
         3. Deletes the investment transaction record
         """
-        conn = self._get_connection()
+        with self.db_connection(commit=True) as conn:
+            return self._delete_investment_transaction(conn, transaction_id)
+
+    def _delete_investment_transaction(self, conn, transaction_id: int) -> bool:
+        """Body of delete_investment_transaction, inside a managed connection."""
         cursor = conn.cursor()
 
         # Get the transaction data
@@ -5271,7 +5291,6 @@ class FinanceDatabase:
         trans = cursor.fetchone()
 
         if not trans:
-            conn.close()
             return False
 
         trans = dict(trans)
@@ -5311,16 +5330,15 @@ class FinanceDatabase:
                     WHERE id = ?
                 """, (cash_impact, linked_account_id))
 
-        # Delete the linked regular transaction
+        # Delete the investment transaction first: it holds the foreign key to
+        # the linked cash row, so removing that row while the reference still
+        # exists trips the constraint.
+        cursor.execute("DELETE FROM investment_transactions WHERE id = ?", (transaction_id,))
+        success = cursor.rowcount > 0
+
+        # Then the linked regular transaction it pointed at.
         if trans.get('linked_transaction_id'):
             cursor.execute("DELETE FROM transactions WHERE id = ?", (trans['linked_transaction_id'],))
-
-        # Delete the investment transaction
-        cursor.execute("DELETE FROM investment_transactions WHERE id = ?", (transaction_id,))
-
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
 
         if success:
             logger.info(f"Deleted investment transaction {transaction_id}")
