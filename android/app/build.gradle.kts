@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -16,6 +17,16 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Required by flutter_local_notifications, which uses java.time on
+        // API levels that predate it.
+        isCoreLibraryDesugaringEnabled = true
+    }
+
+    // Only the home-screen widget uses Compose. Flutter draws everything
+    // inside the app itself; a widget is rendered by the launcher, in another
+    // process, so it cannot be Flutter and has to be native.
+    buildFeatures {
+        compose = true
     }
 
     defaultConfig {
@@ -46,6 +57,19 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+
+    // org.json is part of Android but only a throwing stub on the JVM, so the
+    // real implementation has to be on the unit-test classpath for the payload
+    // parser to be testable without a device.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250107")
+
+    implementation("androidx.glance:glance-appwidget:1.1.1")
+    implementation("androidx.glance:glance-material3:1.1.1")
 }
 
 flutter {

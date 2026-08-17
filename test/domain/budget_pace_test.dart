@@ -77,6 +77,26 @@ void main() {
     });
   });
 
+  group('daysLeftInMonth', () {
+    test('counts down within the current month', () {
+      expect(daysLeftInMonth(DateTime(2026, 8, 16), 2026, 8), 15);
+      expect(daysLeftInMonth(DateTime(2026, 8, 1), 2026, 8), 30);
+      expect(daysLeftInMonth(DateTime(2026, 8, 31), 2026, 8), 0);
+    });
+
+    test('reports a past month as over, not as partly remaining', () {
+      // The trap: length of the viewed month minus the day of the current one
+      // would answer "15 days left" for July when read in mid-August.
+      expect(daysLeftInMonth(DateTime(2026, 8, 16), 2026, 7), -1);
+      expect(daysLeftInMonth(DateTime(2026, 1, 2), 2025, 12), -1);
+    });
+
+    test('a future month is still whole', () {
+      expect(daysLeftInMonth(DateTime(2026, 8, 16), 2026, 9), 30);
+      expect(daysLeftInMonth(DateTime(2026, 12, 31), 2027, 2), 28);
+    });
+  });
+
   group('levelOf', () {
     test('matches the website thresholds at their exact boundaries', () {
       expect(levelOf(0), BudgetLevel.healthy);

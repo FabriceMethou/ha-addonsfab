@@ -78,6 +78,19 @@ double paceOfMonth(DateTime now, int year, int month) {
   return now.day / daysInMonth(year, month);
 }
 
+/// Days remaining in the target month, or -1 once it is over.
+///
+/// Must not be `daysInMonth - now.day`: that mixes the day of the *current*
+/// month with the length of the *viewed* one, so browsing back to July on the
+/// 16th of August reports fifteen days left in a month that ended weeks ago.
+int daysLeftInMonth(DateTime now, int year, int month) {
+  final target = year * 12 + month;
+  final current = now.year * 12 + now.month;
+  if (target < current) return -1;
+  if (target > current) return daysInMonth(year, month);
+  return daysInMonth(year, month) - now.day;
+}
+
 /// Severity of a single budget from its server-sent percentage.
 BudgetLevel levelOf(double percentage) {
   if (percentage >= kOverThreshold) return BudgetLevel.over;
