@@ -34,6 +34,9 @@ class AuthManager:
         """Get database connection with row factory."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        # Without this, the ON DELETE CASCADE on mfa_backup_codes and the
+        # ON DELETE SET NULL on login_history are silently ignored.
+        conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
     def _ensure_auth_tables(self):

@@ -224,6 +224,9 @@ class FinanceDatabase:
         # Enable WAL mode and set busy timeout for better concurrency
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=30000")  # 30 second timeout
+        # SQLite ignores every FOREIGN KEY and ON DELETE CASCADE in the schema
+        # unless this is set, per connection, before any transaction starts.
+        conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
     @contextmanager
@@ -2875,6 +2878,13 @@ class FinanceDatabase:
                             -mirror['amount'],
                             mirror['category']
                         )
+                    # Break the mutual link before deleting. The two sides of a
+                    # transfer point at each other through linked_transfer_id, so
+                    # removing either row first violates the other's foreign key.
+                    cursor.execute(
+                        "UPDATE transactions SET linked_transfer_id = NULL WHERE id IN (?, ?)",
+                        (transaction_id, linked_transfer_id)
+                    )
                     cursor.execute("DELETE FROM transactions WHERE id = ?", (linked_transfer_id,))
                     logger.info(f"Deleted mirror transaction {linked_transfer_id}")
             elif not linked_transfer_id and transaction['is_transfer'] and transaction['transfer_account_id'] and transaction['category'] == 'transfer':
