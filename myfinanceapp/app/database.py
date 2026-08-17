@@ -2399,7 +2399,15 @@ class FinanceDatabase:
         Transactions dated before the account's opening_date are marked as historical
         and do not affect the account balance.
         """
-        conn = self._get_connection()
+        with self.db_connection(commit=True) as conn:
+            return self._add_transaction(conn, transaction_data)
+
+    def _add_transaction(self, conn, transaction_data: Dict[str, Any]) -> int:
+        """Body of add_transaction, running inside a managed connection.
+
+        A transfer writes two rows and touches two balances; all of it has to
+        commit together or not at all.
+        """
         cursor = conn.cursor()
 
         # Check if transaction is historical (before account opening date)
@@ -2539,9 +2547,6 @@ class FinanceDatabase:
                     # Update destination account balance
                     self._update_account_balance(cursor, transfer_account_id, destination_amount, 'transfer')
                     logger.info(f"Double-entry transfer: source={transaction_id} (account {transaction_data['account_id']}), mirror={mirror_id} (account {transfer_account_id})")
-
-        conn.commit()
-        conn.close()
 
         if is_duplicate:
             logger.warning(f"Transaction {transaction_id} flagged as potential duplicate")
@@ -2697,7 +2702,16 @@ class FinanceDatabase:
 
     def update_transaction(self, transaction_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing transaction."""
-        conn = self._get_connection()
+        with self.db_connection(commit=True) as conn:
+            return self._update_transaction(conn, transaction_id, updates)
+
+    def _update_transaction(self, conn, transaction_id: int, updates: Dict[str, Any]) -> bool:
+        """Body of update_transaction, running inside a managed connection.
+
+        Balance reversal and re-application must land in the same transaction:
+        the old code committed unconditionally, so a run that reversed the old
+        balance and then failed to apply the new one persisted the reversal.
+        """
         cursor = conn.cursor()
 
         # Get old transaction data including category
@@ -2710,7 +2724,6 @@ class FinanceDatabase:
         old_transaction = cursor.fetchone()
 
         if not old_transaction:
-            conn.close()
             return False
 
         old_transaction = dict(old_transaction)
@@ -2724,7 +2737,6 @@ class FinanceDatabase:
         }
         updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
         if not updates:
-            conn.close()
             return False
 
         linked_transfer_id = old_transaction.get('linked_transfer_id')
@@ -2822,16 +2834,29 @@ class FinanceDatabase:
                     else:
                         self._update_account_balance(cursor, new_transaction['transfer_account_id'], abs(new_transaction['amount']), 'transfer')
 
-        conn.commit()
-        conn.close()
+        if not success:
+            # The UPDATE matched no row, so the balance reversal above describes a
+            # state that never happened. Undo it rather than commit a half-applied
+            # edit — the old code committed here regardless.
+            raise DatabaseError(
+                f"Transaction {transaction_id} vanished during update; rolled back"
+            )
 
-        if success:
-            logger.info(f"Updated transaction {transaction_id}")
+        logger.info(f"Updated transaction {transaction_id}")
         return success
 
     def delete_transaction(self, transaction_id: int) -> bool:
         """Delete a transaction. If it's a transfer with a linked mirror, delete both sides."""
-        conn = self._get_connection()
+        with self.db_connection(commit=True) as conn:
+            return self._delete_transaction(conn, transaction_id)
+
+    def _delete_transaction(self, conn, transaction_id: int) -> bool:
+        """Body of delete_transaction, running inside a managed connection.
+
+        The caller owns the transaction: commit and rollback are handled by
+        db_connection(), so an exception here can no longer leave the connection
+        (and its write lock) dangling.
+        """
         cursor = conn.cursor()
 
         # Get transaction data before deletion to reverse balance
@@ -2844,7 +2869,6 @@ class FinanceDatabase:
         transaction = cursor.fetchone()
 
         if not transaction:
-            conn.close()
             return False
 
         transaction = dict(transaction)
@@ -2898,8 +2922,6 @@ class FinanceDatabase:
         cursor.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
 
         success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
 
         if success:
             logger.info(f"Deleted transaction {transaction_id}")

@@ -274,6 +274,70 @@ def test_transfer_total_is_conserved_after_retargeting(db):
 
 # ── unconfirmed and historical transactions ──────────────────────────────────
 
+# ── atomicity ────────────────────────────────────────────────────────────────
+
+def test_a_failed_update_leaves_the_balance_untouched(db):
+    """F-09: reversal and re-application must commit together, or not at all.
+
+    update_transaction reverses the old balance before writing the new row. If
+    the write then fails, committing anyway would persist the reversal — money
+    would simply disappear from the account.
+    """
+    acc = account(db, "Checking", balance=1000.0)
+    txn = transaction(db, acc, -100.0, "expense")
+    assert stored_balance(db, acc) == 900.0
+
+    # Retarget the transaction at an account that does not exist. The balance
+    # reversal happens first, then the UPDATE trips the foreign key.
+    with pytest.raises(Exception):
+        db.update_transaction(txn, {"account_id": 99999})
+
+    assert stored_balance(db, acc) == 900.0, "the reversal must have been rolled back"
+    assert_consistent(db, acc)
+
+
+def test_a_failed_insert_leaves_no_partial_transfer(db):
+    """A transfer writes two rows and two balances; a failure must undo all of it."""
+    source = account(db, "Source", balance=1000.0)
+    type_id, subtype_id = category(db, "transfer")
+
+    with pytest.raises(Exception):
+        db.add_transaction({
+            "account_id": source,
+            "amount": -200.0,
+            "transaction_date": "2026-01-15",
+            "currency": "EUR",
+            "type_id": type_id,
+            "subtype_id": subtype_id,
+            "description": "test",
+            "destinataire": "test",
+            "is_transfer": True,
+            "transfer_account_id": 99999,   # no such account
+        })
+
+    assert stored_balance(db, source) == 1000.0
+    assert_consistent(db, source)
+
+
+def test_the_database_stays_writable_after_a_failed_write(db):
+    """The failing call must release its connection, not sit on the write lock.
+
+    Without a context manager the connection stayed alive inside the exception's
+    traceback frame, holding its lock until the garbage collector got to it.
+    """
+    acc = account(db, "Checking", balance=100.0)
+
+    with pytest.raises(Exception):
+        db.update_transaction(
+            transaction(db, acc, -10.0, "expense"), {"account_id": 99999}
+        )
+
+    # Would block for busy_timeout (30s) and then fail if the lock were still held.
+    follow_up = transaction(db, acc, -5.0, "expense")
+    assert follow_up is not None
+    assert_consistent(db, acc)
+
+
 def test_unconfirmed_transactions_do_not_move_the_balance(db):
     acc = account(db, "Checking", balance=100.0)
     transaction(db, acc, -50.0, "expense", confirmed=False)
