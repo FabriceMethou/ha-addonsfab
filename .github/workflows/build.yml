@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Analyse and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Pinned rather than "stable": the project uses Dart 3.13 features,
+          # and a floating channel would turn an unrelated Flutter release into
+          # a red build with no change of ours behind it.
+          flutter-version: 3.47.0
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      # Generated code is not committed, so nothing compiles until this runs.
+      - run: dart run build_runner build
+
+      - run: flutter analyze
+
+      # The fixtures are derived from real financial data and stay out of this
+      # repository, so the tests that read them cannot run here. Everything
+      # else can, and that is the part a regression is most likely to hit:
+      # the pace engine, the error parser, the money formatter, the filters.
+      - name: Test what does not need fixtures
+        run: |
+          flutter test \
+            test/domain/budget_pace_test.dart \
+            test/core/
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.0
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: dart run build_runner build
+
+      # No keystore here, and none should be: the signing key stays on the
+      # machine that owns it. Gradle falls back to the debug key, which is
+      # enough to prove the build works. An APK to actually install on a phone
+      # is built locally, where the real key is.
+      - name: Build APKs
+        run: flutter build apk --release --split-per-abi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-debug-signed
+          path: build/app/outputs/flutter-apk/*-release.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -1,3 +1,12 @@
+import java.util.Properties
+
+// Release signing. Absent on a fresh clone and in CI, where an unsigned or
+// debug-signed build is the honest outcome rather than a hard failure.
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -44,11 +53,35 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            // The keystore lives outside the repository and key.properties is
+            // gitignored: a signing key in version control is a signing key
+            // anyone with the repo can use.
+            keystoreProperties["storeFile"]?.let { storeFile = file(it) }
+            storePassword = keystoreProperties["storePassword"] as String?
+            keyAlias = keystoreProperties["keyAlias"] as String?
+            keyPassword = keystoreProperties["keyPassword"] as String?
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Falls back to the debug key when no keystore is configured, so a
+            // clone can still produce a running APK. An install signed with a
+            // different key cannot upgrade one signed with this one, which is
+            // why the real key has to be kept and backed up.
+            signingConfig = if (keystoreProperties.isEmpty) {
+                signingConfigs.getByName("debug")
+            } else {
+                signingConfigs.getByName("release")
+            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

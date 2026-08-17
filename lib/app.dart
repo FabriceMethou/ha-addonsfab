@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'core/providers.dart';
 import 'domain/models/auth.dart';
+import 'features/lock/app_lock.dart';
 import 'features/shell/home_shell.dart';
 import 'features/setup/setup_screen.dart';
 import 'ui/theme.dart';
@@ -51,6 +52,9 @@ class MyFinanceApp extends ConsumerWidget {
       darkTheme: buildDarkTheme(),
       themeMode: ThemeMode.system,
       routerConfig: ref.watch(routerProvider),
+      // Wraps whatever the router built, so the gate covers every screen
+      // including the sign-in flow.
+      builder: (context, child) => AppLock(child: child ?? const SizedBox()),
     );
   }
 }

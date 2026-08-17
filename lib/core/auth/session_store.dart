@@ -113,6 +113,16 @@ class SessionStore {
     await _storage.delete(key: _kIsAdmin);
   }
 
+  /// Reads a stored on/off preference. Null when it was never set, so a
+  /// caller can tell "off" from "not chosen yet" and apply its own default.
+  Future<bool?> readFlag(String key) async {
+    final raw = await _storage.read(key: key);
+    return raw == null ? null : raw == 'true';
+  }
+
+  Future<void> writeFlag(String key, bool value) =>
+      _storage.write(key: key, value: value.toString());
+
   /// Forgets everything, including the server.
   Future<void> clearAll() => _storage.deleteAll();
 }

@@ -11,6 +11,7 @@ import '../../domain/models/budget.dart';
 import '../../ui/pace_widgets.dart';
 import '../../ui/theme.dart';
 import '../../ui/views.dart';
+import '../settings/settings_sheet.dart';
 
 /// Which month the screen is showing. Held as year and month rather than a
 /// DateTime so stepping past a month boundary cannot land on the 31st of a
@@ -67,9 +68,9 @@ class BudgetsScreen extends ConsumerWidget {
         actions: [
           const OpenOnWebsiteButton(path: '/budgets'),
           IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Sign out',
-            onPressed: () => ref.read(sessionProvider.notifier).signOut(),
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Settings',
+            onPressed: () => SettingsSheet.show(context),
           ),
         ],
       ),
