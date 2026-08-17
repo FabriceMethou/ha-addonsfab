@@ -29,15 +29,35 @@ abstract final class AppColors {
   static const darkSurface = Color(0xFF0F172A);
 }
 
-/// The colour for a budget severity, picked for the current brightness.
-Color colorForLevel(BudgetLevel level, Brightness brightness) {
+/// Whether a figure is good news, worth watching, or bad news.
+///
+/// Kept separate from [BudgetLevel]: a budget's severity is defined by
+/// thresholds against a limit, while a net worth or a month's balance is simply
+/// positive or negative. Colouring both through one enum would imply a budget
+/// where there is none.
+enum SemanticTone { positive, caution, negative }
+
+/// The colour for a tone, picked for the current brightness.
+Color colorForTone(SemanticTone tone, Brightness brightness) {
   final light = brightness == Brightness.light;
-  return switch (level) {
-    BudgetLevel.healthy => light ? AppColors.healthyOnLight : AppColors.healthy,
-    BudgetLevel.close => light ? AppColors.closeOnLight : AppColors.close,
-    BudgetLevel.over => light ? AppColors.overOnLight : AppColors.over,
+  return switch (tone) {
+    SemanticTone.positive =>
+      light ? AppColors.healthyOnLight : AppColors.healthy,
+    SemanticTone.caution => light ? AppColors.closeOnLight : AppColors.close,
+    SemanticTone.negative => light ? AppColors.overOnLight : AppColors.over,
   };
 }
+
+/// The colour for a budget severity.
+Color colorForLevel(BudgetLevel level, Brightness brightness) =>
+    colorForTone(
+      switch (level) {
+        BudgetLevel.healthy => SemanticTone.positive,
+        BudgetLevel.close => SemanticTone.caution,
+        BudgetLevel.over => SemanticTone.negative,
+      },
+      brightness,
+    );
 
 ThemeData buildLightTheme() {
   final scheme = ColorScheme.fromSeed(

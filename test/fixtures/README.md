@@ -63,10 +63,14 @@ over budget cannot test over-budget rendering — hence the second fixture.
 | tokens, `salt`, `mfa_secret` | `<redacted>` |
 | monetary amounts | multiplied by a constant factor |
 
-Category names (`type_name`, `subtype_name`, and `name` in
-`categories_hierarchy.json`) are **not** anonymised. They are not personal data,
-and renaming them would break the link between budgets, transactions and the
-category hierarchy that several tests rely on.
+Category and subcategory names (`type_name`, `subtype_name`, and `name` in
+`categories_hierarchy.json`) are **not** anonymised, because budgets and the
+hierarchy reference each other by name and renaming them would break the
+consistency several tests depend on.
+
+They are hand-typed labels, though, so they are worth reading after every
+regeneration: most are generic (`Groceries`, `Rent`, `Fuel`), but one arrived
+naming family members and had to be replaced by hand.
 
 ## Two properties the tests depend on
 

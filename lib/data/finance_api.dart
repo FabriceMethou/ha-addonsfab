@@ -1,8 +1,10 @@
 import 'package:dio/dio.dart';
 
 import '../core/net/api_exception.dart';
+import '../domain/models/account.dart';
 import '../domain/models/auth.dart';
 import '../domain/models/budget.dart';
+import '../domain/models/reports.dart';
 import '../domain/models/settings.dart';
 
 /// Runs a call and lets [ApiException] through instead of dio's wrapper.
@@ -98,6 +100,54 @@ class FinanceApi {
   Future<AppSettings> settings() => _unwrapped(() async {
         final r = await _dio.get<Map<String, dynamic>>('/api/settings/');
         return SettingsResponse.fromJson(r.data ?? const {}).settings;
+      });
+
+  // ------------------------------------------------------------- accounts
+
+  /// Balances grouped by owner, each converted into the display currency.
+  ///
+  /// Use this for any total. The raw account balances from [accounts] are in
+  /// each account's own currency and cannot be added together.
+  Future<BalancesSummary> balances() => _unwrapped(() async {
+        final r = await _dio.get<Map<String, dynamic>>(
+          '/api/accounts/summary/balances',
+        );
+        return BalancesSummary.fromJson(r.data ?? const {});
+      });
+
+  /// Every account, with balances in their own currencies.
+  Future<List<Account>> accounts() => _unwrapped(() async {
+        final r = await _dio.get<Map<String, dynamic>>('/api/accounts/');
+        return AccountList.fromJson(r.data ?? const {}).accounts;
+      });
+
+  // -------------------------------------------------------------- reports
+
+  /// Assets minus debts. [ownerId] narrows it to one person.
+  Future<NetWorth> netWorth({int? ownerId}) => _unwrapped(() async {
+        final r = await _dio.get<Map<String, dynamic>>(
+          '/api/reports/net-worth',
+          queryParameters: {'owner_id': ?ownerId},
+        );
+        return NetWorth.fromJson(r.data ?? const {});
+      });
+
+  /// Income, expenses and net for a calendar month.
+  Future<MonthlySummary> monthlySummary(
+    int year,
+    int month, {
+    int? ownerId,
+  }) =>
+      _unwrapped(() async {
+        final r = await _dio.get<Map<String, dynamic>>(
+          '/api/reports/monthly-summary',
+          queryParameters: {
+            'year': year,
+            'month': month,
+            'owner_id': ?ownerId,
+          },
+        );
+        return MonthlySummary.fromJson(r.data ?? const {});
       });
 
   // -------------------------------------------------------------- budgets

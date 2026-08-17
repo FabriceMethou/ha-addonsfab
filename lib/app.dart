@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'core/providers.dart';
 import 'domain/models/auth.dart';
-import 'features/budgets/budgets_screen.dart';
+import 'features/shell/home_shell.dart';
 import 'features/setup/setup_screen.dart';
 import 'ui/theme.dart';
 
@@ -29,7 +29,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      GoRoute(path: '/', builder: (_, _) => const BudgetsScreen()),
+      GoRoute(path: '/', builder: (_, _) => const HomeShell()),
       GoRoute(path: '/setup', builder: (_, _) => const SetupScreen()),
     ],
   );

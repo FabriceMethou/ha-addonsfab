@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../bridge/widget_payload.dart';
 import '../../bridge/widget_sync.dart';
@@ -11,6 +10,7 @@ import '../../domain/budget_pace.dart';
 import '../../domain/models/budget.dart';
 import '../../ui/pace_widgets.dart';
 import '../../ui/theme.dart';
+import '../../ui/views.dart';
 
 /// Which month the screen is showing. Held as year and month rather than a
 /// DateTime so stepping past a month boundary cannot land on the 31st of a
@@ -65,11 +65,7 @@ class BudgetsScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Budgets'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.open_in_new),
-            tooltip: 'Open on the website',
-            onPressed: () => _openWebsite(context, ref),
-          ),
+          const OpenOnWebsiteButton(path: '/budgets'),
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Sign out',
@@ -85,7 +81,7 @@ class BudgetsScreen extends ConsumerWidget {
               onRefresh: () => ref.refresh(budgetsProvider(month).future),
               child: budgets.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
-                error: (e, _) => _ErrorView(
+                error: (e, _) => FailureView(
                   error: e,
                   onRetry: () => ref.invalidate(budgetsProvider(month)),
                 ),
@@ -98,20 +94,6 @@ class BudgetsScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _openWebsite(BuildContext context, WidgetRef ref) async {
-    // The app is read-only by design, so this is how anything gets changed:
-    // notice it here, fix it there.
-    final baseUrl = ref.read(sessionProvider).value?.baseUrl;
-    if (baseUrl == null) return;
-    final uri = Uri.parse('$baseUrl/budgets');
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open $uri')),
-        );
-      }
-    }
-  }
 }
 
 class _MonthBar extends ConsumerWidget {
@@ -373,28 +355,3 @@ class _CategoryTile extends StatelessWidget {
   }
 }
 
-class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.error, required this.onRetry});
-  final Object error;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final api = error is ApiException ? error as ApiException : null;
-    final message = api?.message ?? '$error';
-
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        const SizedBox(height: 48),
-        Icon(Icons.cloud_off, size: 40, color: theme.colorScheme.outline),
-        const SizedBox(height: 16),
-        Text(message, textAlign: TextAlign.center),
-        const SizedBox(height: 16),
-        if (api == null || api.isRetryable)
-          FilledButton.tonal(onPressed: onRetry, child: const Text('Try again')),
-      ],
-    );
-  }
-}

@@ -1,5 +1,11 @@
 """Anonymise les reponses capturees avant versionnement.
 
+ATTENTION : les noms de categories et de sous-categories passent en clair,
+volontairement. Les budgets et la hierarchie se referencent par ces noms, donc
+les renommer casserait la coherence entre fixtures. Mais ce sont des libelles
+saisis a la main : apres chaque regeneration, les relire et remplacer ceux qui
+identifient quelqu'un. Un « a loan named after relatives » s'est deja glisse la.
+
 Les montants sont multiplies par un facteur constant : les ratios, et donc
 tous les pourcentages de budget, restent exacts, ce qui garde les fixtures
 utiles pour tester le moteur de rythme, sans exposer de vrais montants.
