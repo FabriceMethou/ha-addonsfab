@@ -45,6 +45,8 @@ dependencies:
   workmanager: ^0.10.7
   flutter_local_notifications: ^22.3.0
   url_launcher: ^6.3.2
+  fl_chart: ^1.2.0
+  local_auth: ^3.0.2
 
 dev_dependencies:
   flutter_test:

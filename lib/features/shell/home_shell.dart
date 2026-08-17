@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 import '../accounts/accounts_screen.dart';
 import '../budgets/budgets_screen.dart';
 import '../dashboard/dashboard_screen.dart';
+import '../transactions/transactions_screen.dart';
 
-/// The three destinations, behind one bottom bar.
+/// The four destinations, behind one bottom bar.
 ///
 /// Built on an IndexedStack rather than swapping widgets, so each screen keeps
 /// its scroll position and its loaded data while you move between them. On a
@@ -28,6 +29,7 @@ class _HomeShellState extends State<HomeShell> {
         children: const [
           BudgetsScreen(),
           DashboardScreen(),
+          TransactionsScreen(),
           AccountsScreen(),
         ],
       ),
@@ -44,6 +46,11 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.insights_outlined),
             selectedIcon: Icon(Icons.insights),
             label: 'Overview',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.receipt_long_outlined),
+            selectedIcon: Icon(Icons.receipt_long),
+            label: 'Activity',
           ),
           NavigationDestination(
             icon: Icon(Icons.account_balance_outlined),

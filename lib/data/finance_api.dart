@@ -4,8 +4,10 @@ import '../core/net/api_exception.dart';
 import '../domain/models/account.dart';
 import '../domain/models/auth.dart';
 import '../domain/models/budget.dart';
+import '../domain/models/category.dart';
 import '../domain/models/reports.dart';
 import '../domain/models/settings.dart';
+import '../domain/models/transaction.dart';
 
 /// Runs a call and lets [ApiException] through instead of dio's wrapper.
 ///
@@ -119,6 +121,37 @@ class FinanceApi {
   Future<List<Account>> accounts() => _unwrapped(() async {
         final r = await _dio.get<Map<String, dynamic>>('/api/accounts/');
         return AccountList.fromJson(r.data ?? const {}).accounts;
+      });
+
+  // --------------------------------------------------------- transactions
+
+  /// One page of transactions, newest first.
+  ///
+  /// [limit] is capped at 1000 by the backend. The response carries a total
+  /// that ignores paging, so the caller always knows whether more exist.
+  Future<TransactionPage> transactions({
+    TransactionFilter filter = const TransactionFilter(),
+    int limit = 50,
+    int offset = 0,
+  }) =>
+      _unwrapped(() async {
+        final r = await _dio.get<Map<String, dynamic>>(
+          '/api/transactions/',
+          queryParameters: {
+            ...filter.toQuery(),
+            'limit': limit.clamp(1, 1000),
+            'offset': offset,
+          },
+        );
+        return TransactionPage.fromJson(r.data ?? const {});
+      });
+
+  /// The category hierarchy, for the filter picker.
+  Future<List<CategoryType>> categories() => _unwrapped(() async {
+        final r = await _dio.get<Map<String, dynamic>>(
+          '/api/categories/hierarchy',
+        );
+        return CategoryHierarchy.fromJson(r.data ?? const {}).categories;
       });
 
   // -------------------------------------------------------------- reports
