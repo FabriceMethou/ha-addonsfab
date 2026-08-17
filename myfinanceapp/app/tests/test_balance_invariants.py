@@ -274,6 +274,56 @@ def test_transfer_total_is_conserved_after_retargeting(db):
 
 # ── unconfirmed and historical transactions ──────────────────────────────────
 
+# ── drift detection ──────────────────────────────────────────────────────────
+
+def test_verify_balances_is_quiet_when_everything_agrees(db):
+    acc = account(db, "Checking", balance=500.0)
+    transaction(db, acc, -120.0, "expense")
+    transaction(db, acc, 40.0, "income")
+    assert db.verify_balances() == []
+
+
+def test_verify_balances_reports_a_corrupted_counter(db):
+    """A counter nudged behind the ledger's back must be caught."""
+    acc = account(db, "Checking", balance=500.0)
+    transaction(db, acc, -100.0, "expense")
+
+    # Simulate what a buggy write path leaves behind.
+    with db.db_connection(commit=True) as conn:
+        conn.execute("UPDATE accounts SET balance = balance + 25 WHERE id = ?", (acc,))
+
+    drift = db.verify_balances()
+    assert len(drift) == 1
+    assert drift[0]['account_id'] == acc
+    assert drift[0]['difference'] == 25.0
+    assert drift[0]['ledger_balance'] == 400.0
+
+
+def test_recalculating_clears_the_drift(db):
+    acc = account(db, "Checking", balance=500.0)
+    transaction(db, acc, -100.0, "expense")
+    with db.db_connection(commit=True) as conn:
+        conn.execute("UPDATE accounts SET balance = balance + 25 WHERE id = ?", (acc,))
+    assert db.verify_balances() != []
+
+    db.recalculate_all_balances()
+
+    assert db.verify_balances() == [], "recalculation must restore agreement"
+
+
+def test_the_counter_stays_on_exact_cents(db):
+    """Rounding each write keeps the counter comparable to the ledger.
+
+    Without it, thousands of writes leave a sub-cent residue that makes any
+    exact drift check noisy and therefore useless.
+    """
+    acc = account(db, "Checking", balance=0.0)
+    for _ in range(200):
+        transaction(db, acc, -0.07, "expense")
+    assert stored_balance(db, acc) == -14.0
+    assert db.verify_balances() == []
+
+
 # ── atomicity ────────────────────────────────────────────────────────────────
 
 def test_a_failed_update_leaves_the_balance_untouched(db):

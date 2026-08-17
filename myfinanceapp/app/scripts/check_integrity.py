@@ -74,6 +74,12 @@ def main():
         return 2
 
     print(f"Database: {args.db}\n")
+
+    # Balance drift is reported alongside referential integrity: both are ways
+    # the data can be internally inconsistent, and both matter before a deploy.
+    drift_status = report_balance_drift(args.db)
+    print()
+
     conn = sqlite3.connect(args.db)
     try:
         # Deliberately left OFF: the check itself must inspect the data as it
@@ -82,7 +88,7 @@ def main():
 
         if not rows:
             print("No referential integrity violations. Safe to enforce foreign keys.")
-            return 0
+            return drift_status
 
         print(f"Found {len(rows)} violation(s):\n")
         print(describe(conn, rows))
@@ -109,6 +115,25 @@ def main():
         return 0
     finally:
         conn.close()
+
+
+def report_balance_drift(db_path):
+    """Compare every account's stored balance against its own ledger."""
+    from database import FinanceDatabase
+
+    drift = FinanceDatabase(db_path=db_path).verify_balances()
+    if not drift:
+        print("Balances: every account agrees with its ledger.")
+        return 0
+
+    print(f"Balances: {len(drift)} account(s) disagree with their ledger:\n")
+    width = max(len(d['name']) for d in drift)
+    for d in drift:
+        print(f"  {d['name']:<{width}}  stored {d['stored_balance']:>12,.2f} "
+              f"vs ledger {d['ledger_balance']:>12,.2f} "
+              f"{d['currency']}  (off by {d['difference']:+,.2f})")
+    print("\nRun scripts/recalculate_balances.py to rebuild them from the ledger.")
+    return 1
 
 
 if __name__ == "__main__":
