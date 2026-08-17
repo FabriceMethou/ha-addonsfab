@@ -26,7 +26,22 @@ npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Application data — never commit.
+# Matched by extension rather than by directory: the runtime path defaults are
+# relative, so the app writes its data wherever it is launched from, and a
+# directory-based pattern only covers the locations we already know about.
+*.db
+*.db.gz
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.pkl
+*.joblib
+backup_metadata.json
+alerts_config.json
+cloud_config.json
+
 # OS / editor
 .DS_Store
-Thumbs.db
 *.swp

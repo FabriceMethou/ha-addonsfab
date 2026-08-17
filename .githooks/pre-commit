@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#
+# Refuse to commit application data.
+#
+# The .gitignore patterns cover the file names we can predict. This hook is the
+# backstop: it inspects the staged content itself, so a database written to a
+# path nobody anticipated — or renamed to something innocuous — is still caught,
+# and so is anything added with `git add -f`.
+
+set -u
+
+blocked=()
+
+flag() {
+    blocked+=("  $1"$'\n'"      → $2")
+}
+
+# --diff-filter=ACM: added, copied, modified.
+# NUL-delimited so paths with spaces or newlines survive intact.
+# Redirect (not a pipe) so the loop runs in this shell and keeps the array.
+while IFS= read -r -d '' f; do
+    [ -f "$f" ] || continue
+
+    # SQLite databases carry a fixed 16-byte header, whatever the file is named.
+    if [ "$(head -c 15 -- "$f" 2>/dev/null)" = "SQLite format 3" ]; then
+        flag "$f" "SQLite database (detected from file header)"
+        continue
+    fi
+
+    # gzip magic on something named like a database dump.
+    case "$f" in
+        *.gz)
+            if [ "$(head -c 2 -- "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "1f8b" ]; then
+                case "$f" in
+                    *.db.gz|*.sqlite.gz|*.sqlite3.gz)
+                        flag "$f" "compressed database dump"
+                        continue
+                        ;;
+                esac
+            fi
+            ;;
+    esac
+
+    # Name-based catch for everything else.
+    case "$f" in
+        *.db|*.sqlite|*.sqlite3|*.db-shm|*.db-wal)
+            flag "$f" "database file"
+            ;;
+        *.pkl|*.joblib)
+            flag "$f" "trained model (embeds data it was trained on)"
+            ;;
+        backup_metadata.json|*/backup_metadata.json)
+            flag "$f" "backup index (leaks file names, sizes, checksums)"
+            ;;
+        alerts_config.json|*/alerts_config.json|cloud_config.json|*/cloud_config.json)
+            flag "$f" "runtime configuration (may contain credentials)"
+            ;;
+    esac
+done < <(git diff --cached --name-only --diff-filter=ACM -z)
+
+if [ ${#blocked[@]} -eq 0 ]; then
+    exit 0
+fi
+
+echo ""
+echo "Commit refused — these staged files hold personal financial data:"
+echo ""
+for entry in "${blocked[@]}"; do
+    echo "$entry"
+done
+echo ""
+echo "Unstage them:"
+echo "    git restore --staged <file>"
+echo ""
+echo "If this really is intentional:"
+echo "    git commit --no-verify"
+echo ""
+exit 1
