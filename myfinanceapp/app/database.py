@@ -9,7 +9,6 @@ from typing import Optional, List, Dict, Any
 import json
 from pathlib import Path
 import time
-import yfinance as yf
 
 import paths
 from contextlib import contextmanager
@@ -18,8 +17,9 @@ from functools import wraps
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Suppress yfinance error logging for 404s (symbol not found)
-# These are expected errors when symbols don't exist and are handled gracefully
+# Suppress yfinance error logging for 404s (symbol not found).
+# These are expected errors when symbols don't exist and are handled gracefully.
+# Configuring the logger by name does not import yfinance.
 yf_logger = logging.getLogger('yfinance')
 yf_logger.setLevel(logging.CRITICAL)
 
@@ -2786,8 +2786,15 @@ class FinanceDatabase:
                     src_acct = cursor.fetchone()
                     src_name = src_acct['name'] if src_acct else ''
 
-                    # Sync mirror transaction fields
+                    # Sync mirror transaction fields.
+                    # account_id must be part of this: the balance below is applied
+                    # to new_transaction['transfer_account_id'], so if the user
+                    # retargets the transfer the mirror row has to move with the
+                    # money. Leaving it behind credits the new account while the
+                    # ledger still shows the amount in the old one — a drift that
+                    # recalculate_all_balances() then "fixes" the wrong way.
                     mirror_updates = {
+                        'account_id': new_transaction['transfer_account_id'],
                         'transaction_date': new_transaction['transaction_date'],
                         'due_date': new_transaction.get('due_date'),
                         'amount': dest_amount,
@@ -5424,6 +5431,10 @@ class FinanceDatabase:
 
     def update_all_prices_from_yahoo(self) -> int:
         """Update all holding prices from Yahoo Finance."""
+        # Imported here rather than at module scope: yfinance pulls in pandas and
+        # the whole market-data stack, which would make `import database` — and
+        # therefore the entire test suite — depend on it.
+        import yfinance as yf
 
         holdings = self.get_investment_holdings()
         updated = 0

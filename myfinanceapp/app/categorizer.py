@@ -1,16 +1,19 @@
 import re
 from typing import Dict, List, Optional, Tuple
-import joblib
 from pathlib import Path
 
 import paths
 
+# joblib and sklearn are optional: without them the categorizer degrades to
+# "no suggestions" rather than breaking every module that imports it.
 try:
+    import joblib
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.naive_bayes import MultinomialNB
     from sklearn.pipeline import Pipeline
     ML_AVAILABLE = True
 except ImportError:
+    joblib = None
     ML_AVAILABLE = False
 
 
@@ -143,8 +146,8 @@ class TransactionCategorizer:
             joblib.dump(self.model, self.model_path)
 
     def load_model(self):
-        """Load trained model from disk."""
-        if self.model_path.exists():
+        """Load trained model from disk. No-op when joblib is unavailable."""
+        if ML_AVAILABLE and self.model_path.exists():
             self.model = joblib.load(self.model_path)
 
     def get_model_info(self) -> Dict:

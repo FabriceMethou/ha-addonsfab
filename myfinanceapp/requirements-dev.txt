@@ -1,0 +1,9 @@
+# Test/development dependencies.
+# Install:  python3 -m venv .venv-dev && .venv-dev/bin/pip install -r requirements-dev.txt
+#
+# Run:      cd app && JWT_SECRET_KEY=test PYTHONPATH=$PWD ../.venv-dev/bin/python -m pytest tests/ -q
+
+-r app/backend/requirements.txt
+
+pytest==9.1.1
+pytest-cov==7.0.0
