@@ -14,12 +14,17 @@ is a separate WidgetKit extension that does not exist yet.
 ## The backend lives in another repository
 
 ```
-~/Documents/Development/ha-addonsfab/myfinanceapp/     # FastAPI + React, the live copy
+~/Documents/Dev/ha-addonsfab/myfinanceapp/     # FastAPI + React, the live copy
 ```
 
-Beware: a second, older copy exists at `~/Documents/Development/myfinanceapp/`
-with uncommitted work in it. It is **not** the source of truth. Backend changes
+Beware: a second, older copy exists at `~/Documents/Dev/myfinanceapp/` with
+uncommitted work in it. It is **not** the source of truth. Backend changes
 belong in the `ha-addonsfab` copy.
+
+This project was moved between machines, so paths from earlier sessions may be
+stale. On the current one Flutter is version-managed at `~/flutter/<version>/`
+and the project needs Dart 3.13 or newer, and the Android SDK is at
+`~/android-sdk`.
 
 ## Non-negotiable rules
 
