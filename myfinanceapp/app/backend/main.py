@@ -14,10 +14,9 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from datetime import datetime, timedelta
 from typing import Optional
 import jwt
-from passlib.context import CryptContext
 import os
 
-from database import FinanceDatabase
+from deps import lazy_db
 from backup_manager import BackupManager
 from alerts import AlertManager
 from categorizer import TransactionCategorizer
@@ -46,7 +45,7 @@ _redoc_url = "/redoc" if os.getenv("ENVIRONMENT", "production") != "production" 
 app = FastAPI(
     title="Finance Tracker API",
     description="Personal finance management API with transaction tracking and reporting",
-    version="2.0.0",
+    version="2.1.0",
     docs_url=_docs_url,
     redoc_url=_redoc_url,
 )
@@ -63,15 +62,14 @@ app.add_middleware(
 # Security headers are handled by nginx (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection).
 # Avoid BaseHTTPMiddleware here — it buffers every response and can deadlock behind reverse proxies.
 
-# Initialize services
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
-backup_mgr = BackupManager(db_path=DB_PATH)
+# Initialize services. DB_PATH and the backup directory both come from
+# paths.py via deps, so a stray cwd cannot split them apart.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
+backup_mgr = BackupManager()
 alert_manager = AlertManager()
 
 # Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token")
 
 # Include routers

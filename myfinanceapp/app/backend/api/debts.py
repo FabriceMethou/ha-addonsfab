@@ -8,18 +8,18 @@ import sys, os
 import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 
 class DebtCreate(BaseModel):
     creditor: str  # Maps to 'name' in database
@@ -56,7 +56,7 @@ class DebtPayment(BaseModel):
     notes: Optional[str] = None
 
 @router.get("/")
-async def get_debts(include_inactive: bool = False, current_user: User = Depends(get_current_user)):
+def get_debts(include_inactive: bool = False, current_user: User = Depends(get_current_user)):
     """Get all debts"""
     debts = db.get_debts(include_inactive=include_inactive)
 
@@ -86,7 +86,7 @@ async def get_debts(include_inactive: bool = False, current_user: User = Depends
     return {"debts": mapped_debts}
 
 @router.get("/summary")
-async def get_debts_summary(current_user: User = Depends(get_current_user)):
+def get_debts_summary(current_user: User = Depends(get_current_user)):
     """Get debts summary with all amounts converted to the user's display currency"""
     display_currency = db.get_preference('display_currency', 'EUR')
     debts = db.get_debts()
@@ -106,7 +106,7 @@ async def get_debts_summary(current_user: User = Depends(get_current_user)):
     }
 
 @router.post("/")
-async def create_debt(debt: DebtCreate, current_user: User = Depends(get_current_user)):
+def create_debt(debt: DebtCreate, current_user: User = Depends(get_current_user)):
     """Create new debt"""
     # Default current_balance to original_amount if not provided
     current_balance = debt.current_balance if debt.current_balance is not None else debt.original_amount
@@ -138,7 +138,7 @@ async def create_debt(debt: DebtCreate, current_user: User = Depends(get_current
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.put("/{debt_id}")
-async def update_debt(debt_id: int, debt_update: DebtUpdate, current_user: User = Depends(get_current_user)):
+def update_debt(debt_id: int, debt_update: DebtUpdate, current_user: User = Depends(get_current_user)):
     """Update an existing debt"""
     # Get only the fields that were explicitly set in the request
     update_data = debt_update.model_dump(exclude_unset=True)
@@ -184,7 +184,7 @@ async def update_debt(debt_id: int, debt_update: DebtUpdate, current_user: User 
         raise HTTPException(status_code=400, detail=f"Error updating debt: {str(e)}")
 
 @router.delete("/{debt_id}")
-async def delete_debt(debt_id: int, current_user: User = Depends(get_current_user)):
+def delete_debt(debt_id: int, current_user: User = Depends(get_current_user)):
     """Delete (deactivate) a debt and its associated data"""
     try:
         success = db.delete_debt(debt_id)
@@ -198,115 +198,97 @@ async def delete_debt(debt_id: int, current_user: User = Depends(get_current_use
         raise HTTPException(status_code=400, detail=f"Error deleting debt: {str(e)}")
 
 @router.post("/payments")
-async def add_debt_payment(payment: DebtPayment, current_user: User = Depends(get_current_user)):
-    """Add payment to debt"""
+def add_debt_payment(payment: DebtPayment, current_user: User = Depends(get_current_user)):
+    """Record a payment against a debt.
 
-    # Get debt info to find linked account and debt name
+    One entry from the user, but two ledger rows: the interest, which is money
+    genuinely spent, and the principal, which converts cash into a smaller debt.
+    Booking the whole amount as an expense overstated monthly spending by the
+    capital repaid, and made budgets look consumed by wealth-building.
+
+    Both rows are filed under the debt's own subcategory, so reports show what
+    each loan costs rather than one shared 'Payment' bucket.
+    """
     debt = db.get_debt(payment.debt_id)
     if not debt:
         raise HTTPException(status_code=404, detail="Debt not found")
 
     account_id = debt.get('linked_account_id')
     if not account_id:
-        raise HTTPException(status_code=400, detail="Debt has no linked account. Please link an account to this debt first.")
+        raise HTTPException(
+            status_code=400,
+            detail="Debt has no linked account. Please link an account to this debt first.")
 
-    # Get or create Debt Payment transaction type and subtype
-    conn = db._get_connection()
-    try:
-        cursor = conn.cursor()
+    debt_name = debt.get('name', 'Debt')
+    is_extra = payment.payment_type == "extra"
 
-        # Find "Debt" type
-        cursor.execute("SELECT id FROM transaction_types WHERE name = 'Debt' AND category = 'expense'")
-        result = cursor.fetchone()
-
-        if result:
-            debt_type_id = result['id']
-        else:
-            # Create Debt type if it doesn't exist
-            cursor.execute("""
-                INSERT INTO transaction_types (name, category, icon, color)
-                VALUES ('Debt', 'expense', '💳', '#FF6B6B')
-            """)
-            debt_type_id = cursor.lastrowid
-
-        # Find or create "Payment" subtype for Debt
-        cursor.execute("SELECT id FROM transaction_subtypes WHERE type_id = ? AND name = 'Payment'", (debt_type_id,))
-        subtype_result = cursor.fetchone()
-
-        if subtype_result:
-            debt_subtype_id = subtype_result['id']
-        else:
-            # Create Payment subtype if it doesn't exist
-            cursor.execute("""
-                INSERT INTO transaction_subtypes (type_id, name)
-                VALUES (?, 'Payment')
-            """, (debt_type_id,))
-            debt_subtype_id = cursor.lastrowid
-
-        conn.commit()
-    finally:
-        conn.close()
-
-    # Determine payment description and tags based on type
-    if payment.payment_type == "extra":
-        payment_description = f"Extra payment: {debt.get('name', 'Unknown debt')}"
-        payment_tags = "Extra Debt Payment"
+    # Split the payment before writing anything. The schedule is what decides
+    # how much of a regular payment is interest; an extra payment is all capital.
+    if is_extra:
+        interest_part = 0.0
+        principal_part = round(payment.amount, 2)
     else:
-        payment_description = f"Monthly payment: {debt.get('name', 'Unknown debt')}"
-        payment_tags = "Debt Payment"
+        interest_part = round(
+            (debt.get('current_balance', 0) * (debt.get('interest_rate', 0) / 100)) / 12, 2)
+        interest_part = min(interest_part, round(payment.amount, 2))
+        principal_part = round(payment.amount - interest_part, 2)
 
-    # Create transaction for this debt payment (use debt's currency)
-    transaction_data = {
-        'account_id': account_id,
-        'transaction_date': payment.payment_date,
-        'amount': -abs(payment.amount),  # Negative for expense
-        'type_id': debt_type_id,
-        'subtype_id': debt_subtype_id,
-        'description': payment_description,
-        'destinataire': debt.get('name', 'Debt payment'),
-        'currency': debt.get('currency', 'EUR'),
-        'transfer_account_id': None,
-        'confirmed': True,
-        'tags': payment_tags
-    }
+    label = "Extra payment" if is_extra else "Monthly payment"
+    tags = "Extra Debt Payment" if is_extra else "Debt Payment"
+
+    def write_row(amount, part):
+        """One ledger row. The part decides which type — and so the category."""
+        type_id, subtype_id = db.get_or_create_debt_category(
+            debt_name, payment.payment_type, part)
+        return db.add_transaction({
+            'account_id': account_id,
+            'transaction_date': payment.payment_date,
+            'amount': -abs(amount),
+            'type_id': type_id,
+            'subtype_id': subtype_id,
+            'description': f"{label} ({part}): {debt_name}",
+            'destinataire': debt_name,
+            'currency': debt.get('currency', 'EUR'),
+            'transfer_account_id': None,
+            'confirmed': True,
+            'tags': tags,
+        })
 
     try:
-        transaction_id = db.add_transaction(transaction_data)
+        interest_transaction_id = write_row(interest_part, 'interest') if interest_part else None
+        principal_transaction_id = write_row(principal_part, 'principal') if principal_part else None
 
-        # Now create debt payment with transaction_id
-        # For extra payments, the entire amount goes to principal (extra_payment field)
-        # For monthly payments, the amount is split between interest and principal
-        if payment.payment_type == "extra":
-            payment_data = {
-                'debt_id': payment.debt_id,
-                'amount': 0,  # No regular payment
-                'payment_date': payment.payment_date,
-                'transaction_id': transaction_id,
-                'extra_payment': payment.amount,  # All goes to principal
-                'notes': payment.notes
-            }
-        else:
-            payment_data = {
-                'debt_id': payment.debt_id,
-                'amount': payment.amount,  # Regular monthly payment
-                'payment_date': payment.payment_date,
-                'transaction_id': transaction_id,
-                'extra_payment': 0,  # No extra
-                'notes': payment.notes
-            }
-
+        payment_data = {
+            'debt_id': payment.debt_id,
+            'amount': 0 if is_extra else payment.amount,
+            'payment_date': payment.payment_date,
+            'transaction_id': interest_transaction_id,
+            'principal_transaction_id': principal_transaction_id,
+            'extra_payment': payment.amount if is_extra else 0,
+            'notes': payment.notes,
+        }
         payment_id = db.add_debt_payment(payment_data)
 
         return {
             "message": "Payment recorded",
             "payment_id": payment_id,
-            "transaction_id": transaction_id
+            "interest": interest_part,
+            "principal": principal_part,
         }
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+@router.delete("/payments/{payment_id}")
+def delete_debt_payment(payment_id: int, current_user: User = Depends(get_current_user)):
+    """Undo a payment: its ledger rows go, and the debt gets its balance back."""
+    if not db.delete_debt_payment(payment_id):
+        raise HTTPException(status_code=404, detail="Payment not found")
+    return {"message": "Payment deleted"}
+
+
 @router.get("/{debt_id}/payments")
-async def get_debt_payments(debt_id: int, current_user: User = Depends(get_current_user)):
+def get_debt_payments(debt_id: int, current_user: User = Depends(get_current_user)):
     """Get payments for specific debt"""
     payments = db.get_debt_payments(debt_id)
 
@@ -328,7 +310,7 @@ async def get_debt_payments(debt_id: int, current_user: User = Depends(get_curre
     return {"payments": mapped_payments}
 
 @router.get("/{debt_id}/schedule")
-async def get_amortization_schedule(debt_id: int, current_user: User = Depends(get_current_user)):
+def get_amortization_schedule(debt_id: int, current_user: User = Depends(get_current_user)):
     """Get amortization schedule for a debt"""
     schedule = db.generate_amortization_schedule(debt_id)
     if not schedule:
@@ -336,7 +318,7 @@ async def get_amortization_schedule(debt_id: int, current_user: User = Depends(g
     return {"schedule": schedule}
 
 @router.get("/{debt_id}/payoff")
-async def get_payoff_summary(debt_id: int, current_user: User = Depends(get_current_user)):
+def get_payoff_summary(debt_id: int, current_user: User = Depends(get_current_user)):
     """Get payoff summary for a debt (exposes existing calculate_debt_payoff)"""
     summary = db.calculate_debt_payoff(debt_id)
     if not summary:

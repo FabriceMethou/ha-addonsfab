@@ -6,20 +6,23 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 from datetime import datetime
 import sys, os
+import threading
+import time
+import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 from isin_lookup import ISINLookup
 import yfinance as yf
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 isin_lookup = ISINLookup()
 
 def _get_latest_price(symbol: str) -> Optional[float]:
@@ -38,7 +41,9 @@ def _get_latest_price(symbol: str) -> Optional[float]:
 
     symbol = symbol.strip()
 
-    proxy_prefix = os.getenv("YAHOO_PROXY_PREFIX", "https://r.jina.ai/http://").strip()
+    # Defaults to empty: routing every ticker through a third party should be
+    # an explicit choice, not what happens when nothing is configured.
+    proxy_prefix = os.getenv("YAHOO_PROXY_PREFIX", "").strip()
     if proxy_prefix:
         import json
         import time
@@ -201,7 +206,7 @@ class InvestmentTransactionCreate(BaseModel):
     notes: str = ''
 
 @router.get("/securities")
-async def get_securities(
+def get_securities(
     search: str = None,
     limit: int = None,
     current_user: User = Depends(get_current_user)
@@ -211,7 +216,7 @@ async def get_securities(
     return {"securities": securities}
 
 @router.post("/securities")
-async def create_security(
+def create_security(
     security: SecurityCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -232,7 +237,7 @@ async def create_security(
     return {"message": "Security created", "security_id": security_id}
 
 @router.put("/securities/{security_id}")
-async def update_security(
+def update_security(
     security_id: int,
     security: SecurityUpdate,
     current_user: User = Depends(get_current_user)
@@ -249,7 +254,7 @@ async def update_security(
     return {"message": "Security updated successfully"}
 
 @router.delete("/securities/{security_id}")
-async def delete_security(
+def delete_security(
     security_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -263,33 +268,29 @@ async def delete_security(
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/holdings")
-async def get_holdings(current_user: User = Depends(get_current_user)):
+def get_holdings(current_user: User = Depends(get_current_user)):
     """Get all investment holdings with calculated values"""
     holdings = db.get_investment_holdings()
     return {"holdings": holdings}
 
 @router.post("/holdings")
-async def create_holding(holding: InvestmentHoldingCreate, current_user: User = Depends(get_current_user)):
+def create_holding(holding: InvestmentHoldingCreate, current_user: User = Depends(get_current_user)):
     """
     Create new investment holding.
     Note: You need to create a transaction separately to record the initial purchase.
     """
     # Validate that the provided account_id exists and is an investment account
-    conn = db._get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, currency FROM accounts
-        WHERE id = ? AND account_type = 'investment'
-    """, (holding.account_id,))
-    account = cursor.fetchone()
+    with db.db_connection(commit=False) as conn:
+        account = conn.execute("""
+            SELECT id, currency FROM accounts
+            WHERE id = ? AND account_type = 'investment'
+        """, (holding.account_id,)).fetchone()
 
     if not account:
-        conn.close()
         raise HTTPException(status_code=400, detail="Invalid investment account ID or account is not an investment account")
 
     account_id = account['id']
     account_currency = account['currency']
-    conn.close()
 
     # Get security details to determine currency
     security = db.get_security(holding.security_id)
@@ -335,7 +336,7 @@ async def create_holding(holding: InvestmentHoldingCreate, current_user: User = 
     return {"message": "Holding created", "holding_id": holding_id}
 
 @router.put("/holdings/{holding_id}")
-async def update_holding(
+def update_holding(
     holding_id: int,
     holding: InvestmentHoldingUpdate,
     current_user: User = Depends(get_current_user)
@@ -347,25 +348,21 @@ async def update_holding(
 
     # Validate security_id if provided
     if 'security_id' in update_data:
-        conn = db._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM securities WHERE id = ?", (update_data['security_id'],))
-        security = cursor.fetchone()
-        conn.close()
+        with db.db_connection(commit=False) as conn:
+            security = conn.execute(
+                "SELECT id FROM securities WHERE id = ?",
+                (update_data['security_id'],)).fetchone()
 
         if not security:
             raise HTTPException(status_code=400, detail="Invalid security ID")
 
     # Validate account_id if provided
     if 'account_id' in update_data:
-        conn = db._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id FROM accounts
-            WHERE id = ? AND account_type = 'investment'
-        """, (update_data['account_id'],))
-        account = cursor.fetchone()
-        conn.close()
+        with db.db_connection(commit=False) as conn:
+            account = conn.execute("""
+                SELECT id FROM accounts
+                WHERE id = ? AND account_type = 'investment'
+            """, (update_data['account_id'],)).fetchone()
 
         if not account:
             raise HTTPException(status_code=400, detail="Invalid investment account ID or account is not an investment account")
@@ -377,7 +374,7 @@ async def update_holding(
     return {"message": "Holding updated successfully"}
 
 @router.delete("/holdings/{holding_id}")
-async def delete_holding(holding_id: int, current_user: User = Depends(get_current_user)):
+def delete_holding(holding_id: int, current_user: User = Depends(get_current_user)):
     """Delete investment holding and all its transactions"""
     success = db.delete_investment_holding(holding_id)
     if not success:
@@ -386,7 +383,7 @@ async def delete_holding(holding_id: int, current_user: User = Depends(get_curre
     return {"message": "Holding deleted successfully"}
 
 @router.get("/holdings/{holding_id}/current-price")
-async def get_current_price(holding_id: int, current_user: User = Depends(get_current_user)):
+def get_current_price(holding_id: int, current_user: User = Depends(get_current_user)):
     """Get current price for holding using yfinance"""
     holding = db.get_investment_holding(holding_id)
     if not holding:
@@ -407,7 +404,7 @@ async def get_current_price(holding_id: int, current_user: User = Depends(get_cu
         raise HTTPException(status_code=400, detail=f"Failed to fetch price: {str(e)}")
 
 @router.get("/test-price/{symbol}")
-async def test_price(symbol: str, current_user: User = Depends(get_current_user)):
+def test_price(symbol: str, current_user: User = Depends(get_current_user)):
     """Test price fetching for debugging - shows detailed info"""
     import logging
     logger = logging.getLogger("uvicorn")
@@ -455,7 +452,7 @@ async def test_price(symbol: str, current_user: User = Depends(get_current_user)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/lookup/isin/{isin_code}")
-async def lookup_isin(isin_code: str, current_user: User = Depends(get_current_user)):
+def lookup_isin(isin_code: str, current_user: User = Depends(get_current_user)):
     """Look up security information by ISIN code"""
     try:
         security_info = isin_lookup.lookup_complete(isin_code, fetch_price=False)
@@ -472,7 +469,7 @@ async def lookup_isin(isin_code: str, current_user: User = Depends(get_current_u
         raise HTTPException(status_code=400, detail=f"ISIN lookup failed: {str(e)}")
 
 @router.get("/transactions")
-async def get_transactions(
+def get_transactions(
     holding_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
@@ -504,22 +501,21 @@ async def get_transactions(
     return {"transactions": mapped_transactions}
 
 @router.post("/transactions")
-async def create_transaction(
+def create_transaction(
     transaction: InvestmentTransactionCreate,
     current_user: User = Depends(get_current_user)
 ):
     """Add investment transaction (buy/sell/dividend)"""
-    # Get the holding to find the account and its currency
-    conn = db._get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT a.currency
-        FROM investment_holdings h
-        JOIN accounts a ON h.account_id = a.id
-        WHERE h.id = ?
-    """, (transaction.holding_id,))
-    result = cursor.fetchone()
-    conn.close()
+    # Get the holding to find the account and its currency.
+    # db_connection() closes on every path; the previous conn.close() sat after
+    # the query, so any failure in between leaked the connection and its lock.
+    with db.db_connection(commit=False) as conn:
+        result = conn.execute("""
+            SELECT a.currency
+            FROM investment_holdings h
+            JOIN accounts a ON h.account_id = a.id
+            WHERE h.id = ?
+        """, (transaction.holding_id,)).fetchone()
 
     if not result:
         raise HTTPException(status_code=404, detail="Holding not found")
@@ -553,23 +549,22 @@ async def create_transaction(
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.put("/transactions/{transaction_id}")
-async def update_transaction(
+def update_transaction(
     transaction_id: int,
     transaction: InvestmentTransactionCreate,
     current_user: User = Depends(get_current_user)
 ):
     """Update an existing investment transaction"""
-    # Get the holding to find the account and its currency
-    conn = db._get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT a.currency
-        FROM investment_holdings h
-        JOIN accounts a ON h.account_id = a.id
-        WHERE h.id = ?
-    """, (transaction.holding_id,))
-    result = cursor.fetchone()
-    conn.close()
+    # Get the holding to find the account and its currency.
+    # db_connection() closes on every path; the previous conn.close() sat after
+    # the query, so any failure in between leaked the connection and its lock.
+    with db.db_connection(commit=False) as conn:
+        result = conn.execute("""
+            SELECT a.currency
+            FROM investment_holdings h
+            JOIN accounts a ON h.account_id = a.id
+            WHERE h.id = ?
+        """, (transaction.holding_id,)).fetchone()
 
     if not result:
         raise HTTPException(status_code=404, detail="Holding not found")
@@ -605,7 +600,7 @@ async def update_transaction(
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.delete("/transactions/{transaction_id}")
-async def delete_transaction(
+def delete_transaction(
     transaction_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -619,7 +614,7 @@ async def delete_transaction(
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/monthly")
-async def get_monthly_summary(
+def get_monthly_summary(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
@@ -678,7 +673,7 @@ async def get_monthly_summary(
 
 
 @router.get("/summary")
-async def get_summary(current_user: User = Depends(get_current_user)):
+def get_summary(current_user: User = Depends(get_current_user)):
     """Get investment portfolio summary with all amounts converted to the user's display currency"""
     display_currency = db.get_preference('display_currency', 'EUR')
     exchange_rates = db.get_exchange_rates_map()
@@ -764,7 +759,7 @@ async def get_summary(current_user: User = Depends(get_current_user)):
     }
 
 @router.post("/holdings/{holding_id}/update-price")
-async def update_holding_price(
+def update_holding_price(
     holding_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -791,15 +786,12 @@ async def update_holding_price(
 
         # Update in database
         from datetime import datetime
-        conn = db._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE investment_holdings
-            SET current_price = ?, last_price_update = ?
-            WHERE id = ?
-        """, (current_price, datetime.now().isoformat(), holding_id))
-        conn.commit()
-        conn.close()
+        with db.db_connection(commit=True) as conn:
+            conn.execute("""
+                UPDATE investment_holdings
+                SET current_price = ?, last_price_update = ?
+                WHERE id = ?
+            """, (current_price, datetime.now().isoformat(), holding_id))
 
         logger.info(f"Price updated for {symbol}: {current_price}")
 
@@ -815,88 +807,148 @@ async def update_holding_price(
         logger.error(f"Failed to update price: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update price: {str(e)}")
 
-@router.post("/holdings/update-all-prices")
-async def update_all_prices(current_user: User = Depends(get_current_user)):
-    """Update prices for all holdings using Yahoo Finance"""
-    import logging
+# ── bulk price update ────────────────────────────────────────────────────────
+#
+# Fetching prices means one blocking HTTP call per holding plus a delay between
+# them, so a portfolio of thirty lines takes minutes. Running that inside the
+# request meant nginx needed proxy_read_timeout raised to 300s and the browser
+# sat on an open connection throughout. It now runs on a worker thread and the
+# client polls for progress.
+
+_price_update_lock = threading.Lock()
+_price_update_state = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "total": 0,
+    "processed": 0,
+    "updated_count": 0,
+    "failed": [],
+    "skipped": [],
+    "error": None,
+}
+
+
+def _run_price_update(holdings, request_delay):
+    """Worker body. Opens its own connection: sqlite3 forbids sharing one
+    across threads, and db_connection() hands out a fresh one per call."""
     logger = logging.getLogger("uvicorn")
-
-    holdings = db.get_investment_holdings()
-
-    if not holdings:
-        return {"message": "No holdings to update", "updated_count": 0, "failed": []}
-
-    logger.info(f"Starting bulk price update for {len(holdings)} holdings...")
-    updated_count = 0
-    failed = []
-    skipped = []
-
-    from datetime import datetime
-    import time
-
-    # Small delay between requests to avoid hammering the price proxy. Configurable via env.
-    request_delay = float(os.getenv("PRICE_UPDATE_DELAY_SECONDS", "0.3"))
-
-    conn = db._get_connection()
-    cursor = conn.cursor()
-
+    updated_count, failed, skipped = 0, [], []
     fetched_any = False
-    for holding in holdings:
-        symbol = holding.get('symbol')
-        holding_id = holding.get('id')
-        investment_type = holding.get('investment_type', '')
 
-        # Skip bonds and crypto - they require manual price updates
-        if investment_type in ['bond', 'crypto']:
-            logger.info(f"Skipping {symbol} ({investment_type}) - requires manual price entry")
-            skipped.append({"symbol": symbol, "type": investment_type, "reason": "Manual price entry required"})
-            continue
+    def publish():
+        """Copy counters into the shared state the status endpoint reads."""
+        with _price_update_lock:
+            _price_update_state["updated_count"] = updated_count
+            _price_update_state["failed"] = list(failed)
+            _price_update_state["skipped"] = list(skipped)
 
-        # Space out network requests to stay under Yahoo's rate limit.
-        if fetched_any and request_delay > 0:
-            time.sleep(request_delay)
-        fetched_any = True
+    try:
+        for holding in holdings:
+            symbol = holding.get("symbol")
+            holding_id = holding.get("id")
+            investment_type = holding.get("investment_type", "")
 
-        try:
-            logger.info(f"Fetching price for {symbol}...")
+            with _price_update_lock:
+                _price_update_state["processed"] += 1
 
-            current_price = _get_latest_price(symbol)
-
-            if current_price is None:
-                logger.warning(f"No price data available for {symbol}")
-                failed.append({"symbol": symbol, "error": "No price data available"})
+            # Bonds and crypto are priced manually.
+            if investment_type in ["bond", "crypto"]:
+                skipped.append({"symbol": symbol, "type": investment_type,
+                                "reason": "Manual price entry required"})
+                publish()
                 continue
 
-            # Update in database
-            cursor.execute("""
-                UPDATE investment_holdings
-                SET current_price = ?, last_price_update = ?
-                WHERE id = ?
-            """, (current_price, datetime.now().isoformat(), holding_id))
+            # Space out network requests to stay under Yahoo's rate limit.
+            if fetched_any and request_delay > 0:
+                time.sleep(request_delay)
+            fetched_any = True
 
-            logger.info(f"✓ {symbol}: {current_price}")
-            updated_count += 1
+            try:
+                current_price = _get_latest_price(symbol)
+                if current_price is None:
+                    failed.append({"symbol": symbol, "error": "No price data available"})
+                    publish()
+                    continue
 
-        except Exception as e:
-            logger.error(f"✗ {symbol}: {str(e)}")
-            failed.append({"symbol": symbol, "error": str(e)})
+                with db.db_connection(commit=True) as conn:
+                    conn.execute(
+                        "UPDATE investment_holdings "
+                        "SET current_price = ?, last_price_update = ? WHERE id = ?",
+                        (current_price, datetime.now().isoformat(), holding_id),
+                    )
 
-    conn.commit()
-    conn.close()
+                logger.info(f"{symbol}: {current_price}")
+                updated_count += 1
 
-    logger.info(f"Bulk update complete: {updated_count}/{len(holdings)} succeeded, {len(failed)} failed, {len(skipped)} skipped")
+            except Exception as e:
+                logger.error(f"{symbol}: {e}")
+                failed.append({"symbol": symbol, "error": str(e)})
 
-    return {
-        "message": f"Updated {updated_count} of {len(holdings)} holdings ({len(skipped)} skipped)",
-        "updated_count": updated_count,
-        "total_holdings": len(holdings),
-        "skipped_count": len(skipped),
-        "failed": failed,
-        "skipped": skipped
-    }
+            publish()
+
+        publish()
+        logger.info(f"Bulk update complete: {updated_count}/{len(holdings)} succeeded, "
+                    f"{len(failed)} failed, {len(skipped)} skipped")
+    except Exception as e:
+        logger.error(f"Bulk price update aborted: {e}")
+        with _price_update_lock:
+            _price_update_state["error"] = str(e)
+    finally:
+        with _price_update_lock:
+            _price_update_state["running"] = False
+            _price_update_state["finished_at"] = datetime.now().isoformat()
+
+
+@router.post("/holdings/update-all-prices", status_code=202)
+def update_all_prices(current_user: User = Depends(get_current_user)):
+    """Start a bulk price refresh and return immediately.
+
+    Poll /holdings/price-update-status for progress and the final counts.
+    """
+    holdings = db.get_investment_holdings()
+    if not holdings:
+        return {"status": "idle", "message": "No holdings to update",
+                "updated_count": 0, "failed": [], "skipped": [], "total": 0,
+                "processed": 0, "running": False}
+
+    with _price_update_lock:
+        if _price_update_state["running"]:
+            return {**_price_update_state, "status": "already_running",
+                    "message": "A price update is already in progress"}
+
+        _price_update_state.update({
+            "running": True,
+            "started_at": datetime.now().isoformat(),
+            "finished_at": None,
+            "total": len(holdings),
+            "processed": 0,
+            "updated_count": 0,
+            "failed": [],
+            "skipped": [],
+            "error": None,
+        })
+
+    request_delay = float(os.getenv("PRICE_UPDATE_DELAY_SECONDS", "0.3"))
+    threading.Thread(target=_run_price_update, args=(holdings, request_delay),
+                     daemon=True).start()
+
+    return {**_price_update_state, "status": "started",
+            "message": f"Updating {len(holdings)} holdings in the background"}
+
+
+@router.get("/holdings/price-update-status")
+def get_price_update_status(current_user: User = Depends(get_current_user)):
+    """Progress of the running (or last) bulk price update."""
+    with _price_update_lock:
+        state = dict(_price_update_state)
+    state["status"] = "running" if state["running"] else (
+        "error" if state["error"] else "finished" if state["finished_at"] else "idle")
+    return state
+
 
 @router.post("/fix-dividend-totals")
-async def fix_dividend_totals(current_user: User = Depends(get_current_user)):
+def fix_dividend_totals(current_user: User = Depends(get_current_user)):
     """
     Fix existing dividend transactions that have total_amount = 0.
     This is a one-time utility endpoint to fix data from before the dividend fix.
@@ -904,25 +956,23 @@ async def fix_dividend_totals(current_user: User = Depends(get_current_user)):
     import logging
     logger = logging.getLogger("uvicorn")
 
-    conn = db._get_connection()
-    cursor = conn.cursor()
+    # Read, fix and re-read in one transaction, so a failure mid-way leaves the
+    # rows untouched rather than half-updated.
+    with db.db_connection(commit=True) as conn:
+        cursor = conn.cursor()
 
-    # Check current state
-    cursor.execute('SELECT COUNT(*) as count FROM investment_transactions WHERE transaction_type = "dividend" AND total_amount = 0')
-    count_before = cursor.fetchone()['count']
+        cursor.execute('SELECT COUNT(*) as count FROM investment_transactions '
+                       'WHERE transaction_type = "dividend" AND total_amount = 0')
+        count_before = cursor.fetchone()['count']
+        logger.info(f"Found {count_before} dividend transactions with total_amount = 0")
 
-    logger.info(f"Found {count_before} dividend transactions with total_amount = 0")
+        cursor.execute('UPDATE investment_transactions SET total_amount = price_per_share '
+                       'WHERE transaction_type = "dividend" AND total_amount = 0')
+        rows_updated = cursor.rowcount
 
-    # Fix them
-    cursor.execute('UPDATE investment_transactions SET total_amount = price_per_share WHERE transaction_type = "dividend" AND total_amount = 0')
-    rows_updated = cursor.rowcount
-    conn.commit()
-
-    # Check after
-    cursor.execute('SELECT COUNT(*) as count FROM investment_transactions WHERE transaction_type = "dividend" AND total_amount = 0')
-    count_after = cursor.fetchone()['count']
-
-    conn.close()
+        cursor.execute('SELECT COUNT(*) as count FROM investment_transactions '
+                       'WHERE transaction_type = "dividend" AND total_amount = 0')
+        count_after = cursor.fetchone()['count']
 
     logger.info(f"Fixed {rows_updated} dividend transactions. Remaining with 0 total: {count_after}")
 

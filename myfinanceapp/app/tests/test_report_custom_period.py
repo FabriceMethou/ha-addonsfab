@@ -9,7 +9,6 @@ Run:
   PYTHONPATH=. /home/fab/Documents/Dev/myfinanceapp/backend/venv/bin/python3 \
     -m pytest tests/test_report_custom_period.py -v --tb=short
 """
-import asyncio
 import os
 import sys
 import tempfile
@@ -145,8 +144,8 @@ class TestSpendingTrendsCustomRange:
         add_txn(db, acc, -20.0, "2024-02-15", type_id, subtype_id)
         add_txn(db, acc, -40.0, "2024-05-15", type_id, subtype_id)  # outside
 
-        result = asyncio.run(reports_api.spending_trends(
-            start_date="2024-01-01", end_date="2024-02-29", current_user=None))
+        result = reports_api.spending_trends(
+            start_date="2024-01-01", end_date="2024-02-29", current_user=None)
 
         assert [t["date"] for t in result["trends"]] == ["2024-01", "2024-02"]
         assert result["trends"][0]["total_expenses"] == 10.0
@@ -162,8 +161,8 @@ class TestSpendingTrendsCustomRange:
         add_txn(db, acc, -10.0, "2024-01-05", type_id, subtype_id)   # before start
         add_txn(db, acc, -25.0, "2024-01-20", type_id, subtype_id)   # inside
 
-        result = asyncio.run(reports_api.spending_trends(
-            start_date="2024-01-10", end_date="2024-01-31", current_user=None))
+        result = reports_api.spending_trends(
+            start_date="2024-01-10", end_date="2024-01-31", current_user=None)
 
         assert len(result["trends"]) == 1
         assert result["trends"][0]["total_expenses"] == 25.0
@@ -179,9 +178,9 @@ class TestCategoryBreakdownCustomRange:
         add_txn(db, acc, -70.0, "2024-03-10", type_id, subtype_id)
         add_txn(db, acc, -99.0, "2024-06-10", type_id, subtype_id)  # outside
 
-        result = asyncio.run(reports_api.category_breakdown(
+        result = reports_api.category_breakdown(
             type_id=type_id, start_date="2024-02-01", end_date="2024-03-31",
-            current_user=None))
+            current_user=None)
 
         assert result["summary"]["total"] == 100.0
         assert result["summary"]["monthly_average"] == 50.0  # two months
@@ -200,8 +199,8 @@ class TestMonthlySummaryCustomRange:
         add_txn(db, acc, 100.0, "2024-03-10", income_type, income_sub)
         add_txn(db, acc, -55.0, "2024-05-10", expense_type, expense_sub)  # outside
 
-        result = asyncio.run(reports_api.monthly_summary(
-            start_date="2024-02-01", end_date="2024-03-31", current_user=None))
+        result = reports_api.monthly_summary(
+            start_date="2024-02-01", end_date="2024-03-31", current_user=None)
 
         assert result["expenses"] == 40.0
         assert result["income"] == 100.0
@@ -217,8 +216,8 @@ class TestMonthlySummaryCustomRange:
         add_txn(db, acc, -12.0, "2024-04-10", type_id, subtype_id)
         add_txn(db, acc, -99.0, "2024-05-01", type_id, subtype_id)
 
-        result = asyncio.run(reports_api.monthly_summary(
-            year=2024, month=4, current_user=None))
+        result = reports_api.monthly_summary(
+            year=2024, month=4, current_user=None)
 
         assert result["expenses"] == 12.0
         assert result["start_date"] == "2024-04-01"
@@ -228,7 +227,7 @@ class TestMonthlySummaryCustomRange:
         make_db()
 
         with pytest.raises(HTTPException) as excinfo:
-            asyncio.run(reports_api.monthly_summary(current_user=None))
+            reports_api.monthly_summary(current_user=None)
 
         assert excinfo.value.status_code == 400
 
@@ -242,8 +241,8 @@ class TestYearByYearCustomRange:
         add_txn(db, acc, -20.0, "2024-02-10", expense_type, expense_sub)
         add_txn(db, acc, -50.0, "2024-11-10", expense_type, expense_sub)  # outside
 
-        result = asyncio.run(reports_api.year_by_year_stats(
-            start_date="2024-01-01", end_date="2024-06-30", current_user=None))
+        result = reports_api.year_by_year_stats(
+            start_date="2024-01-01", end_date="2024-06-30", current_user=None)
 
         assert result["summary"]["total_expenses"] == 20.0
         assert result["start_date"] == "2024-01-01"
@@ -252,7 +251,7 @@ class TestYearByYearCustomRange:
         make_db()
 
         with pytest.raises(HTTPException) as excinfo:
-            asyncio.run(reports_api.year_by_year_stats(current_user=None))
+            reports_api.year_by_year_stats(current_user=None)
 
         assert excinfo.value.status_code == 400
 
@@ -261,8 +260,8 @@ class TestNetWorthTrendCustomRange:
     def test_echoes_the_requested_range(self):
         make_db()
 
-        result = asyncio.run(reports_api.net_worth_trend(
-            start_date="2024-01-01", end_date="2024-06-30", current_user=None))
+        result = reports_api.net_worth_trend(
+            start_date="2024-01-01", end_date="2024-06-30", current_user=None)
 
         assert result["start_date"] == "2024-01-01"
         assert result["end_date"] == "2024-06-30"

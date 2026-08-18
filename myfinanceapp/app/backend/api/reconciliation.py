@@ -10,20 +10,21 @@ import os
 import tempfile
 import csv
 import re
+from io import StringIO
 from datetime import datetime, timedelta
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 
 # French month mapping for date parsing
 FRENCH_MONTHS = {
@@ -96,9 +97,15 @@ def parse_european_amount(amount_str: str) -> float:
     # Remove currency symbol and whitespace
     cleaned = amount_str.replace('€', '').replace('\xa0', '').strip()
 
-    # Handle negative amounts
-    is_negative = '-' in cleaned
-    cleaned = cleaned.replace('-', '')
+    # Only a leading sign makes the amount negative. Testing for '-' anywhere
+    # turned any string containing a dash — a date, a reference — negative.
+    # Parenthesised negatives are the other common accounting convention.
+    if cleaned.startswith('(') and cleaned.endswith(')'):
+        cleaned = cleaned[1:-1]
+        is_negative = True
+    else:
+        is_negative = cleaned.startswith('-')
+    cleaned = cleaned.lstrip('+-')
 
     # Remove thousands separators (space or dot)
     cleaned = cleaned.replace(' ', '')
@@ -171,6 +178,181 @@ def extract_recipient_from_description(description: str, transaction_type: str) 
     return cleaned[:50] if len(cleaned) > 50 else cleaned
 
 
+def _decode_csv(raw: bytes) -> str:
+    """Decode a bank export, trying the encodings they actually ship.
+
+    utf-8-sig strips the BOM Excel adds; latin-1 accepts anything as a last
+    resort so a stray byte cannot make a whole statement unreadable.
+    """
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise HTTPException(status_code=400, detail="Could not decode the CSV file")
+
+
+def _suggest_column_map(headers: List[str]) -> Dict[str, str]:
+    """Best guess at which column is which, to pre-fill the mapping form.
+
+    Purely a convenience: the user confirms it. Matching is on substrings in
+    several languages because these files come from Danish, Swedish, German and
+    English banks.
+    """
+    hints = {
+        'date': ('date', 'dato', 'datum', 'bokf', 'valuta', 'when', 'jour'),
+        'amount': ('amount', 'beløb', 'belopp', 'betrag', 'montant', 'sum', 'value'),
+        'description': ('description', 'tekst', 'text', 'label', 'libell',
+                        'verwendungszweck', 'narrative', 'details'),
+        'payee': ('payee', 'counterparty', 'modtager', 'mottagare',
+                  'beneficiary', 'destinataire', 'name'),
+        'currency': ('currency', 'valuta', 'devise', 'währung'),
+        'balance': ('balance', 'saldo', 'solde', 'kontostand'),
+        'type': ('type', 'transaktionstyp', 'kind', 'category'),
+    }
+    suggestion = {}
+    taken = set()
+    for field, needles in hints.items():
+        for header in headers:
+            if header in taken:
+                continue
+            low = header.strip().lower()
+            if any(n in low for n in needles):
+                suggestion[field] = header
+                taken.add(header)
+                break
+    return suggestion
+
+
+# Fields a profile can map. Only date and amount are required — everything else
+# improves matching but is not needed to reconcile.
+MAPPABLE_FIELDS = {
+    'date': 'Transaction date',
+    'amount': 'Amount (signed, or use "amounts are unsigned")',
+    'description': 'Description / label',
+    'payee': 'Payee or counterparty',
+    'currency': 'Currency code',
+    'balance': 'Running balance',
+    'type': 'Transaction type',
+}
+
+
+def parse_date_flexible(value: str, date_format: Optional[str] = None) -> str:
+    """Parse a date into ISO form, trying the layouts banks actually use.
+
+    A profile can pin an explicit strptime pattern; without one this walks the
+    common orderings. Ambiguous DD/MM vs MM/DD is resolved in favour of
+    day-first, which is what European exports use — pin date_format when a bank
+    is American.
+    """
+    value = (value or '').strip()
+    if not value:
+        raise ValueError("Empty date")
+
+    if date_format:
+        return datetime.strptime(value[:len(value)], date_format).date().isoformat()
+
+    # ISO first, including timestamps like 2026-02-01T01:42:32Z
+    iso = re.match(r'^(\d{4}-\d{2}-\d{2})', value)
+    if iso:
+        return iso.group(1)
+
+    for pattern in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y",
+                    "%Y/%m/%d", "%m/%d/%Y",
+                    "%d/%m/%y", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(value[:19].split(" ")[0] if pattern.count("%") < 4 else value,
+                                     pattern).date().isoformat()
+        except ValueError:
+            continue
+
+    # French month names, e.g. "01 sept. 2025"
+    try:
+        return parse_french_date(value)
+    except ValueError:
+        pass
+
+    raise ValueError(f"Unrecognised date format: {value}")
+
+
+def parse_amount_with_format(value: str, amount_format: str = 'european') -> float:
+    """Parse an amount using the profile's declared convention."""
+    if amount_format == 'us':
+        return parse_us_amount(value)
+    return parse_european_amount(value)
+
+
+def parse_csv_with_profile(file_content: str, profile: Dict[str, Any]) -> tuple:
+    """Parse any bank CSV using a saved column mapping.
+
+    This is the generic path: instead of recognising a layout, it is told which
+    column means what. Output matches parse_csv_rows() exactly so the rest of
+    reconciliation is unchanged.
+    """
+    column_map = profile['column_map']
+    amount_format = profile.get('amount_format', 'european')
+    date_format = profile.get('date_format')
+    invert = profile.get('invert_amount', False)
+    row_filter = profile.get('row_filter') or {}
+
+    transactions, parse_errors = [], []
+    reader = csv.DictReader(StringIO(file_content))
+
+    def column(row, field):
+        source = column_map.get(field)
+        return (row.get(source) or '').strip() if source else ''
+
+    for row_idx, row in enumerate(reader):
+        try:
+            # Row filters drop the rows a bank includes but a ledger should not —
+            # pending Revolut entries, a savings pot in a mixed export.
+            skip = False
+            for col, accepted in row_filter.items():
+                actual = (row.get(col) or '').strip()
+                if accepted and actual not in accepted:
+                    skip = True
+                    break
+            if skip:
+                continue
+
+            raw_date = column(row, 'date')
+            if not raw_date:
+                continue
+
+            parsed_date = parse_date_flexible(raw_date, date_format)
+            amount = parse_amount_with_format(column(row, 'amount'), amount_format)
+            if invert:
+                amount = -amount
+
+            description = column(row, 'description')
+            payee = column(row, 'payee')
+            tx_type = column(row, 'type')
+
+            balance = None
+            if column_map.get('balance'):
+                try:
+                    balance = parse_amount_with_format(column(row, 'balance'), amount_format)
+                except ValueError:
+                    balance = None
+
+            transactions.append({
+                'date': parsed_date,
+                'original_date': raw_date,
+                'type': tx_type,
+                'amount': amount,
+                'balance': balance,
+                'description': description,
+                'suggested_recipient': payee or extract_recipient_from_description(
+                    description, tx_type),
+            })
+
+        except ValueError as e:
+            parse_errors.append(f"Row {row_idx + 2}: {e}")
+            continue
+
+    return transactions, parse_errors
+
+
 def parse_csv_rows(file_content: str, account_currency: Optional[str] = None) -> tuple:
     """
     Parse bank CSV content into normalized transactions, auto-detecting the layout
@@ -201,8 +383,6 @@ def parse_csv_rows(file_content: str, account_currency: Optional[str] = None) ->
 
     Returns (transactions, parse_errors). Transactions are NOT date-filtered.
     """
-    from io import StringIO
-
     transactions = []
     parse_errors = []
 
@@ -409,6 +589,9 @@ async def upload_csv(
     start_date: str,
     end_date: str,
     file: UploadFile = File(...),
+    # Optional: force a saved layout. Omitted, the matching profile is looked up
+    # from the file's own headers, then the two built-in layouts are tried.
+    profile_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -423,48 +606,39 @@ async def upload_csv(
     if not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="File must be a CSV")
 
-    # Save to temp file and parse
-    csv_transactions = []
-    parse_errors = []
+    file_content = _decode_csv(await file.read())
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='wb') as temp_file:
-        temp_path = temp_file.name
-        contents = await file.read()
-        temp_file.write(contents)
+    lines = file_content.strip().split('\n')
+    if len(lines) < 2:
+        raise HTTPException(status_code=400, detail="CSV file appears to be empty")
 
-    try:
-        # Try different encodings
-        encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
-        file_content = None
+    # Which parser: an explicitly chosen profile, one saved for this layout, or
+    # the two built-in layouts. Any bank works once its columns are mapped.
+    profile = None
+    if profile_id:
+        profile = db.get_import_profile(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Import profile not found")
+    else:
+        reader = csv.DictReader(StringIO(file_content))
+        profile = db.find_import_profile_by_headers(reader.fieldnames or [])
 
-        for encoding in encodings:
-            try:
-                with open(temp_path, 'r', encoding=encoding) as f:
-                    file_content = f.read()
-                break
-            except UnicodeDecodeError:
-                continue
-
-        if file_content is None:
-            raise HTTPException(status_code=400, detail="Could not decode CSV file")
-
-        # Parse CSV
-        lines = file_content.strip().split('\n')
-        if len(lines) < 2:
-            raise HTTPException(status_code=400, detail="CSV file appears to be empty")
-
-        # Parse all rows (auto-detects Trade Republic vs Revolut layout), then
-        # filter to the requested date range.
+    if profile:
+        all_transactions, parse_errors = parse_csv_with_profile(file_content, profile)
+    else:
         all_transactions, parse_errors = parse_csv_rows(file_content, account.get('currency'))
-        csv_transactions = [
-            tx for tx in all_transactions
-            if start_date <= tx['date'] <= end_date
-        ]
 
-    finally:
-        # Clean up temp file
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+    if not all_transactions and not parse_errors:
+        raise HTTPException(
+            status_code=400,
+            detail="No rows could be read. Use Inspect to map this bank's columns first.",
+        )
+
+    # The upload is parsed in memory now, so there is no temp file to clean up.
+    csv_transactions = [
+        tx for tx in all_transactions
+        if start_date <= tx['date'] <= end_date
+    ]
 
     # Get system transactions for the same period
     # This includes transactions directly on this account
@@ -557,7 +731,7 @@ async def upload_csv(
 
 
 @router.post("/flag/{transaction_id}")
-async def flag_transaction(
+def flag_transaction(
     transaction_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -586,7 +760,7 @@ async def flag_transaction(
 
 
 @router.post("/complete")
-async def complete_reconciliation(
+def complete_reconciliation(
     data: ReconciliationComplete,
     current_user: User = Depends(get_current_user)
 ):
@@ -620,3 +794,81 @@ async def complete_reconciliation(
         "is_match": abs(data.actual_balance - system_balance) < 0.01,
         "difference": data.actual_balance - system_balance
     }
+
+
+# ── import profiles ──────────────────────────────────────────────────────────
+
+class ImportProfileIn(BaseModel):
+    name: str
+    headers: List[str]
+    column_map: Dict[str, str]
+    amount_format: str = "european"
+    date_format: Optional[str] = None
+    invert_amount: bool = False
+    row_filter: Optional[Dict[str, List[str]]] = None
+
+
+@router.post("/inspect")
+async def inspect_csv(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Read a CSV's shape without importing anything.
+
+    Returns its columns, a few sample rows, and the saved profile that matches —
+    so the UI can either go straight to reconciling or ask the user which column
+    means what.
+    """
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="File must be a CSV")
+
+    raw = await file.read()
+    content = _decode_csv(raw)
+
+    reader = csv.DictReader(StringIO(content))
+    headers = [h for h in (reader.fieldnames or []) if h and h.strip()]
+    if not headers:
+        raise HTTPException(status_code=400, detail="No column headers found in the file")
+
+    samples = []
+    for row in reader:
+        samples.append({h: (row.get(h) or "") for h in headers})
+        if len(samples) >= 5:
+            break
+
+    profile = db.find_import_profile_by_headers(headers)
+
+    return {
+        "headers": headers,
+        "sample_rows": samples,
+        "mappable_fields": MAPPABLE_FIELDS,
+        "matched_profile": profile,
+        # A guess to pre-fill the mapping form; the user confirms or corrects it.
+        "suggested_map": _suggest_column_map(headers),
+    }
+
+
+@router.get("/profiles")
+def list_import_profiles(current_user: User = Depends(get_current_user)):
+    """Saved bank layouts."""
+    return {"profiles": db.get_import_profiles()}
+
+
+@router.post("/profiles")
+def save_import_profile(
+    profile: ImportProfileIn,
+    current_user: User = Depends(get_current_user),
+):
+    """Remember a bank's column layout so the next import needs no setup."""
+    try:
+        profile_id = db.save_import_profile(profile.dict())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"message": "Import profile saved", "profile": db.get_import_profile(profile_id)}
+
+
+@router.delete("/profiles/{profile_id}")
+def delete_import_profile(profile_id: int, current_user: User = Depends(get_current_user)):
+    if not db.delete_import_profile(profile_id):
+        raise HTTPException(status_code=404, detail="Import profile not found")
+    return {"message": "Import profile deleted"}

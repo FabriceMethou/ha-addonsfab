@@ -7,6 +7,9 @@ import { transactionSchema, type TransactionFormData } from '../lib/validations'
 import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 import { useToast } from '../contexts/ToastContext';
 import { useIsMobile } from '../hooks/useBreakpoint';
+import ColumnMappingDialog, {
+  type CsvInspection,
+} from '../components/ColumnMappingDialog';
 import {
   accountsAPI,
   transactionsAPI,
@@ -145,6 +148,10 @@ export default function ReconcilePage() {
   const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
+  // Column mapping: only surfaces when a file's layout isn't recognised.
+  const [inspection, setInspection] = useState<CsvInspection | null>(null);
+  const [mappingOpen, setMappingOpen] = useState(false);
+
   // Reconciliation results state
   const [reconciliationData, setReconciliationData] = useState<ReconciliationData | null>(null);
   const [ignoredCsvIndices, setIgnoredCsvIndices] = useState<Set<number>>(new Set());
@@ -260,6 +267,39 @@ export default function ReconcilePage() {
   });
 
   const formData = watch();
+
+  /** Ask the server what this file looks like before importing it. */
+  const inspectMutation = useMutation({
+    mutationFn: (file: File) => reconciliationAPI.inspect(file),
+    onSuccess: (response) => {
+      const data: CsvInspection = response.data;
+      setInspection(data);
+      if (data.matched_profile) {
+        // Layout already known — nothing to ask, go straight to comparing.
+        uploadMutation.mutate();
+      } else {
+        setMappingOpen(true);
+      }
+    },
+    onError: (error: any) => {
+      const detail = error.response?.data?.detail || error.message;
+      toast.error(`Could not read that file: ${detail}`);
+    },
+  });
+
+  const saveProfileMutation = useMutation({
+    mutationFn: (profile: Parameters<typeof reconciliationAPI.saveProfile>[0]) =>
+      reconciliationAPI.saveProfile(profile),
+    onSuccess: () => {
+      setMappingOpen(false);
+      toast.success('Layout saved — future imports from this bank skip this step');
+      uploadMutation.mutate();
+    },
+    onError: (error: any) => {
+      const detail = error.response?.data?.detail || error.message;
+      toast.error(`Could not save the layout: ${detail}`);
+    },
+  });
 
   // Upload mutation
   const uploadMutation = useMutation({
@@ -625,10 +665,16 @@ export default function ReconcilePage() {
 
         <div className="mt-4 flex justify-end">
           <Button
-            onClick={() => uploadMutation.mutate()}
-            disabled={!selectedAccountId || !selectedFile || !startDate || uploadMutation.isPending}
+            onClick={() => selectedFile && inspectMutation.mutate(selectedFile)}
+            disabled={
+              !selectedAccountId ||
+              !selectedFile ||
+              !startDate ||
+              uploadMutation.isPending ||
+              inspectMutation.isPending
+            }
           >
-            {uploadMutation.isPending ? (
+            {uploadMutation.isPending || inspectMutation.isPending ? (
               <>
                 <Spinner className="w-4 h-4 mr-2" />
                 Processing...
@@ -1345,6 +1391,21 @@ export default function ReconcilePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {inspection && (
+        <ColumnMappingDialog
+          open={mappingOpen}
+          inspection={inspection}
+          defaultName={
+            accountsData?.find(
+              (a: any) => a.id.toString() === selectedAccountId
+            )?.bank_name || ''
+          }
+          saving={saveProfileMutation.isPending}
+          onCancel={() => setMappingOpen(false)}
+          onSave={(profile) => saveProfileMutation.mutate(profile)}
+        />
+      )}
     </div>
   );
 }

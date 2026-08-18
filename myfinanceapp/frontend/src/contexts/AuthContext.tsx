@@ -1,8 +1,14 @@
 // Authentication Context with JWT management
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { User, AuthToken } from '../types';
-import { authAPI } from '../services/api';
-import { jwtDecode } from 'jwt-decode';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  ReactNode,
+} from "react";
+import { User, AuthToken } from "../types";
+import { authAPI } from "../services/api";
+import { jwtDecode } from "jwt-decode";
 
 interface MfaPendingState {
   tempToken: string;
@@ -18,6 +24,8 @@ interface AuthContextType {
   cancelMfa: () => void;
   logout: () => void;
   isAuthenticated: boolean;
+  /** True while the account still owes a password change. */
+  mustChangePassword: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -25,7 +33,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
+    throw new Error("useAuth must be used within AuthProvider");
   }
   return context;
 };
@@ -41,8 +49,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   useEffect(() => {
     // Check if user is logged in on mount
-    const token = localStorage.getItem('access_token');
-    const storedUser = localStorage.getItem('user');
+    const token = localStorage.getItem("access_token");
+    const storedUser = localStorage.getItem("user");
 
     if (token && storedUser) {
       try {
@@ -55,20 +63,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         } else {
           // Access token expired — the interceptor will handle refresh on next API call
           // but if there's no refresh token either, clean up
-          const refreshToken = localStorage.getItem('refresh_token');
+          const refreshToken = localStorage.getItem("refresh_token");
           if (!refreshToken) {
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('user');
+            localStorage.removeItem("access_token");
+            localStorage.removeItem("user");
           } else {
             // Keep user logged in — interceptor will refresh on first API call
             setUser(JSON.parse(storedUser));
           }
         }
       } catch (error) {
-        console.error('Invalid token:', error);
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        localStorage.removeItem('user');
+        console.error("Invalid token:", error);
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("refresh_token");
+        localStorage.removeItem("user");
       }
     }
 
@@ -83,25 +91,28 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Check if MFA is required
       if (data.user.mfa_required) {
         // Store temp token and trigger MFA verification UI
-        setMfaPending({ tempToken: data.access_token, username: data.user.username });
+        setMfaPending({
+          tempToken: data.access_token,
+          username: data.user.username,
+        });
         return;
       }
 
       // Store tokens and user
-      localStorage.setItem('access_token', data.access_token);
+      localStorage.setItem("access_token", data.access_token);
       if (data.refresh_token) {
-        localStorage.setItem('refresh_token', data.refresh_token);
+        localStorage.setItem("refresh_token", data.refresh_token);
       }
-      localStorage.setItem('user', JSON.stringify(data.user));
+      localStorage.setItem("user", JSON.stringify(data.user));
       setUser(data.user);
     } catch (error: any) {
-      throw new Error(error.response?.data?.detail || 'Login failed');
+      throw new Error(error.response?.data?.detail || "Login failed");
     }
   };
 
   const verifyMfa = async (code: string) => {
     if (!mfaPending) {
-      throw new Error('No MFA verification pending');
+      throw new Error("No MFA verification pending");
     }
 
     try {
@@ -109,15 +120,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const data: AuthToken = response.data;
 
       // Store tokens and user
-      localStorage.setItem('access_token', data.access_token);
+      localStorage.setItem("access_token", data.access_token);
       if (data.refresh_token) {
-        localStorage.setItem('refresh_token', data.refresh_token);
+        localStorage.setItem("refresh_token", data.refresh_token);
       }
-      localStorage.setItem('user', JSON.stringify(data.user));
+      localStorage.setItem("user", JSON.stringify(data.user));
       setUser(data.user);
       setMfaPending(null);
     } catch (error: any) {
-      throw new Error(error.response?.data?.detail || 'Invalid MFA code');
+      throw new Error(error.response?.data?.detail || "Invalid MFA code");
     }
   };
 
@@ -126,9 +137,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const logout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    localStorage.removeItem('user');
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+    localStorage.removeItem("user");
     setUser(null);
     setMfaPending(null);
   };
@@ -142,6 +153,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     cancelMfa,
     logout,
     isAuthenticated: !!user,
+    mustChangePassword: !!user?.requires_password_change,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

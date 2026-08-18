@@ -71,3 +71,21 @@ def format_amount(amount: float, include_spaces: bool = True) -> str:
         formatted = f"{amount:.2f}".replace(".", ",")
 
     return formatted
+
+def normalise_recipient(value) -> str:
+    """Tidy a payee name for storage.
+
+    Collapses surrounding and repeated whitespace, then capitalises the first
+    letter and leaves the rest alone. Deliberately not Title Case: that turns
+    SNCF into Sncf and IKEA into Ikea, and bank exports are full of acronyms.
+
+    Matching is handled separately and case-insensitively, so "CARREFOUR" and
+    "Carrefour" are found by the same search even though they are stored as
+    typed.
+    """
+    if value is None:
+        return ""
+    text = " ".join(str(value).split())
+    if not text:
+        return ""
+    return text[0].upper() + text[1:]

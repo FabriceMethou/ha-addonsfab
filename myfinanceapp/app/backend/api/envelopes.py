@@ -8,16 +8,16 @@ from typing import Optional
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 
 class EnvelopeCreate(BaseModel):
     name: str
@@ -48,7 +48,7 @@ class EnvelopeTransaction(BaseModel):
     transaction_id: Optional[int] = None
 
 @router.get("/")
-async def get_envelopes(
+def get_envelopes(
     include_inactive: bool = False,
     current_user: User = Depends(get_current_user)
 ):
@@ -57,7 +57,7 @@ async def get_envelopes(
     return {"envelopes": envelopes}
 
 @router.post("/")
-async def create_envelope(envelope: EnvelopeCreate, current_user: User = Depends(get_current_user)):
+def create_envelope(envelope: EnvelopeCreate, current_user: User = Depends(get_current_user)):
     """Create new envelope"""
     envelope_data = {
         'name': envelope.name,
@@ -73,7 +73,7 @@ async def create_envelope(envelope: EnvelopeCreate, current_user: User = Depends
     return {"message": "Envelope created", "envelope_id": envelope_id}
 
 @router.put("/{envelope_id}/reactivate")
-async def reactivate_envelope(envelope_id: int, current_user: User = Depends(get_current_user)):
+def reactivate_envelope(envelope_id: int, current_user: User = Depends(get_current_user)):
     """Reactivate a deactivated envelope"""
     success = db.update_envelope(envelope_id, {'is_active': 1})
     if not success:
@@ -81,7 +81,7 @@ async def reactivate_envelope(envelope_id: int, current_user: User = Depends(get
     return {"message": "Envelope reactivated"}
 
 @router.put("/{envelope_id}")
-async def update_envelope(envelope_id: int, envelope: EnvelopeUpdate, current_user: User = Depends(get_current_user)):
+def update_envelope(envelope_id: int, envelope: EnvelopeUpdate, current_user: User = Depends(get_current_user)):
     """Update envelope"""
     success = db.update_envelope(envelope_id, envelope.dict(exclude_unset=True))
     if not success:
@@ -89,7 +89,7 @@ async def update_envelope(envelope_id: int, envelope: EnvelopeUpdate, current_us
     return {"message": "Envelope updated"}
 
 @router.delete("/{envelope_id}")
-async def delete_envelope(
+def delete_envelope(
     envelope_id: int,
     permanent: bool = False,
     current_user: User = Depends(get_current_user)
@@ -111,19 +111,28 @@ async def delete_envelope(
     return {"message": message}
 
 @router.post("/transactions")
-async def add_envelope_transaction(transaction: EnvelopeTransaction, current_user: User = Depends(get_current_user)):
+def add_envelope_transaction(transaction: EnvelopeTransaction, current_user: User = Depends(get_current_user)):
     """Add transaction to envelope with optional link to existing transaction"""
     # Check for over-allocation
     envelope = db.get_envelope(transaction.envelope_id)
     if not envelope:
         raise HTTPException(status_code=404, detail="Envelope not found")
 
-    warning = None
+    warnings = []
     if transaction.amount > 0:
         new_total = (envelope.get('current_amount', 0) or 0) + transaction.amount
         target = envelope.get('target_amount', 0) or 0
         if target > 0 and new_total > target:
-            warning = f"This allocation exceeds the target by {new_total - target:.2f}"
+            warnings.append(f"This allocation exceeds the target by {new_total - target:.2f}")
+
+        # Envelopes earmark money that stays on the account, so nothing stops you
+        # reserving more than the account holds — and then several envelopes each
+        # promise the same euro. Reserving ahead of money arriving is legitimate,
+        # so this warns rather than refuses.
+        over_allocation = db.check_envelope_allocation(
+            transaction.account_id, transaction.amount, transaction.envelope_id)
+        if over_allocation:
+            warnings.append(over_allocation)
 
     from datetime import datetime
     transaction_date = transaction.date if transaction.date else datetime.now().strftime('%Y-%m-%d')
@@ -137,12 +146,13 @@ async def add_envelope_transaction(transaction: EnvelopeTransaction, current_use
     }
     trans_id = db.add_envelope_transaction(transaction_data)
     result = {"message": "Transaction added", "transaction_id": trans_id}
-    if warning:
-        result["warning"] = warning
+    if warnings:
+        result["warnings"] = warnings
+        result["warning"] = " ".join(warnings)   # kept for existing callers
     return result
 
 @router.get("/{envelope_id}/transactions")
-async def get_envelope_transactions(envelope_id: int, current_user: User = Depends(get_current_user)):
+def get_envelope_transactions(envelope_id: int, current_user: User = Depends(get_current_user)):
     """Get transactions for specific envelope with linked transaction details"""
     transactions = db.get_envelope_transactions(envelope_id)
 
@@ -168,3 +178,16 @@ async def get_envelope_transactions(envelope_id: int, current_user: User = Depen
         mapped_transactions.append(mapped_trans)
 
     return {"transactions": mapped_transactions}
+
+
+@router.get("/allocations/by-account")
+def get_allocations_by_account(current_user: User = Depends(get_current_user)):
+    """Per account: what it holds, what envelopes have reserved, what is free."""
+    return {"accounts": db.get_envelope_allocations_by_account()}
+
+
+@router.get("/allocations/detail")
+def get_allocations_detail(account_id: Optional[int] = None,
+                           current_user: User = Depends(get_current_user)):
+    """Which envelope has reserved what, and on which account."""
+    return {"allocations": db.get_envelope_allocations_detail(account_id)}

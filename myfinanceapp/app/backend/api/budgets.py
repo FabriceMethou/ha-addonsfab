@@ -9,16 +9,16 @@ from datetime import datetime
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 
 # Pydantic models
 class BudgetCreate(BaseModel):
@@ -42,7 +42,7 @@ class BudgetUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 @router.get("/")
-async def get_budgets(
+def get_budgets(
     include_inactive: bool = False,
     current_user: User = Depends(get_current_user)
 ):
@@ -51,7 +51,7 @@ async def get_budgets(
     return {"budgets": budgets, "count": len(budgets)}
 
 @router.get("/{budget_id}")
-async def get_budget(
+def get_budget(
     budget_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -68,7 +68,7 @@ async def get_budget(
     return budget
 
 @router.post("/")
-async def create_budget(
+def create_budget(
     budget: BudgetCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -98,7 +98,7 @@ async def create_budget(
     }
 
 @router.put("/{budget_id}")
-async def update_budget(
+def update_budget(
     budget_id: int,
     budget: BudgetUpdate,
     current_user: User = Depends(get_current_user)
@@ -117,7 +117,7 @@ async def update_budget(
     return {"message": "Budget updated successfully"}
 
 @router.delete("/{budget_id}")
-async def delete_budget(
+def delete_budget(
     budget_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -133,7 +133,7 @@ async def delete_budget(
     return {"message": "Budget deleted successfully"}
 
 @router.get("/vs-actual/{year}/{month}")
-async def get_budget_vs_actual(
+def get_budget_vs_actual(
     year: int,
     month: int,
     current_user: User = Depends(get_current_user)

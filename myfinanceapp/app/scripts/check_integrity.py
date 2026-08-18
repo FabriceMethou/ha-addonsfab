@@ -60,6 +60,34 @@ def delete_orphans(conn, rows):
     return deleted
 
 
+def report_stale_historical_flags(db_path, fix):
+    """Transactions wrongly marked as predating their account."""
+    from database import FinanceDatabase
+
+    db = FinanceDatabase(db_path=db_path)
+    stale = db.find_stale_historical_flags()
+    if not stale:
+        print("Historical flags: none are stale.")
+        return 0
+
+    print(f"Historical flags: {len(stale)} transaction(s) marked historical but dated "
+          f"after their account opened:\n")
+    width = max(len(s['account_name']) for s in stale)
+    for row in stale:
+        print(f"  {row['account_name']:<{width}}  {row['transaction_date']}  "
+              f"{row['amount']:>10,.2f}  {(row['destinataire'] or '')[:24]}")
+    print("\n  These are skipped when the balance is updated but counted when it is\n"
+          "  rebuilt, which shows up as drift nothing explains.")
+
+    if not fix:
+        print("  Re-run with --fix to clear them, then recalculate the balances.")
+        return 1
+
+    cleared = db.clear_stale_historical_flags()
+    print(f"\n  Cleared {cleared} flag(s). Run scripts/recalculate_balances.py next.")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -79,6 +107,8 @@ def main():
     # the data can be internally inconsistent, and both matter before a deploy.
     drift_status = report_balance_drift(args.db)
     print()
+    flag_status = report_stale_historical_flags(args.db, args.fix)
+    print()
 
     conn = sqlite3.connect(args.db)
     try:
@@ -88,7 +118,7 @@ def main():
 
         if not rows:
             print("No referential integrity violations. Safe to enforce foreign keys.")
-            return drift_status
+            return drift_status or flag_status
 
         print(f"Found {len(rows)} violation(s):\n")
         print(describe(conn, rows))

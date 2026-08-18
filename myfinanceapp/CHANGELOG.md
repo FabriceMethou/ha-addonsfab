@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.1.0
+
+**Fixes that affect your data**
+- Transfers: changing a transfer's destination account left the mirror transaction attached to the *old* account while the money moved to the new one. Balances looked right until "Recalculate Balances" rebuilt them from the ledger and sent the amount back to the wrong account
+- Foreign key constraints are now enforced. They were declared in the schema from the very first version but SQLite ignored them, so deleting an account left its transactions orphaned and deleting a user left their MFA backup codes behind. Enforcing them uncovered three deletion-ordering bugs, now fixed
+- Transaction and investment writes are atomic. A failure part-way through an edit previously committed the half that had already run — in one case reversing an account's balance without applying the replacement, making the amount disappear
+- "Fix missing transfer transactions" no longer leaves the books inconsistent: it used to insert the missing row without updating any balance, adding a second drifting account for every one it repaired
+- Balance drift is now detectable. `scripts/check_integrity.py` reports any account whose stored balance disagrees with its own ledger, alongside referential integrity violations
+
+**Reports**
+- Multi-currency reports over past periods converted at *today's* exchange rate. Rates are now recorded with an effective date and conversions use the rate that applied on the transaction's own date
+- Transactions can be exported to CSV (`Date, Account, Payee, Description, Category, Subcategory, Amount, Currency, Tags, Confirmed`)
+
+**Performance and responsiveness**
+- The API no longer freezes while prices update. Every request used to run on a single thread, so a bulk price refresh — minutes of network calls — blocked the whole application. It now runs in the background with live progress
+- Startup is faster: the database schema was being created and migration-checked fifteen times on every launch, once per API module. Noticeable on Raspberry Pi
+
+**Security**
+- The add-on shipped a default JWT secret published in this repository, meaning anyone could forge an administrator session. A random secret is now generated on first start and kept across restarts
+- Email alert and WebDAV backup passwords can be set in the add-on configuration. They were previously only readable from environment variables the add-on had no way to set, so both features were configurable but inoperative
+- Disabling a user account now takes effect immediately instead of when their token expired
+- Backup downloads require an administrator, matching every other backup operation
+- The forced password change after a first login or an admin reset now actually happens
+- Login history records the client address and browser, which were always empty
+
+**Under the hood**
+- 172 automated tests, from none that could run
+- Runtime files (database, backups, trained model) all derive from one configured location instead of being written wherever the app happened to be started from
+
 ## 2.0.61
 - Transactions: fixed the **Total Income**, **Total Expenses** and **Net Change** cards showing figures that disagreed with the Dashboard. They were summed from the transactions *visible on the current page* (25/50/100 rows), so the totals changed every time you turned a page or switched page size. They now cover every transaction matching the active filters, regardless of pagination
 - Transactions: those same cards now convert foreign-currency amounts to your display currency instead of adding raw amounts together and labelling the result EUR — DKK and SEK transactions were previously counted at face value (e.g. 3,695 DKK added as 3,695 EUR instead of ~495 EUR)

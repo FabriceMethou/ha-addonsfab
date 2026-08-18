@@ -53,3 +53,4 @@ myfinanceapp/data/
 # OS / editor
 .DS_Store
 *.swp
+.coverage

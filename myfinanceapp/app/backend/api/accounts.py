@@ -9,16 +9,16 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 
 # Pydantic models
 class AccountCreate(BaseModel):
@@ -62,13 +62,13 @@ class BalanceValidationCreate(BaseModel):
     notes: Optional[str] = None
 
 @router.get("/")
-async def get_accounts(current_user: User = Depends(get_current_user)):
+def get_accounts(current_user: User = Depends(get_current_user)):
     """Get all accounts"""
     accounts = db.get_accounts()
     return {"accounts": accounts}
 
 @router.get("/{account_id}")
-async def get_account(account_id: int, current_user: User = Depends(get_current_user)):
+def get_account(account_id: int, current_user: User = Depends(get_current_user)):
     """Get specific account by ID"""
     account = db.get_account(account_id)
     if not account:
@@ -79,7 +79,7 @@ async def get_account(account_id: int, current_user: User = Depends(get_current_
     return account
 
 @router.post("/")
-async def create_account(
+def create_account(
     account: AccountCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -117,7 +117,7 @@ async def create_account(
     return {"message": "Account created successfully", "account_id": account_id}
 
 @router.put("/{account_id}")
-async def update_account(
+def update_account(
     account_id: int,
     account: AccountUpdate,
     current_user: User = Depends(get_current_user)
@@ -153,7 +153,7 @@ async def update_account(
     return {"message": "Account updated successfully"}
 
 @router.delete("/{account_id}")
-async def delete_account(
+def delete_account(
     account_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -169,13 +169,13 @@ async def delete_account(
 
 # Banks endpoints
 @router.get("/banks/all")
-async def get_banks(current_user: User = Depends(get_current_user)):
+def get_banks(current_user: User = Depends(get_current_user)):
     """Get all banks"""
     banks = db.get_banks()
     return {"banks": banks}
 
 @router.get("/banks/{bank_id}")
-async def get_bank(bank_id: int, current_user: User = Depends(get_current_user)):
+def get_bank(bank_id: int, current_user: User = Depends(get_current_user)):
     """Get specific bank by ID"""
     banks = db.get_banks()
     bank = next((b for b in banks if b['id'] == bank_id), None)
@@ -187,7 +187,7 @@ async def get_bank(bank_id: int, current_user: User = Depends(get_current_user))
     return bank
 
 @router.post("/banks/")
-async def create_bank(
+def create_bank(
     bank: BankCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -203,7 +203,7 @@ async def create_bank(
     return {"message": "Bank created successfully", "bank_id": bank_id}
 
 @router.put("/banks/{bank_id}")
-async def update_bank(
+def update_bank(
     bank_id: int,
     bank: BankUpdate,
     current_user: User = Depends(get_current_user)
@@ -219,7 +219,7 @@ async def update_bank(
     return {"message": "Bank updated successfully"}
 
 @router.delete("/banks/{bank_id}")
-async def delete_bank(
+def delete_bank(
     bank_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -235,13 +235,13 @@ async def delete_bank(
 
 # Owners endpoints
 @router.get("/owners/all")
-async def get_owners(current_user: User = Depends(get_current_user)):
+def get_owners(current_user: User = Depends(get_current_user)):
     """Get all owners"""
     owners = db.get_owners()
     return {"owners": owners}
 
 @router.get("/owners/{owner_id}")
-async def get_owner(owner_id: int, current_user: User = Depends(get_current_user)):
+def get_owner(owner_id: int, current_user: User = Depends(get_current_user)):
     """Get specific owner by ID"""
     owners = db.get_owners()
     owner = next((o for o in owners if o['id'] == owner_id), None)
@@ -253,7 +253,7 @@ async def get_owner(owner_id: int, current_user: User = Depends(get_current_user
     return owner
 
 @router.post("/owners/")
-async def create_owner(
+def create_owner(
     owner: OwnerCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -269,7 +269,7 @@ async def create_owner(
     return {"message": "Owner created successfully", "owner_id": owner_id}
 
 @router.put("/owners/{owner_id}")
-async def update_owner(
+def update_owner(
     owner_id: int,
     owner: OwnerUpdate,
     current_user: User = Depends(get_current_user)
@@ -285,7 +285,7 @@ async def update_owner(
     return {"message": "Owner updated successfully"}
 
 @router.delete("/owners/{owner_id}")
-async def delete_owner(
+def delete_owner(
     owner_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -300,7 +300,7 @@ async def delete_owner(
     return {"message": "Owner deleted successfully"}
 
 @router.get("/summary/balances")
-async def get_account_balances_summary(current_user: User = Depends(get_current_user)):
+def get_account_balances_summary(current_user: User = Depends(get_current_user)):
     """Get summary of account balances by owner in user's preferred currency"""
     # Get user's preferred display currency
     display_currency = db.get_preference('display_currency', 'EUR')
@@ -328,7 +328,7 @@ async def get_account_balances_summary(current_user: User = Depends(get_current_
 
 # Balance Validation endpoints
 @router.post("/validations/")
-async def create_balance_validation(
+def create_balance_validation(
     validation: BalanceValidationCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -363,15 +363,53 @@ async def create_balance_validation(
             detail="Failed to create balance validation"
         )
 
-    return {
+    response = {
         "message": "Balance validation created successfully",
         "validation_id": validation_id,
         "is_match": is_match,
-        "difference": difference
+        "difference": difference,
     }
 
+    if not is_match:
+        # A discrepancy used to be recorded and then forgotten. Hand back what
+        # can actually be done about it, and the period to compare, so the UI
+        # can open the reconciliation already filled in.
+        previous = db.get_balance_validations(validation.account_id, limit=2)
+        since = next((v['validation_date'] for v in previous
+                      if v['id'] != validation_id), None)
+        response["next_steps"] = {
+            "recalculate": f"/api/accounts/{validation.account_id}/recalculate",
+            "reconcile": {
+                "account_id": validation.account_id,
+                "start_date": since,
+                "end_date": validation.validation_date,
+            },
+            "hint": ("Rebuild the balance from the ledger, or compare this period "
+                     "against a bank statement to find the transaction behind the gap."),
+        }
+
+    return response
+
+
+@router.post("/{account_id}/recalculate")
+def recalculate_one_account(account_id: int, current_user: User = Depends(get_current_user)):
+    """Rebuild a single account's balance from its own transactions.
+
+    The global recalculation rewrites every account, which is heavy-handed when
+    one is off. For an investment account this re-prices the portfolio instead.
+    """
+    try:
+        result = db.recalculate_account_balance(account_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    result["message"] = (
+        "Balance already matched the ledger" if result["adjustment"] == 0
+        else f"Balance corrected by {result['adjustment']:+.2f}")
+    return result
+
 @router.get("/{account_id}/validations")
-async def get_account_validations(
+def get_account_validations(
     account_id: int,
     limit: int = 10,
     current_user: User = Depends(get_current_user)
@@ -388,7 +426,7 @@ async def get_account_validations(
     return {"validations": validations}
 
 @router.get("/{account_id}/validations/latest")
-async def get_latest_validation(
+def get_latest_validation(
     account_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -407,7 +445,7 @@ async def get_latest_validation(
     return {"validation": validation}
 
 @router.post("/recalculate-balances")
-async def recalculate_all_balances(
+def recalculate_all_balances(
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -435,7 +473,7 @@ async def recalculate_all_balances(
         )
 
 @router.post("/fix-transfer-flags")
-async def fix_transfer_flags(
+def fix_transfer_flags(
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -444,20 +482,13 @@ async def fix_transfer_flags(
     This fixes transfers created before the auto-detection was implemented.
     Transfers should have is_transfer=True when they have a transfer_account_id.
     """
-    conn = db._get_connection()
-    cursor = conn.cursor()
-
-    # Update all transactions that have transfer_account_id but is_transfer=False
-    cursor.execute("""
-        UPDATE transactions
-        SET is_transfer = 1
-        WHERE transfer_account_id IS NOT NULL
-        AND is_transfer = 0
-    """)
-
-    updated_count = cursor.rowcount
-    conn.commit()
-    conn.close()
+    with db.db_connection(commit=True) as conn:
+        updated_count = conn.execute("""
+            UPDATE transactions
+            SET is_transfer = 1
+            WHERE transfer_account_id IS NOT NULL
+            AND is_transfer = 0
+        """).rowcount
 
     return {
         "message": f"Updated {updated_count} transfer transactions to set is_transfer=True",
@@ -465,7 +496,7 @@ async def fix_transfer_flags(
     }
 
 @router.post("/fix-missing-transfer-transactions")
-async def fix_missing_transfer_transactions(
+def fix_missing_transfer_transactions(
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -477,57 +508,77 @@ async def fix_missing_transfer_transactions(
 
     This endpoint finds transfers that only exist on one side and creates the missing record.
     """
-    conn = db._get_connection()
-    cursor = conn.cursor()
+    # Reads, the loop and every insert in one transaction: a failure
+    # part-way through now rolls the whole repair back instead of
+    # committing half of it.
+    with db.db_connection(commit=True) as conn:
+        cursor = conn.cursor()
 
-    # Find all transfer transactions
-    cursor.execute("""
-        SELECT t.id, t.account_id, t.transfer_account_id, t.amount, t.transaction_date,
-               t.description, t.destinataire, t.type_id, t.subtype_id, t.currency,
-               t.confirmed, t.is_historical
-        FROM transactions t
-        WHERE t.is_transfer = 1 AND t.transfer_account_id IS NOT NULL
-    """)
-    transfer_transactions = cursor.fetchall()
-
-    fixed_count = 0
-    for trans in transfer_transactions:
-        # Check if corresponding transaction exists on the other account
+        # Find all transfer transactions
         cursor.execute("""
-            SELECT id FROM transactions
-            WHERE account_id = ? AND transfer_account_id = ? AND transaction_date = ? AND ABS(ABS(amount) - ABS(?)) < 0.01
-        """, (trans['transfer_account_id'], trans['account_id'], trans['transaction_date'], trans['amount']))
+            SELECT t.id, t.account_id, t.transfer_account_id, t.amount, t.transaction_date,
+                   t.description, t.destinataire, t.type_id, t.subtype_id, t.currency,
+                   t.confirmed, t.is_historical
+            FROM transactions t
+            WHERE t.is_transfer = 1 AND t.transfer_account_id IS NOT NULL
+        """)
+        transfer_transactions = cursor.fetchall()
 
-        corresponding = cursor.fetchone()
-
-        if not corresponding:
-            # Missing! Create the corresponding transaction
-            # Amount should be positive for the receiving account
-            corresponding_amount = abs(trans['amount'])
-
+        fixed_count = 0
+        for trans in transfer_transactions:
+            # Check if corresponding transaction exists on the other account
             cursor.execute("""
-                INSERT INTO transactions
-                (account_id, transaction_date, amount, currency, description, destinataire,
-                 type_id, subtype_id, is_transfer, transfer_account_id, confirmed, is_historical)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-            """, (
-                trans['transfer_account_id'],  # The OTHER account
-                trans['transaction_date'],
-                corresponding_amount,
-                trans['currency'],
-                trans['description'] or '',
-                trans['destinataire'] or '',
-                trans['type_id'],
-                trans['subtype_id'],
-                trans['account_id'],  # Transfer FROM the original account
-                trans['confirmed'],
-                trans['is_historical']
-            ))
+                SELECT id FROM transactions
+                WHERE account_id = ? AND transfer_account_id = ? AND transaction_date = ? AND ABS(ABS(amount) - ABS(?)) < 0.01
+            """, (trans['transfer_account_id'], trans['account_id'], trans['transaction_date'], trans['amount']))
 
-            fixed_count += 1
+            corresponding = cursor.fetchone()
 
-    conn.commit()
-    conn.close()
+            if not corresponding:
+                # Missing! Create the corresponding transaction
+                # Amount should be positive for the receiving account
+                corresponding_amount = abs(trans['amount'])
+
+                cursor.execute("""
+                    INSERT INTO transactions
+                    (account_id, transaction_date, amount, currency, description, destinataire,
+                     type_id, subtype_id, is_transfer, transfer_account_id, confirmed, is_historical)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                """, (
+                    trans['transfer_account_id'],  # The OTHER account
+                    trans['transaction_date'],
+                    corresponding_amount,
+                    trans['currency'],
+                    trans['description'] or '',
+                    trans['destinataire'] or '',
+                    trans['type_id'],
+                    trans['subtype_id'],
+                    trans['account_id'],  # Transfer FROM the original account
+                    trans['confirmed'],
+                    trans['is_historical']
+                ))
+
+                # Link the two rows together. recalculate_all_balances() only
+                # skips its legacy single-entry path when linked_transfer_id is
+                # set; leaving them unlinked made each row credit the other
+                # account on top of its own, doubling the transfer.
+                mirror_id = cursor.lastrowid
+                cursor.execute(
+                    "UPDATE transactions SET linked_transfer_id = ? WHERE id = ?",
+                    (mirror_id, trans['id']))
+                cursor.execute(
+                    "UPDATE transactions SET linked_transfer_id = ? WHERE id = ?",
+                    (trans['id'], mirror_id))
+
+                fixed_count += 1
+
+    # The inserts above write straight to the transactions table, so the
+    # accounts.balance counters know nothing about them. Rebuilding from the
+    # ledger is the only way to leave the books consistent — without this the
+    # repair added a second drifting account for every one it fixed.
+    if fixed_count:
+        db.recalculate_all_balances()
+
 
     return {
         "message": f"Fixed {fixed_count} missing transfer transactions",
@@ -535,27 +586,23 @@ async def fix_missing_transfer_transactions(
     }
 
 @router.get("/search/{bank_name}")
-async def search_accounts_by_bank(
+def search_accounts_by_bank(
     bank_name: str,
     current_user: User = Depends(get_current_user)
 ):
     """Search accounts by bank name."""
-    conn = db._get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT a.id, a.name, b.name as bank_name, a.account_type, a.balance, a.currency
-        FROM accounts a
-        LEFT JOIN banks b ON a.bank_id = b.id
-        WHERE LOWER(b.name) LIKE LOWER(?)
-    """, (f"%{bank_name}%",))
-    accounts = cursor.fetchall()
-    conn.close()
+    with db.db_connection(commit=False) as conn:
+        accounts = conn.execute("""
+            SELECT a.id, a.name, b.name as bank_name, a.account_type, a.balance, a.currency
+            FROM accounts a
+            LEFT JOIN banks b ON a.bank_id = b.id
+            WHERE LOWER(b.name) LIKE LOWER(?)
+        """, (f"%{bank_name}%",)).fetchall()
 
     return {"accounts": [dict(a) for a in accounts]}
 
 @router.get("/{account_id}/investigate")
-async def investigate_account(
+def investigate_account(
     account_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -563,38 +610,31 @@ async def investigate_account(
     Investigate account balance discrepancies.
     Returns detailed information about the account and all its transactions.
     """
-    conn = db._get_connection()
-    cursor = conn.cursor()
+    # Both reads in one connection, closed on every path — including the 404
+    # below, which previously relied on a manual close before raising.
+    with db.db_connection(commit=False) as conn:
+        account = conn.execute("""
+            SELECT a.*, b.name as bank_name, o.name as owner_name
+            FROM accounts a
+            LEFT JOIN banks b ON a.bank_id = b.id
+            LEFT JOIN owners o ON a.owner_id = o.id
+            WHERE a.id = ?
+        """, (account_id,)).fetchone()
 
-    # Get account details
-    cursor.execute("""
-        SELECT a.*, b.name as bank_name, o.name as owner_name
-        FROM accounts a
-        LEFT JOIN banks b ON a.bank_id = b.id
-        LEFT JOIN owners o ON a.owner_id = o.id
-        WHERE a.id = ?
-    """, (account_id,))
-    account = cursor.fetchone()
+        transactions = conn.execute("""
+            SELECT t.id, t.transaction_date, t.amount, t.description, t.destinataire,
+                   tt.name as type_name, ts.name as subtype_name, tt.category,
+                   t.confirmed, t.is_historical, t.is_transfer, t.transfer_account_id,
+                   t.created_at
+            FROM transactions t
+            LEFT JOIN transaction_types tt ON t.type_id = tt.id
+            LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+            WHERE t.account_id = ?
+            ORDER BY t.transaction_date ASC, t.created_at ASC
+        """, (account_id,)).fetchall() if account else []
 
     if not account:
-        conn.close()
         raise HTTPException(status_code=404, detail="Account not found")
-
-    # Get all transactions for this account
-    cursor.execute("""
-        SELECT t.id, t.transaction_date, t.amount, t.description, t.destinataire,
-               tt.name as type_name, ts.name as subtype_name, tt.category,
-               t.confirmed, t.is_historical, t.is_transfer, t.transfer_account_id,
-               t.created_at
-        FROM transactions t
-        LEFT JOIN transaction_types tt ON t.type_id = tt.id
-        LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
-        WHERE t.account_id = ?
-        ORDER BY t.transaction_date ASC, t.created_at ASC
-    """, (account_id,))
-    transactions = cursor.fetchall()
-
-    conn.close()
 
     # Calculate expected balance
     opening_balance = account['opening_balance'] if account['opening_balance'] is not None else 0

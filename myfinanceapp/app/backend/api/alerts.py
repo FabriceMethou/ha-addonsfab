@@ -9,18 +9,16 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from alerts import AlertManager
 from api.auth import get_current_user, User
-from database import FinanceDatabase
+from deps import lazy_db
 
 router = APIRouter()
 
 # Initialize AlertManager
 alert_manager = AlertManager()
 
-# Get database instance for alert checks
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 
 class EmailSettings(BaseModel):
     smtp_server: str
@@ -39,7 +37,7 @@ class TestEmailRequest(BaseModel):
     to_email: str
 
 @router.get("/config")
-async def get_alert_config(current_user: User = Depends(get_current_user)):
+def get_alert_config(current_user: User = Depends(get_current_user)):
     """Get current alert configuration"""
     return {
         "email": {
@@ -55,7 +53,7 @@ async def get_alert_config(current_user: User = Depends(get_current_user)):
     }
 
 @router.put("/email")
-async def update_email_settings(
+def update_email_settings(
     settings: EmailSettings,
     current_user: User = Depends(get_current_user)
 ):
@@ -74,7 +72,7 @@ async def update_email_settings(
         raise HTTPException(status_code=400, detail=f"Failed to update settings: {str(e)}")
 
 @router.put("/thresholds")
-async def update_thresholds(
+def update_thresholds(
     thresholds: ThresholdSettings,
     current_user: User = Depends(get_current_user)
 ):
@@ -90,7 +88,7 @@ async def update_thresholds(
         raise HTTPException(status_code=400, detail=f"Failed to update thresholds: {str(e)}")
 
 @router.post("/test-email")
-async def send_test_email(
+def send_test_email(
     request: TestEmailRequest,
     current_user: User = Depends(get_current_user)
 ):
@@ -116,7 +114,7 @@ async def send_test_email(
         raise HTTPException(status_code=400, detail=f"Failed to send test email: {str(e)}")
 
 @router.get("/history")
-async def get_alert_history(
+def get_alert_history(
     limit: int = 20,
     current_user: User = Depends(get_current_user)
 ):
@@ -125,14 +123,14 @@ async def get_alert_history(
     return {"history": history}
 
 @router.post("/disable-email")
-async def disable_email_notifications(current_user: User = Depends(get_current_user)):
+def disable_email_notifications(current_user: User = Depends(get_current_user)):
     """Disable email notifications"""
     alert_manager.config['email']['enabled'] = False
     alert_manager.save_config()
     return {"message": "Email notifications disabled"}
 
 @router.post("/check")
-async def run_alert_checks(current_user: User = Depends(get_current_user)):
+def run_alert_checks(current_user: User = Depends(get_current_user)):
     """Manually trigger budget and daily spending alert checks."""
     if not alert_manager.config.get('email', {}).get('enabled', False):
         raise HTTPException(

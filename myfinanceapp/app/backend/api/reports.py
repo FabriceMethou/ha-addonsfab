@@ -8,17 +8,17 @@ from dateutil.relativedelta import relativedelta
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 from predictions import SpendingPredictor
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 
 UNCATEGORIZED = 'Uncategorized'
 NO_SUBCATEGORY = 'Other'
@@ -93,7 +93,7 @@ def _format_breakdown(breakdown: Dict[str, Any], amount_key: str = 'total') -> L
 
 
 @router.get("/net-worth")
-async def net_worth(
+def net_worth(
     owner_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
@@ -131,7 +131,7 @@ async def net_worth(
     }
 
 @router.get("/spending-by-category")
-async def spending_by_category(
+def spending_by_category(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     owner_id: Optional[int] = None,
@@ -167,7 +167,7 @@ async def spending_by_category(
     }
 
 @router.get("/income-vs-expenses")
-async def income_vs_expenses(
+def income_vs_expenses(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     owner_id: Optional[int] = None,
@@ -218,7 +218,7 @@ async def income_vs_expenses(
 
 
 @router.get("/spending-prediction")
-async def spending_prediction(
+def spending_prediction(
     months_ahead: int = 1,
     current_user: User = Depends(get_current_user)
 ):
@@ -259,7 +259,7 @@ async def spending_prediction(
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
 @router.get("/net-worth/trend")
-async def net_worth_trend(
+def net_worth_trend(
     months: int = 12,
     owner_id: Optional[int] = None,
     start_date: Optional[str] = None,
@@ -318,7 +318,7 @@ async def net_worth_trend(
         raise HTTPException(status_code=500, detail=f"Trend calculation failed: {str(e)}")
 
 @router.get("/monthly-summary")
-async def monthly_summary(
+def monthly_summary(
     year: Optional[int] = None,
     month: Optional[int] = None,
     start_date: Optional[str] = None,
@@ -396,7 +396,7 @@ async def monthly_summary(
         raise HTTPException(status_code=500, detail=f"Summary calculation failed: {str(e)}")
 
 @router.get("/tags/{tag}")
-async def tag_report(
+def tag_report(
     tag: str,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -505,7 +505,7 @@ async def tag_report(
         raise HTTPException(status_code=500, detail=f"Tag report failed: {str(e)}")
 
 @router.get("/spending-trends")
-async def spending_trends(
+def spending_trends(
     months: int = 6,
     category: Optional[str] = None,
     owner_id: Optional[int] = None,
@@ -621,7 +621,7 @@ async def spending_trends(
         raise HTTPException(status_code=500, detail=f"Spending trends failed: {str(e)}")
 
 @router.get("/category-breakdown")
-async def category_breakdown(
+def category_breakdown(
     type_id: int,
     months: int = 6,
     owner_id: Optional[int] = None,
@@ -741,7 +741,7 @@ async def category_breakdown(
         raise HTTPException(status_code=500, detail=f"Category breakdown failed: {str(e)}")
 
 @router.get("/year-by-year")
-async def year_by_year_stats(
+def year_by_year_stats(
     year: Optional[int] = None,
     month: Optional[int] = None,
     start_date: Optional[str] = None,

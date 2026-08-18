@@ -8,16 +8,16 @@ from typing import Optional
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 
 class WorkProfileCreate(BaseModel):
     owner_id: int
@@ -33,7 +33,7 @@ class WorkProfileUpdate(BaseModel):
     tax_rate: Optional[float] = Field(default=None, ge=0, le=100, description="Tax rate percentage (0-100)")
 
 @router.get("/")
-async def get_all_work_profiles(
+def get_all_work_profiles(
     display_currency: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
@@ -67,7 +67,7 @@ async def get_all_work_profiles(
     return {"work_profiles": profiles, "display_currency": display_currency}
 
 @router.get("/{owner_id}")
-async def get_work_profile(owner_id: int, current_user: User = Depends(get_current_user)):
+def get_work_profile(owner_id: int, current_user: User = Depends(get_current_user)):
     """Get work profile for specific owner"""
     profile = db.get_work_profile(owner_id)
 
@@ -83,7 +83,7 @@ async def get_work_profile(owner_id: int, current_user: User = Depends(get_curre
     return profile
 
 @router.post("/")
-async def create_or_update_work_profile(
+def create_or_update_work_profile(
     profile: WorkProfileCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -101,7 +101,7 @@ async def create_or_update_work_profile(
     return {"message": "Work profile saved successfully", "owner_id": owner_id}
 
 @router.put("/{owner_id}")
-async def update_work_profile(
+def update_work_profile(
     owner_id: int,
     profile: WorkProfileUpdate,
     current_user: User = Depends(get_current_user)
@@ -127,7 +127,7 @@ async def update_work_profile(
     return {"message": "Work profile updated successfully"}
 
 @router.delete("/{owner_id}")
-async def delete_work_profile(owner_id: int, current_user: User = Depends(get_current_user)):
+def delete_work_profile(owner_id: int, current_user: User = Depends(get_current_user)):
     """Delete work profile"""
     success = db.delete_work_profile(owner_id)
 
@@ -137,7 +137,7 @@ async def delete_work_profile(owner_id: int, current_user: User = Depends(get_cu
     return {"message": "Work profile deleted successfully"}
 
 @router.post("/calculate")
-async def calculate_work_hours(
+def calculate_work_hours(
     amount: float,
     owner_id: int,
     amount_currency: Optional[str] = None,

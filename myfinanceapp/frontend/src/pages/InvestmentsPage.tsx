@@ -1,5 +1,5 @@
 // Investments Page - Portfolio Tracking and Real-Time Prices
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import PageHeader from "../components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "../contexts/ToastContext";
@@ -545,54 +545,85 @@ export default function InvestmentsPage() {
     failedSymbols?: string[];
   } | null>(null);
 
-  // Update all prices mutation
+  // Update all prices — the backend now runs this on a worker thread and we
+  // poll for progress, instead of holding a request open for several minutes.
+  const [priceUpdateRunning, setPriceUpdateRunning] = useState(false);
+  const [priceUpdateProgress, setPriceUpdateProgress] = useState<{
+    processed: number;
+    total: number;
+  } | null>(null);
+
+  const { data: priceUpdateStatus } = useQuery({
+    queryKey: ["price-update-status"],
+    queryFn: () => investmentsAPI.getPriceUpdateStatus().then((r) => r.data),
+    // Only poll while a run is in flight.
+    refetchInterval: priceUpdateRunning ? 1500 : false,
+    enabled: priceUpdateRunning,
+  });
+
+  useEffect(() => {
+    if (!priceUpdateStatus || !priceUpdateRunning) return;
+
+    setPriceUpdateProgress({
+      processed: priceUpdateStatus.processed ?? 0,
+      total: priceUpdateStatus.total ?? 0,
+    });
+
+    if (priceUpdateStatus.running) return;
+
+    // Finished — settle the UI and refresh the figures.
+    setPriceUpdateRunning(false);
+    setPriceUpdateProgress(null);
+    queryClient.invalidateQueries({ queryKey: ["investments-holdings"] });
+    queryClient.invalidateQueries({ queryKey: ["investments-summary"] });
+
+    const failed = priceUpdateStatus.failed ?? [];
+    const skipped = priceUpdateStatus.skipped ?? [];
+    setLastUpdateResult({
+      updated: priceUpdateStatus.updated_count ?? 0,
+      skipped: skipped.length,
+      failed: failed.length,
+      failedSymbols: failed.map((f: any) => f.symbol || f),
+    });
+
+    if (priceUpdateStatus.error) {
+      toast.error(`Price update stopped: ${priceUpdateStatus.error}`);
+    } else {
+      let message = `Updated ${priceUpdateStatus.updated_count} holding${
+        priceUpdateStatus.updated_count !== 1 ? "s" : ""
+      }`;
+      if (skipped.length) message += `, ${skipped.length} skipped`;
+      if (failed.length) message += `, ${failed.length} failed`;
+      toast.success(message);
+    }
+
+    setTimeout(() => setLastUpdateResult(null), 10000);
+  }, [priceUpdateStatus, priceUpdateRunning, queryClient, toast]);
+
   const updateAllPricesMutation = useMutation({
     mutationFn: () => investmentsAPI.updateAllPrices(),
     onSuccess: (response) => {
-      queryClient.invalidateQueries({ queryKey: ["investments-holdings"] });
-      queryClient.invalidateQueries({ queryKey: ["investments-summary"] });
       const data = response.data;
-
-      // Store result for UI display
-      setLastUpdateResult({
-        updated: data.updated_count || 0,
-        skipped: data.skipped_count || 0,
-        failed: data.failed?.length || 0,
-        failedSymbols: data.failed?.map((f: any) => f.symbol || f) || [],
+      if (data.status === "idle") {
+        toast.success("No holdings to update");
+        return;
+      }
+      if (data.status === "already_running") {
+        toast.success("A price update is already running");
+      }
+      setPriceUpdateRunning(true);
+      setPriceUpdateProgress({
+        processed: data.processed ?? 0,
+        total: data.total ?? 0,
       });
-
-      // Show success message with details
-      let message = `Updated ${data.updated_count} holding${data.updated_count !== 1 ? "s" : ""}`;
-      if (data.skipped_count && data.skipped_count > 0) {
-        message += `, ${data.skipped_count} skipped`;
-      }
-      if (data.failed && data.failed.length > 0) {
-        message += `, ${data.failed.length} failed`;
-      }
-      toast.success(message);
-
-      // Clear result after 10 seconds
-      setTimeout(() => setLastUpdateResult(null), 10000);
     },
     onError: (error: any) => {
-      console.error("Failed to update prices:", error);
-      setLastUpdateResult(null);
-
-      // Handle rate limiting specifically
-      const status = error.response?.status;
+      console.error("Failed to start price update:", error);
+      setPriceUpdateRunning(false);
+      setPriceUpdateProgress(null);
       const errorMessage =
         error.response?.data?.detail || error.message || "Unknown error";
-
-      if (status === 429) {
-        // Rate limited - extract retry time if available
-        const retryAfter = error.response?.headers?.["retry-after"];
-        const retryTime = retryAfter ? parseInt(retryAfter) : 60;
-        toast.error(
-          `Rate limited by Yahoo Finance. Please wait ${retryTime} seconds before trying again.`,
-        );
-      } else {
-        toast.error(`Failed to update prices: ${errorMessage}`);
-      }
+      toast.error(`Failed to start price update: ${errorMessage}`);
     },
   });
 
@@ -835,7 +866,7 @@ export default function InvestmentsPage() {
       {/* Action Bar */}
       <div className="flex flex-wrap gap-2 justify-end items-center">
         {/* Update result summary */}
-        {lastUpdateResult && !updateAllPricesMutation.isPending && (
+        {lastUpdateResult && !priceUpdateRunning && (
           <div className="text-sm text-foreground-muted flex items-center gap-2">
             <span className="text-success">
               {lastUpdateResult.updated} updated
@@ -863,7 +894,9 @@ export default function InvestmentsPage() {
             updateAllPricesMutation.mutate();
           }}
           disabled={
-            updateAllPricesMutation.isPending || autoUpdateableCount === 0
+            priceUpdateRunning ||
+            updateAllPricesMutation.isPending ||
+            autoUpdateableCount === 0
           }
           title={
             autoUpdateableCount === 0
@@ -872,12 +905,18 @@ export default function InvestmentsPage() {
           }
         >
           <RefreshCw
-            className={`h-4 w-4 mr-2 ${updateAllPricesMutation.isPending ? "animate-spin" : ""}`}
+            className={`h-4 w-4 mr-2 ${priceUpdateRunning ? "animate-spin" : ""}`}
           />
-          {updateAllPricesMutation.isPending ? (
+          {priceUpdateRunning ? (
             <>
-              Updating {autoUpdateableCount} price
-              {autoUpdateableCount !== 1 ? "s" : ""}...
+              {priceUpdateProgress && priceUpdateProgress.total > 0 ? (
+                <>
+                  Updating {priceUpdateProgress.processed} of{" "}
+                  {priceUpdateProgress.total}...
+                </>
+              ) : (
+                <>Starting...</>
+              )}
             </>
           ) : (
             <>

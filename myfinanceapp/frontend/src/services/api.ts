@@ -237,6 +237,13 @@ export const currenciesAPI = {
     api.put(`/api/currencies/${code}`, data),
   delete: (code: string) => api.delete(`/api/currencies/${code}`),
   getAccountTypes: () => api.get("/api/currencies/account-types/list"),
+  getRateHistory: (code: string) =>
+    api.get(`/api/currencies/${code}/rate-history`),
+  recordRate: (code: string, rateToEur: number, effectiveDate?: string) =>
+    api.post(`/api/currencies/${code}/rate-history`, {
+      rate_to_eur: rateToEur,
+      effective_date: effectiveDate,
+    }),
 };
 
 // Accounts API
@@ -299,12 +306,21 @@ export const transactionsAPI = {
     api.get("/api/transactions/stats/summary-by-owner", { params }),
   autoCategorize: (recipient: string, description?: string) =>
     api.post("/api/transactions/auto-categorize", { recipient, description }),
-  getPending: () => api.get("/api/transactions/pending/all"),
-  confirm: (id: number) => api.post(`/api/transactions/${id}/confirm`),
-  reject: (id: number) => api.delete(`/api/transactions/${id}/reject`),
   getAllTags: () => api.get("/api/transactions/tags/all"),
   getAllRecipients: () => api.get("/api/transactions/recipients/all"),
+  /** Every payee as stored, with counts — case variants listed separately. */
+  getRecipientsForManagement: (limit = 500) =>
+    api.get("/api/transactions/recipients/manage", { params: { limit } }),
+  /** Without confirm this only reports what would change. */
+  renameRecipient: (oldName: string, newName: string, confirm = false) =>
+    api.post("/api/transactions/recipients/rename", {
+      old_name: oldName,
+      new_name: newName,
+      confirm,
+    }),
   getCategorizerStatus: () => api.get("/api/transactions/categorizer/status"),
+  exportCsv: (params?: Record<string, unknown>) =>
+    api.get("/api/transactions/export/csv", { params, responseType: "blob" }),
   trainCategorizer: () => api.post("/api/transactions/train-categorizer"),
 };
 
@@ -354,6 +370,9 @@ export const debtsAPI = {
   getPayments: (id: number) => api.get(`/api/debts/${id}/payments`),
   addPayment: (data: Record<string, unknown>) =>
     api.post("/api/debts/payments", data),
+  /** Removes both ledger rows and gives the debt its balance back. */
+  deletePayment: (paymentId: number) =>
+    api.delete(`/api/debts/payments/${paymentId}`),
   getSchedule: (id: number) => api.get(`/api/debts/${id}/schedule`),
   getPayoff: (id: number) => api.get(`/api/debts/${id}/payoff`),
 };
@@ -396,6 +415,8 @@ export const investmentsAPI = {
     api.post(`/api/investments/holdings/${holdingId}/update-price`),
   updateAllPrices: () =>
     api.post("/api/investments/holdings/update-all-prices"),
+  getPriceUpdateStatus: () =>
+    api.get("/api/investments/holdings/price-update-status"),
   fixDividendTotals: () => api.post("/api/investments/fix-dividend-totals"),
 };
 
@@ -531,15 +552,38 @@ export const reconciliationAPI = {
     startDate: string,
     endDate: string,
     file: File,
+    profileId?: number,
   ) => {
     const formData = new FormData();
     formData.append("file", file);
+    const profile = profileId ? `&profile_id=${profileId}` : "";
     return api.post(
-      `/api/reconciliation/upload?account_id=${accountId}&start_date=${startDate}&end_date=${endDate}`,
+      `/api/reconciliation/upload?account_id=${accountId}&start_date=${startDate}&end_date=${endDate}${profile}`,
       formData,
       { headers: { "Content-Type": "multipart/form-data" } },
     );
   },
+  /** Read a CSV's columns without importing, and find the profile that fits. */
+  inspect: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return api.post("/api/reconciliation/inspect", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+  getProfiles: () => api.get("/api/reconciliation/profiles"),
+  saveProfile: (data: {
+    name: string;
+    headers: string[];
+    column_map: Record<string, string>;
+    amount_format?: string;
+    date_format?: string | null;
+    invert_amount?: boolean;
+    row_filter?: Record<string, string[]> | null;
+  }) => api.post("/api/reconciliation/profiles", data),
+  deleteProfile: (id: number) =>
+    api.delete(`/api/reconciliation/profiles/${id}`),
+
   flagTransaction: (transactionId: number) =>
     api.post(`/api/reconciliation/flag/${transactionId}`),
   complete: (data: {

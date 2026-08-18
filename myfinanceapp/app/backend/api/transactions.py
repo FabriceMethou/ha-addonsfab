@@ -10,18 +10,20 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 from categorizer import TransactionCategorizer
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
-CATEGORIZER_MODEL_PATH = os.path.join(PROJECT_ROOT, "data", "categorizer_model.pkl")
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
+# Same root as everything else, so the trained model follows DATA_DIR.
+import paths
+CATEGORIZER_MODEL_PATH = str(paths.MODEL_PATH)
 categorizer = TransactionCategorizer(model_path=CATEGORIZER_MODEL_PATH)
 
 import threading
@@ -99,7 +101,7 @@ class AutoCategorizeRequest(BaseModel):
     description: Optional[str] = None  # fallback text context (not used for lookup currently)
 
 @router.get("/")
-async def get_transactions(
+def get_transactions(
     account_id: Optional[int] = None,
     owner_id: Optional[int] = None,
     start_date: Optional[str] = None,
@@ -150,7 +152,7 @@ async def get_transactions(
     return {"transactions": transactions, "count": len(transactions), "total": total}
 
 @router.get("/{transaction_id}")
-async def get_transaction(
+def get_transaction(
     transaction_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -169,7 +171,7 @@ async def get_transaction(
     return transaction
 
 @router.post("/")
-async def create_transaction(
+def create_transaction(
     transaction: TransactionCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -352,7 +354,7 @@ async def create_transaction(
         )
 
 @router.post("/bulk")
-async def create_transactions_bulk(
+def create_transactions_bulk(
     transactions: List[TransactionCreate],
     current_user: User = Depends(get_current_user)
 ):
@@ -457,7 +459,7 @@ async def create_transactions_bulk(
     }
 
 @router.put("/{transaction_id}")
-async def update_transaction(
+def update_transaction(
     transaction_id: int,
     transaction: TransactionUpdate,
     current_user: User = Depends(get_current_user)
@@ -478,11 +480,9 @@ async def update_transaction(
     type_id = update_data.get('type_id', existing.get('type_id'))
 
     # Get category from type_id to determine amount sign
-    conn = db._get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT category FROM transaction_types WHERE id = ?", (type_id,))
-    result = cursor.fetchone()
-    conn.close()
+    with db.db_connection(commit=False) as conn:
+        result = conn.execute(
+            "SELECT category FROM transaction_types WHERE id = ?", (type_id,)).fetchone()
 
     if not result:
         raise HTTPException(
@@ -528,11 +528,10 @@ async def update_transaction(
             # Use the new transfer_account_id if provided, otherwise existing
             transfer_account_id = update_data.get('transfer_account_id', existing.get('transfer_account_id'))
             if transfer_account_id:
-                conn = db._get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM accounts WHERE id = ?", (transfer_account_id,))
-                account_result = cursor.fetchone()
-                conn.close()
+                with db.db_connection(commit=False) as conn:
+                    account_result = conn.execute(
+                        "SELECT name FROM accounts WHERE id = ?",
+                        (transfer_account_id,)).fetchone()
                 if account_result:
                     update_data['destinataire'] = account_result['name']
         elif 'description' in update_data and update_data['description']:
@@ -550,7 +549,7 @@ async def update_transaction(
     return {"message": "Transaction updated successfully"}
 
 @router.delete("/{transaction_id}")
-async def delete_transaction(
+def delete_transaction(
     transaction_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -565,7 +564,7 @@ async def delete_transaction(
     return {"message": "Transaction deleted successfully"}
 
 @router.post("/search")
-async def search_transactions(
+def search_transactions(
     filter_data: TransactionFilter,
     current_user: User = Depends(get_current_user)
 ):
@@ -589,7 +588,7 @@ async def search_transactions(
     return {"transactions": transactions, "count": len(transactions)}
 
 @router.get("/stats/summary")
-async def get_transaction_summary(
+def get_transaction_summary(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     account_id: Optional[int] = None,
@@ -657,7 +656,7 @@ async def get_transaction_summary(
     }
 
 @router.get("/stats/summary-by-owner")
-async def get_transaction_summary_by_owner(
+def get_transaction_summary_by_owner(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
@@ -667,9 +666,6 @@ async def get_transaction_summary_by_owner(
     display_currency = db.get_preference('display_currency', 'EUR')
 
     # Build SQL query to get income/expense by owner
-    conn = db._get_connection()
-    cursor = conn.cursor()
-
     query = """
         SELECT
             o.id as owner_id,
@@ -694,9 +690,10 @@ async def get_transaction_summary_by_owner(
 
     query += " GROUP BY o.id, o.name, a.currency"
 
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
-    conn.close()
+    # Opened only around the query itself, not while the query string is being
+    # assembled — and closed on every path, including an exception.
+    with db.db_connection(commit=False) as conn:
+        rows = conn.execute(query, params).fetchall()
 
     # Aggregate by owner, converting currencies
     owner_totals = {}
@@ -728,7 +725,7 @@ async def get_transaction_summary_by_owner(
 
 
 @router.post("/auto-categorize")
-async def auto_categorize_transaction(
+def auto_categorize_transaction(
     request: AutoCategorizeRequest,
     current_user: User = Depends(get_current_user)
 ):
@@ -782,7 +779,7 @@ async def auto_categorize_transaction(
         )
 
 @router.get("/categorizer/status")
-async def get_categorizer_status(current_user: User = Depends(get_current_user)):
+def get_categorizer_status(current_user: User = Depends(get_current_user)):
     """Get categorizer model status and statistics"""
     try:
         transactions = db.get_transactions_for_prediction(months=0)
@@ -830,7 +827,7 @@ async def get_categorizer_status(current_user: User = Depends(get_current_user))
         )
 
 @router.post("/train-categorizer")
-async def train_categorizer(current_user: User = Depends(get_current_user)):
+def train_categorizer(current_user: User = Depends(get_current_user)):
     """Train the transaction categorizer with existing data"""
     try:
         # Use prediction query: LEFT JOIN (includes all transactions) + destinataire field
@@ -879,7 +876,7 @@ async def train_categorizer(current_user: User = Depends(get_current_user)):
 
 
 @router.get("/tags/all")
-async def get_all_tags(
+def get_all_tags(
     limit: int = Query(100, le=500),
     current_user: User = Depends(get_current_user)
 ):
@@ -888,23 +885,141 @@ async def get_all_tags(
     return {"tags": tags, "count": len(tags)}
 
 @router.get("/recipients/all")
-async def get_all_recipients(
+def get_all_recipients(
     limit: int = Query(500, le=1000),
     current_user: User = Depends(get_current_user)
 ):
     """Get all distinct recipients/payers from transactions"""
     # Use a direct query with LEFT JOIN so transactions without a subtype
     # are included — db.get_transactions() uses INNER JOIN and misses them.
-    conn = db._get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT DISTINCT TRIM(destinataire) AS recipient
-        FROM transactions
-        WHERE destinataire IS NOT NULL AND TRIM(destinataire) != ''
-        ORDER BY recipient
-        LIMIT ?
-    """, (limit,))
-    recipients = [row['recipient'] for row in cursor.fetchall()]
-    conn.close()
+    with db.db_connection(commit=False) as conn:
+        recipients = [row['recipient'] for row in conn.execute("""
+            SELECT DISTINCT TRIM(destinataire) AS recipient
+            FROM transactions
+            WHERE destinataire IS NOT NULL AND TRIM(destinataire) != ''
+            ORDER BY recipient
+            LIMIT ?
+        """, (limit,)).fetchall()]
 
     return {"recipients": recipients, "count": len(recipients)}
+
+
+@router.get("/export/csv")
+def export_transactions_csv(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    account_id: Optional[int] = None,
+    owner_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """Export transactions as CSV.
+
+    database.export_to_json() existed but was never reachable, and there was no
+    way at all to get the ledger out of the app — the first thing anyone wants
+    at tax time.
+    """
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    filters = {}
+    if start_date:
+        filters["start_date"] = start_date
+    if end_date:
+        filters["end_date"] = end_date
+    if account_id:
+        filters["account_id"] = account_id
+    if owner_id:
+        filters["owner_id"] = owner_id
+    # get_transactions applies a default limit; exporting must not truncate.
+    filters["limit"] = 1_000_000
+
+    transactions = db.get_transactions(filters=filters or None)
+
+    columns = [
+        ("transaction_date", "Date"),
+        ("account_name", "Account"),
+        ("destinataire", "Payee"),
+        ("description", "Description"),
+        ("type_name", "Category"),
+        ("subtype_name", "Subcategory"),
+        ("amount", "Amount"),
+        ("currency", "Currency"),
+        ("tags", "Tags"),
+        ("confirmed", "Confirmed"),
+    ]
+
+    buffer = io.StringIO()
+    # utf-8-sig: Excel reads a plain UTF-8 CSV as latin-1 and mangles accents.
+    writer = csv.writer(buffer, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow([label for _, label in columns])
+    for tx in transactions:
+        writer.writerow([tx.get(key, "") for key, _ in columns])
+
+    buffer.seek(0)
+    stamp = datetime.now().strftime("%Y%m%d")
+    return StreamingResponse(
+        iter([buffer.getvalue().encode("utf-8-sig")]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="transactions_{stamp}.csv"'
+        },
+    )
+
+
+class RecipientRename(BaseModel):
+    old_name: str
+    new_name: str
+    # Defaults to a dry run: the caller has to ask for the change explicitly,
+    # because a rename can silently merge two payees and cannot be undone.
+    confirm: bool = False
+
+
+@router.get("/recipients/manage")
+def list_recipients_for_management(
+    limit: int = Query(500, le=2000),
+    current_user: User = Depends(get_current_user),
+):
+    """Every payee as stored, with its transaction count and date range.
+
+    Case variants appear separately — that is the point: they are separate
+    values on disk, and this is how you find the ones worth merging.
+    """
+    return {"recipients": db.get_recipients_with_counts(limit)}
+
+
+@router.post("/recipients/rename")
+def rename_recipient(
+    rename: RecipientRename,
+    current_user: User = Depends(get_current_user),
+):
+    """Rename a payee across every transaction using it.
+
+    Without `confirm` this only reports what would happen — how many
+    transactions are affected, and whether the new name already exists, in which
+    case the two merge. The UI is expected to show that before asking again.
+    """
+    try:
+        result = db.rename_recipient(
+            rename.old_name, rename.new_name, apply_changes=rename.confirm)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if result["affected"] == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No transaction uses '{rename.old_name}'")
+
+    if not result["applied"]:
+        result["message"] = (
+            f"{result['affected']} transaction(s) would be renamed to "
+            f"'{result['new_name']}'")
+        if result["merges_into_existing"]:
+            result["message"] += (
+                f", merging with {result['existing_count']} already under that name")
+        result["message"] += ". This cannot be undone."
+    else:
+        result["message"] = f"Renamed {result['affected']} transaction(s)"
+
+    return result

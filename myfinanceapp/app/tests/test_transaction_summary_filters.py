@@ -10,7 +10,6 @@ Run:
   PYTHONPATH=. /home/fab/Documents/Dev/myfinanceapp/backend/venv/bin/python3 \
     -m pytest tests/test_transaction_summary_filters.py -v --tb=short
 """
-import asyncio
 import os
 import sys
 import tempfile
@@ -88,7 +87,7 @@ def add_txn(db, acc_id, amount, date_str="2025-03-15", category="expense",
 
 def summary(**kwargs):
     kwargs.setdefault("current_user", None)
-    return asyncio.run(transactions_api.get_transaction_summary(**kwargs))
+    return transactions_api.get_transaction_summary(**kwargs)
 
 
 # ── the bug: totals must cover every matching transaction ────────────────────

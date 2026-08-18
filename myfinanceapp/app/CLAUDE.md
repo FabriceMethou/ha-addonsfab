@@ -11,20 +11,21 @@ Personal finance tracker with React + TypeScript frontend and FastAPI + Python b
 ### Backend (FastAPI)
 
 ```bash
-# From project root
-cd backend
-source venv/bin/activate
-pip install -r requirements.txt
+# Dev environment (from myfinanceapp/)
+python3 -m venv .venv-dev
+.venv-dev/bin/pip install -r requirements-dev.txt
 
-# Run development server (with auto-reload)
-python main.py
-# Backend runs on http://localhost:8000
-# API docs: http://localhost:8000/docs
+# Run the test suite
+cd app
+JWT_SECRET_KEY=test PYTHONPATH=$PWD ../.venv-dev/bin/python -m pytest tests/ -q
 
-# Environment setup
-export DATABASE_PATH=/home/fab/Documents/Development/myfinanceapp/data/finance.db
-export JWT_SECRET_KEY="dev-secret-key"
+# Run the dev server
+JWT_SECRET_KEY=dev-secret-key DATA_DIR=$PWD/data \
+  ../.venv-dev/bin/python -m uvicorn --app-dir backend main:app --reload
 ```
+
+All runtime paths derive from `DATA_DIR` via `app/paths.py`. Never build a path
+from a relative string — that is how data ended up scattered across the tree.
 
 ### Frontend (React + Vite)
 
@@ -45,14 +46,11 @@ npx tsc --noEmit
 npm run lint
 ```
 
-### Docker Deployment
+### Home Assistant add-on
 
-```bash
-# From project root
-docker-compose up -d
-# Frontend: http://localhost:3000
-# Backend: http://localhost:8000
-```
+Built from `Dockerfile` (multi-stage: Vite build, then the HA base image).
+`run.sh` sets up `/data/myfinanceapp`, generates a JWT secret if none is
+configured, and starts nginx + uvicorn under supervisord on port 8501.
 
 ### Database Operations
 
@@ -76,7 +74,9 @@ sqlite3 data/finance.db
 - `reports.py` - Financial reporting (category breakdowns, trends, cashflow)
 - `backup_manager.py` - Database backup/restore with versioning
 - `cloud_backup.py` - Google Cloud Storage and WebDAV integration
-- `alerts.py` - Email/notification alerts using Apprise
+- `alerts.py` - Budget threshold alerts by SMTP email. The apprise package is
+  in requirements.txt but is not used; alerts.py imports only smtplib. There is
+  also no scheduler: `POST /api/alerts/check` has to be called to run the checks.
 - `auth.py` - User authentication and password management
 - `isin_lookup.py` - Investment symbol lookup via yfinance
 - `validators.py` - Input validation utilities
@@ -89,7 +89,6 @@ Each module follows the pattern: router definition, Pydantic models, dependency 
 - `transactions.py` - Transaction CRUD, bulk operations, auto-categorization
 - `categories.py` - Transaction types and subtypes (category hierarchy)
 - `envelopes.py` - Savings goals (envelope budgeting system)
-- `recurring.py` - Recurring transaction templates and pending transactions
 - `debts.py` - Debt/loan tracking with payment schedules
 - `investments.py` - Investment holdings and transactions
 - `budgets.py` - Budget limits and tracking
@@ -135,8 +134,8 @@ db._safe_update(
 - Organized by domain: `authAPI`, `accountsAPI`, `transactionsAPI`, etc.
 
 **UI Components**:
-- Primary: Material-UI v5 (dark theme configured in App.tsx)
-- Experimental: shadcn/ui components in `components/shadcn/` (Radix UI + Tailwind)
+- shadcn/ui components in `components/shadcn/` (Radix UI + Tailwind). Material-UI
+  is gone — do not reintroduce it.
 - Layout: `components/Layout.tsx` - shared navigation and layout wrapper
 
 **Pages** (`frontend/src/pages/`):
@@ -148,7 +147,6 @@ Each page is self-contained with its own data fetching (TanStack Query) and loca
 - `EnvelopesPage.tsx` - Savings goals (envelope system)
 - `DebtsPage.tsx` - Debt tracking and payment schedules
 - `InvestmentsPage.tsx` - Investment portfolio
-- `RecurringPage.tsx` - Recurring transaction templates
 - `BudgetsPage.tsx` - Budget creation and monitoring
 - `ReportsPage.tsx` - Financial analytics and visualizations
 - `BackupPage.tsx` - Database backup/restore UI
@@ -170,16 +168,18 @@ Each page is self-contained with its own data fetching (TanStack Query) and loca
 
 **ML Categorization**: `categorizer.py` trains on historical transactions to auto-suggest categories for new transactions.
 
-**Pending Transactions**: Recurring templates generate pending transactions that require confirmation before being added to the ledger.
-
 **Account Validations**: Periodic balance validations to track discrepancies between expected and actual balances.
 
 ## Environment Variables
 
-**Backend** (`.env` in project root or set in shell):
+**Backend**:
 ```
-DATABASE_PATH=/path/to/data/finance.db
-JWT_SECRET_KEY=your-secret-key-here
+DATA_DIR=/path/to/data          # root every runtime path derives from
+JWT_SECRET_KEY=your-secret-key  # required; the app refuses to start without it
+DATABASE_PATH=...               # optional, overrides DATA_DIR/finance.db
+SMTP_PASSWORD=...               # optional, enables email alerts
+WEBDAV_PASSWORD=...             # optional, enables cloud backups
+YAHOO_PROXY_PREFIX=...          # optional, off by default
 ```
 
 **Frontend** (`.env` in `frontend/`):
@@ -204,9 +204,9 @@ VITE_API_URL=http://localhost:8000
 # Terminal 1: Start backend
 cd backend
 source venv/bin/activate
-export PYTHONPATH=/home/fab/Documents/Development/myfinanceapp
+export PYTHONPATH=$PWD
 export JWT_SECRET_KEY="dev-secret-key"
-export DATABASE_PATH=/home/fab/Documents/Development/myfinanceapp/data/finance.db
+export DATA_DIR=$PWD/data
 python main.py
 
 # Terminal 2: Test with curl or use Swagger UI
@@ -215,7 +215,16 @@ curl http://localhost:8000/docs
 
 ### Database Schema Changes
 
-Database schema is defined in `database.py` in the `create_tables()` method. Schema is auto-created on first run. For schema changes, you may need to manually alter the database or create a migration script in `scripts/`.
+Schema lives in `_init_database()` in `database.py` and is created on first run.
+Migrations are `PRAGMA table_info` guarded ALTERs — idempotent, safe to re-run.
+Add new ones the same way and bump `SCHEMA_VERSION`, which is stamped into
+`PRAGMA user_version`. Never use a bare `except` around a migration: it makes
+"column already exists" indistinguishable from a real failure.
+
+Foreign keys **are** enforced (`PRAGMA foreign_keys=ON` in both connection
+helpers). Before deploying against an existing database, run
+`python3 scripts/check_integrity.py` — one that ran without enforcement may hold
+orphans that will make new writes fail. It also reports balance drift.
 
 ### Mutation Error Handling Pattern
 
@@ -240,13 +249,14 @@ This pattern ensures backend validation errors (like "Cannot delete security tha
 
 ## Important Notes
 
-- **Shared modules**: Core Python modules (`database.py`, `categorizer.py`, etc.) are in the project root and shared by backend API routers
+- **Shared modules**: Core Python modules (`database.py`, `categorizer.py`, etc.) live in `app/` and are shared by the backend API routers
+- **One database instance**: routers take it from `backend/deps.py`, never by constructing their own
+- **Route functions are `def`, not `async def`**: everything they call is blocking, so FastAPI must run them in its threadpool. An `async def` route without an `await` blocks every other request
 - **PYTHONPATH**: Backend expects PYTHONPATH to include project root for imports to work
 - **Authentication**: All API endpoints (except `/api/auth/*` and `/health`) require JWT authentication
 - **Date formats**: Backend expects ISO format strings (YYYY-MM-DD), frontend uses date-fns for parsing/formatting
 - **Error handling**: Backend uses FastAPI HTTPException, frontend uses axios interceptors for global error handling
-- **UI Migration**: Project is transitioning from MUI to shadcn/ui (Radix + Tailwind). Both are currently available.
-- **Database ownership**: The database file (`data/finance.db`) may be owned by root. If encountering "readonly database" errors, run: `sudo chown fab:fab /home/fab/Documents/Development/myfinanceapp/data/finance.db`
+- **Database ownership**: The database file (`data/finance.db`) may be owned by root. If encountering "readonly database" errors, run: `sudo chown fab:fab "$DATA_DIR/finance.db"`
 
 ## Balance Management Architecture
 
@@ -310,8 +320,6 @@ Key tables for reference when implementing features:
 - `transaction_types` - Category level 1 (Income, Expense, Transfer)
 - `transaction_subtypes` - Category level 2 (Groceries, Salary, etc.)
 - `envelopes` - Savings goals (target_amount, current_amount, deadline)
-- `recurring_templates` - Recurring transaction rules (recurrence_pattern, start/end dates)
-- `pending_transactions` - Unconfirmed recurring transactions
 - `debts` - Loan tracking (principal_amount, current_balance, interest_rate, payment_day)
 - `investment_holdings` - Portfolio (security_id, account_id, quantity, current_price)
 - `securities` - Investment master list (symbol, name, isin, investment_type, currency)
@@ -401,3 +409,16 @@ api.interceptors.response.use((response) => {
 ```
 
 This provides comprehensive visibility into API communication without modifying code or using external tools.
+
+
+## Testing
+
+The suite lives in `app/tests/` and covers the money paths specifically:
+
+- `test_balance_invariants.py` — `balance == opening_balance + SUM(confirmed, non-historical)`, held across create, edit, delete, transfer, retarget, and failure
+- `test_investment_cash_invariants.py` — the linked cash row must match the investment in sign and magnitude
+- `test_referential_integrity.py` — foreign keys and cascades as actually enforced
+- `test_exchange_rate_history.py` — conversion at the transaction's own date
+
+Any change touching balances must keep these green. They exist because the
+counter drifted silently for months.

@@ -1,6 +1,6 @@
 // Main App Component with Routing
 import { lazy, Suspense } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastContextProvider } from './contexts/ToastContext';
@@ -8,6 +8,8 @@ import { ToastContextProvider } from './contexts/ToastContext';
 // Eager imports — needed immediately
 import LoginPage from './pages/LoginPage';
 import Layout from './components/Layout';
+import ErrorBoundary from './components/ErrorBoundary';
+import NotFoundPage from './pages/NotFoundPage';
 
 // Lazy-loaded pages — each becomes its own chunk
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
@@ -47,7 +49,8 @@ const queryClient = new QueryClient({
 
 // Protected Route Component
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, mustChangePassword } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return <div>Loading...</div>;
@@ -57,13 +60,21 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     return <Navigate to="/login" replace />;
   }
 
+  // The backend flags accounts that still owe a password change — a fresh
+  // install's admin, or anyone an admin has just reset. Security is the only
+  // page reachable until it is done.
+  if (mustChangePassword && location.pathname !== '/security') {
+    return <Navigate to="/security" replace />;
+  }
+
   return <>{children}</>;
 };
 
 function AppRoutes() {
   return (
-    <Suspense fallback={<PageLoader />}>
-      <Routes>
+    <ErrorBoundary>
+      <Suspense fallback={<PageLoader />}>
+        <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route
           path="/"
@@ -88,9 +99,12 @@ function AppRoutes() {
           <Route path="notifications" element={<NotificationsPage />} />
           <Route path="security" element={<SecurityPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Route>
-      </Routes>
-    </Suspense>
+        <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 

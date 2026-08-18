@@ -6,6 +6,7 @@ Handles user authentication, password hashing, and MFA.
 import hashlib
 import secrets
 import sqlite3
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple
 import base64
@@ -28,6 +29,10 @@ class AuthManager:
 
     def __init__(self, db_path: str = None):
         self.db_path = db_path if db_path is not None else str(paths.DB_PATH)
+        # FinanceDatabase does this too. Without it, AuthManager fails outright
+        # when it is the first thing to touch a data directory that does not
+        # exist yet — which is exactly the import order in backend/main.py.
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._ensure_auth_tables()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -207,9 +212,14 @@ class AuthManager:
         """Get user by ID."""
         conn = self._get_connection()
         cursor = conn.cursor()
+        # Same non-secret columns as get_user_by_username, minus the credentials.
+        # The two getters returned different field sets for the same entity, so
+        # code written against one broke when handed the other —
+        # requires_password_change was missing here despite being read by callers.
         cursor.execute("""
             SELECT id, username, email, role, is_active, mfa_enabled,
-                   last_login, created_at, failed_login_attempts, locked_until
+                   requires_password_change, last_login, created_at,
+                   failed_login_attempts, locked_until
             FROM users WHERE id = ?
         """, (user_id,))
         result = cursor.fetchone()

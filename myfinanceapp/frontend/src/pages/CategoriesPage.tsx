@@ -1,6 +1,7 @@
 // Categories Page - Transaction Types and Subtypes Management
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import RecipientManager from '../components/RecipientManager';
 import {
   Plus,
   Pencil,
@@ -888,6 +889,20 @@ export default function CategoriesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Payees are a second taxonomy: not a category, but the same kind of
+          tidying-up job, and nowhere else in the app owns them. */}
+      <Card className="p-6 rounded-xl border border-border bg-card/50">
+        <div className="mb-4">
+          <h2 className="text-lg font-semibold">Payees</h2>
+          <p className="text-sm text-foreground-muted">
+            Fix a mistyped name across every transaction that uses it. Payees
+            differing only in capitalisation are flagged — renaming one to match
+            another merges them.
+          </p>
+        </div>
+        <RecipientManager />
+      </Card>
     </div>
   );
 }

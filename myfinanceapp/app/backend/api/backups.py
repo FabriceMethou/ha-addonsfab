@@ -14,27 +14,27 @@ from api.auth import get_current_user, User
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
 backup_mgr = BackupManager(db_path=DB_PATH)
 
-from database import FinanceDatabase
-db = FinanceDatabase(db_path=DB_PATH)
+from deps import lazy_db
+db = lazy_db   # built on first use; see backend/deps.py
 
 class BackupCreate(BaseModel):
     backup_type: str = "manual"
     description: str = "Manual backup"
 
 @router.get("/")
-async def list_backups(current_user: User = Depends(get_current_user)):
+def list_backups(current_user: User = Depends(get_current_user)):
     """List all backups"""
     backups = backup_mgr.list_backups()
     return {"backups": backups}
 
 @router.post("/")
-async def create_backup(backup: BackupCreate, current_user: User = Depends(get_current_user)):
+def create_backup(backup: BackupCreate, current_user: User = Depends(get_current_user)):
     """Create new backup"""
     result = backup_mgr.create_backup(backup.backup_type, backup.description)
     if not result:
@@ -42,7 +42,7 @@ async def create_backup(backup: BackupCreate, current_user: User = Depends(get_c
     return {"message": "Backup created", "backup": result}
 
 @router.post("/{backup_id}/restore")
-async def restore_backup(backup_id: str, current_user: User = Depends(get_current_user)):
+def restore_backup(backup_id: str, current_user: User = Depends(get_current_user)):
     """Restore from backup (admin only)"""
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only admins can restore backups")
@@ -65,7 +65,7 @@ async def restore_backup(backup_id: str, current_user: User = Depends(get_curren
         raise HTTPException(status_code=500, detail=f"Error restoring backup: {str(e)}")
 
 @router.delete("/{backup_id}")
-async def delete_backup(backup_id: str, current_user: User = Depends(get_current_user)):
+def delete_backup(backup_id: str, current_user: User = Depends(get_current_user)):
     """Delete backup (admin only)"""
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only admins can delete backups")
@@ -81,8 +81,13 @@ async def delete_backup(backup_id: str, current_user: User = Depends(get_current
     return {"message": "Backup deleted"}
 
 @router.get("/{backup_id}/download")
-async def download_backup(backup_id: str, current_user: User = Depends(get_current_user)):
-    """Download backup file"""
+def download_backup(backup_id: str, current_user: User = Depends(get_current_user)):
+    """Download backup file (admin only)"""
+    # The other five backup endpoints all check this; the download did not,
+    # so any authenticated user could pull the whole household database.
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Only admins can download backups")
+
     # Convert backup_id to int
     try:
         backup_id_int = int(backup_id)
@@ -151,7 +156,7 @@ async def upload_backup(
             os.unlink(temp_path)
 
 @router.get("/settings")
-async def get_backup_settings(current_user: User = Depends(get_current_user)):
+def get_backup_settings(current_user: User = Depends(get_current_user)):
     """Get backup automation settings"""
     return {
         "settings": backup_mgr.metadata['settings'],
@@ -165,7 +170,7 @@ class BackupSettingsUpdate(BaseModel):
     compress_backups: bool = True
 
 @router.put("/settings")
-async def update_backup_settings(
+def update_backup_settings(
     settings: BackupSettingsUpdate,
     current_user: User = Depends(get_current_user)
 ):
@@ -182,7 +187,7 @@ async def update_backup_settings(
     }
 
 @router.post("/cleanup")
-async def cleanup_old_backups(current_user: User = Depends(get_current_user)):
+def cleanup_old_backups(current_user: User = Depends(get_current_user)):
     """Manually trigger cleanup of old backups based on retention policy"""
     backup_mgr._cleanup_old_backups()
     return {
@@ -199,7 +204,7 @@ class CloudConfig(BaseModel):
     enabled: bool = True
 
 @router.get("/cloud/config")
-async def get_cloud_config(current_user: User = Depends(get_current_user)):
+def get_cloud_config(current_user: User = Depends(get_current_user)):
     """Get WebDAV cloud backup configuration"""
     config = {
         'webdav_url': db.get_preference('cloud_webdav_url', ''),
@@ -211,7 +216,7 @@ async def get_cloud_config(current_user: User = Depends(get_current_user)):
     return config
 
 @router.put("/cloud/config")
-async def update_cloud_config(config: CloudConfig, current_user: User = Depends(get_current_user)):
+def update_cloud_config(config: CloudConfig, current_user: User = Depends(get_current_user)):
     """Save WebDAV config (url, username, path). Password via WEBDAV_PASSWORD env var"""
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only admins can manage cloud backups")
@@ -232,7 +237,7 @@ async def update_cloud_config(config: CloudConfig, current_user: User = Depends(
     }
 
 @router.get("/cloud/backups")
-async def list_cloud_backups(current_user: User = Depends(get_current_user)):
+def list_cloud_backups(current_user: User = Depends(get_current_user)):
     """List remote backups on WebDAV server"""
     from cloud_backup import WebDAVAdapter, CloudBackupManager
 
@@ -267,7 +272,7 @@ async def list_cloud_backups(current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Failed to list cloud backups: {str(e)}")
 
 @router.post("/cloud/{backup_id}/sync")
-async def sync_backup_to_cloud(backup_id: str, current_user: User = Depends(get_current_user)):
+def sync_backup_to_cloud(backup_id: str, current_user: User = Depends(get_current_user)):
     """Upload a local backup to the cloud WebDAV server"""
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only admins can manage cloud backups")

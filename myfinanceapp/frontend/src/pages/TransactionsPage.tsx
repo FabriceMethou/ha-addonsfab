@@ -232,6 +232,9 @@ export default function TransactionsPage() {
       // Clear state so back-navigation doesn't re-apply
       window.history.replaceState({}, document.title);
     }
+    // Mount-only on purpose: this consumes the preset handed over by the
+    // Reports page exactly once, then erases it from history.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Translate the UI filters into API query params. Shared by the paginated

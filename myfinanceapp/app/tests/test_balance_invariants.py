@@ -400,3 +400,47 @@ def test_confirming_applies_the_amount_once(db):
     db.update_transaction(txn, {"confirmed": True})
     assert stored_balance(db, acc) == 50.0
     assert_consistent(db, acc)
+
+
+# ── legacy single-entry transfers ────────────────────────────────────────────
+
+def legacy_transfer(db, source, target, amount=-200.0):
+    """A transfer as written before double entry: one row, no mirror.
+
+    recalculate_all_balances() credits the destination from this row alone, so
+    any check of the counter has to account for it the same way.
+    """
+    type_id, subtype_id = category(db, "transfer")
+    with db.db_connection(commit=True) as conn:
+        conn.execute(
+            "INSERT INTO transactions (account_id, transaction_date, amount, currency,"
+            " description, destinataire, type_id, subtype_id, is_transfer,"
+            " transfer_account_id, confirmed) VALUES (?,?,?,?,?,?,?,?,1,?,1)",
+            (source, "2026-01-15", amount, "EUR", "legacy", "legacy",
+             type_id, subtype_id, target),
+        )
+
+
+def test_a_legacy_transfer_is_not_reported_as_drift(db):
+    """The destination has no row of its own — that is not a discrepancy."""
+    source = account(db, "Source", balance=1000.0)
+    target = account(db, "Target", balance=0.0)
+    legacy_transfer(db, source, target)
+
+    db.recalculate_all_balances()
+
+    assert db.verify_balances() == [], (
+        "verify_balances must use the same rules as recalculate_all_balances, "
+        "or every pre-double-entry transfer looks like a bug"
+    )
+
+
+def test_recalculating_a_legacy_transfer_moves_the_money_once(db):
+    source = account(db, "Source", balance=1000.0)
+    target = account(db, "Target", balance=0.0)
+    legacy_transfer(db, source, target)
+
+    db.recalculate_all_balances()
+
+    assert stored_balance(db, source) == 800.0
+    assert stored_balance(db, target) == 200.0

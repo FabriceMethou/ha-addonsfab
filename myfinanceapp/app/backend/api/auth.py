@@ -2,13 +2,12 @@
 Authentication API endpoints
 JWT-based authentication with multi-owner support
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import jwt
-from passlib.context import CryptContext
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -28,14 +27,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_HOURS = 24
 
 router = APIRouter()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token")
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-auth_mgr = AuthManager(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH, lazy_auth_manager
+auth_mgr = lazy_auth_manager   # built on first use; see backend/deps.py
 
 # Pydantic models
 class Token(BaseModel):
@@ -97,7 +95,7 @@ def create_refresh_token(data: dict) -> str:
     to_encode.update({"exp": expire, "type": "refresh"})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+def get_current_user(token: str = Depends(oauth2_scheme)):
     """Verify JWT token and return current user"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -123,17 +121,36 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     if user_data is None:
         raise credentials_exception
 
+    # A disabled account must stop working immediately. Without this the
+    # "disable user" action did nothing until the token expired, which made the
+    # button in the UI misleading.
+    if not user_data.get("is_active", 1):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is disabled",
+        )
+
     # Map role to is_admin boolean
     is_admin = user_data.get("role") == "admin"
     return User(username=user_data["username"], is_admin=is_admin)
 
 @router.post("/token", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     """Login endpoint - returns JWT token"""
-    # Authenticate user
+    # authenticate() records these in login_history. They used to be omitted, so
+    # every row had NULL ip_address / user_agent and the Security page showed
+    # empty columns. Behind nginx the real client is in X-Forwarded-For.
+    forwarded = request.headers.get("x-forwarded-for", "")
+    ip_address = forwarded.split(",")[0].strip() or (
+        request.client.host if request.client else None
+    )
+    user_agent = request.headers.get("user-agent")
+
     success, message, user_data = auth_mgr.authenticate(
         form_data.username,
-        form_data.password
+        form_data.password,
+        ip_address=ip_address,
+        user_agent=user_agent,
     )
 
     if not success or not user_data:
@@ -174,12 +191,16 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         "user": {
             "username": user_data["username"],
             "is_admin": user_data.get("role") == "admin",
-            "mfa_enabled": user_data.get("mfa_enabled", False)
+            "mfa_enabled": user_data.get("mfa_enabled", False),
+            # The column was maintained on every path — default admin, admin
+            # reset — but never surfaced, so the forced password change never
+            # actually happened. The frontend routes on this flag.
+            "requires_password_change": bool(user_data.get("requires_password_change", False)),
         }
     }
 
 @router.post("/mfa/verify", response_model=Token)
-async def verify_mfa(mfa_data: MFAVerify, token: str = Depends(oauth2_scheme)):
+def verify_mfa(mfa_data: MFAVerify, token: str = Depends(oauth2_scheme)):
     """Verify MFA token and return full access token"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -229,7 +250,7 @@ async def verify_mfa(mfa_data: MFAVerify, token: str = Depends(oauth2_scheme)):
         )
 
 @router.post("/refresh", response_model=Token)
-async def refresh_token(refresh_data: RefreshRequest):
+def refresh_token(refresh_data: RefreshRequest):
     """Exchange a valid refresh token for new access + refresh tokens"""
     try:
         payload = jwt.decode(refresh_data.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -279,12 +300,12 @@ async def refresh_token(refresh_data: RefreshRequest):
         )
 
 @router.get("/me", response_model=User)
-async def read_users_me(current_user: User = Depends(get_current_user)):
+def read_users_me(current_user: User = Depends(get_current_user)):
     """Get current user info"""
     return current_user
 
 @router.post("/register", response_model=dict)
-async def register_user(user_create: UserCreate, current_user: User = Depends(get_current_user)):
+def register_user(user_create: UserCreate, current_user: User = Depends(get_current_user)):
     """Register new user (admin only)"""
     if not current_user.is_admin:
         raise HTTPException(
@@ -313,7 +334,7 @@ async def register_user(user_create: UserCreate, current_user: User = Depends(ge
     return {"message": "User created successfully", "username": user_create.username}
 
 @router.post("/change-password")
-async def change_password(
+def change_password(
     password_data: PasswordChange,
     current_user: User = Depends(get_current_user)
 ):
@@ -346,7 +367,7 @@ async def change_password(
     return {"message": "Password changed successfully"}
 
 @router.post("/mfa/setup", response_model=MFASetup)
-async def setup_mfa_endpoint(current_user: User = Depends(get_current_user)):
+def setup_mfa_endpoint(current_user: User = Depends(get_current_user)):
     """Setup MFA for current user"""
     # Get user data to get user_id
     user_data = auth_mgr.get_user_by_username(current_user.username)
@@ -364,7 +385,7 @@ async def setup_mfa_endpoint(current_user: User = Depends(get_current_user)):
     }
 
 @router.post("/mfa/enable")
-async def enable_mfa(
+def enable_mfa(
     mfa_data: MFAVerify,
     current_user: User = Depends(get_current_user)
 ):
@@ -386,7 +407,7 @@ async def enable_mfa(
     return {"message": "MFA enabled successfully"}
 
 @router.post("/mfa/disable")
-async def disable_mfa_endpoint(current_user: User = Depends(get_current_user)):
+def disable_mfa_endpoint(current_user: User = Depends(get_current_user)):
     """Disable MFA for current user"""
     # Get user data to get user_id
     user_data = auth_mgr.get_user_by_username(current_user.username)
@@ -404,7 +425,7 @@ async def disable_mfa_endpoint(current_user: User = Depends(get_current_user)):
     return {"message": "MFA disabled successfully"}
 
 @router.get("/users")
-async def list_users(current_user: User = Depends(get_current_user)):
+def list_users(current_user: User = Depends(get_current_user)):
     """List all users (admin only)"""
     if not current_user.is_admin:
         raise HTTPException(
@@ -416,7 +437,7 @@ async def list_users(current_user: User = Depends(get_current_user)):
     return {"users": users}
 
 @router.get("/login-history")
-async def get_login_history(
+def get_login_history(
     user_id: Optional[int] = None,
     limit: int = 50,
     current_user: User = Depends(get_current_user)
@@ -443,7 +464,7 @@ async def get_login_history(
     return {"history": history}
 
 @router.put("/users/{user_id}")
-async def update_user(
+def update_user(
     user_id: int,
     user_update: UserUpdate,
     current_user: User = Depends(get_current_user)
@@ -480,7 +501,7 @@ async def update_user(
     return {"message": "User updated successfully"}
 
 @router.post("/users/{user_id}/reset-password")
-async def admin_reset_password(
+def admin_reset_password(
     user_id: int,
     password_data: AdminPasswordReset,
     current_user: User = Depends(get_current_user)
@@ -537,7 +558,7 @@ async def admin_reset_password(
     return {"message": "Password reset successfully"}
 
 @router.delete("/users/{user_id}")
-async def delete_user(
+def delete_user(
     user_id: int,
     current_user: User = Depends(get_current_user)
 ):

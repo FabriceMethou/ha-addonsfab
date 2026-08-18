@@ -3,6 +3,7 @@ Validation utilities for Finance Tracker.
 
 Centralizes validation logic for consistent error handling across the application.
 """
+from datetime import datetime
 from typing import Tuple, List, Dict, Any, Optional
 
 
@@ -45,6 +46,14 @@ def validate_amount(
     """
     if amount is None:
         return False, f"{field_name} is required"
+
+    # Coerce before comparing. The comparisons below raise TypeError on a string,
+    # so passing the very thing this function exists to reject — "abc" from a
+    # form field — crashed the caller instead of returning a validation error.
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return False, f"{field_name} must be a number"
 
     if not allow_zero and amount == 0:
         return False, f"{field_name} cannot be zero"
@@ -136,12 +145,18 @@ def validate_date_range(
     if not start_date or not end_date:
         return False, "Both dates are required"
 
+    # Parse rather than compare as strings. The previous version compared the
+    # raw strings, so the except branch was unreachable and "15/06/2026" passed
+    # as a valid date — ordering only happens to work for ISO-formatted input.
     try:
-        if start_date > end_date:
-            return False, f"{start_label} must be before or equal to {end_label}"
-        return True, ""
+        start = datetime.strptime(str(start_date)[:10], "%Y-%m-%d").date()
+        end = datetime.strptime(str(end_date)[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
-        return False, "Invalid date format"
+        return False, "Invalid date format, expected YYYY-MM-DD"
+
+    if start > end:
+        return False, f"{start_label} must be before or equal to {end_label}"
+    return True, ""
 
 
 def validate_positive_integer(
@@ -216,6 +231,11 @@ def validate_email(email: str) -> Tuple[bool, str]:
 
     local, domain = email.split('@')
     if not local or not domain:
+        return False, "Invalid email format"
+
+    # Whitespace anywhere makes it not an address. Stripping the ends is not
+    # enough — "spaces in@example.com" passed every check above.
+    if any(c.isspace() for c in email):
         return False, "Invalid email format"
 
     return True, ""

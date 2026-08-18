@@ -160,3 +160,22 @@ def test_deleting_a_transaction_type_cascades_to_its_subtypes(db):
             (type_id,),
         ).fetchone()[0]
     assert remaining == 0
+
+
+# ── schema revision ──────────────────────────────────────────────────────────
+
+def test_the_schema_revision_is_stamped(db):
+    """A database must be able to report which migrations it has been through."""
+    from database import SCHEMA_VERSION
+    with db.db_connection(commit=False) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+def test_the_removed_recurring_tables_are_gone(db):
+    """The feature was removed; its tables must not come back on init."""
+    with db.db_connection(commit=False) as conn:
+        names = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+    assert "recurring_templates" not in names
+    assert "pending_transactions" not in names

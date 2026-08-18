@@ -84,6 +84,9 @@ export default function WorkHoursPage() {
     if (settingsData?.display_currency && calculatorCurrency === 'EUR') {
       setCalculatorCurrency(settingsData.display_currency);
     }
+    // Seeds the calculator once, when settings arrive. Depending on
+    // calculatorCurrency would re-run this on every manual change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsData?.display_currency]);
 
   // Fetch work profiles with currency conversion

@@ -11,11 +11,16 @@ from pathlib import Path
 import time
 
 import paths
+from utils import normalise_recipient
 from contextlib import contextmanager
 from functools import wraps
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+#: Schema revision, written to PRAGMA user_version after _init_database() runs.
+#: Bump it when adding a migration so a database can report what it has applied.
+SCHEMA_VERSION = 1
 
 # Suppress yfinance error logging for 404s (symbol not found).
 # These are expected errors when symbols don't exist and are handled gracefully.
@@ -392,6 +397,48 @@ class FinanceDatabase:
                     VALUES (?, ?, ?, ?, ?)
                 """, default_currencies)
 
+            # Bank statement import profiles.
+            # The CSV parser only knew two layouts, hard-coded and detected from
+            # their header row. A profile records, once per bank, which of its
+            # columns hold the date, amount and description — so any bank's
+            # export can be imported without touching the code.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS import_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    -- Sorted, joined header row: how a returning file is recognised.
+                    header_signature TEXT NOT NULL,
+                    -- JSON {our_field: their_column}
+                    column_map TEXT NOT NULL,
+                    -- 'european' (1.234,56) or 'us' (1,234.56)
+                    amount_format TEXT NOT NULL DEFAULT 'european',
+                    -- strptime pattern, or NULL to try the known formats
+                    date_format TEXT,
+                    -- Some banks export outgoing amounts unsigned.
+                    invert_amount BOOLEAN DEFAULT 0,
+                    -- Optional JSON {column: [accepted values]} row filter
+                    row_filter TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Exchange rate history.
+            # currencies.exchange_rate_to_eur holds a single current rate, so
+            # every report converted last year's transactions at today's rate.
+            # Each row here is the rate that took effect on a given date.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS exchange_rate_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL,
+                    rate_to_eur REAL NOT NULL,
+                    effective_date DATE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (code) REFERENCES currencies(code),
+                    UNIQUE(code, effective_date)
+                )
+            """)
+
             # Accounts table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS accounts (
@@ -495,61 +542,17 @@ class FinanceDatabase:
                 )
             """)
 
-            # Add transaction_id column if it doesn't exist (virtual link to transactions)
-            try:
+            # Migration: add transaction_id to envelope_transactions.
+            # Guarded like every other migration below rather than wrapped in a
+            # bare except: swallowing all exceptions made "column already exists"
+            # indistinguishable from a full disk or a locked database.
+            cursor.execute("PRAGMA table_info(envelope_transactions)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'transaction_id' not in columns:
                 cursor.execute("ALTER TABLE envelope_transactions ADD COLUMN transaction_id INTEGER REFERENCES transactions(id)")
-            except Exception:
-                pass  # Column already exists
+                logger.info("Added transaction_id column to envelope_transactions table")
 
-            # Recurring transaction templates
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS recurring_templates (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    account_id INTEGER NOT NULL,
-                    amount REAL NOT NULL,
-                    currency TEXT NOT NULL,
-                    description TEXT,
-                    destinataire TEXT NOT NULL,
-                    type_id INTEGER NOT NULL,
-                    subtype_id INTEGER NOT NULL,
-                    tags TEXT,
-                    recurrence_pattern TEXT NOT NULL CHECK(recurrence_pattern IN ('daily', 'weekly', 'monthly', 'yearly', 'custom')),
-                    recurrence_interval INTEGER DEFAULT 1,
-                    day_of_month INTEGER,
-                    start_date DATE NOT NULL,
-                    end_date DATE,
-                    last_generated DATE,
-                    is_active BOOLEAN DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (account_id) REFERENCES accounts(id),
-                    FOREIGN KEY (type_id) REFERENCES transaction_types(id),
-                    FOREIGN KEY (subtype_id) REFERENCES transaction_subtypes(id)
-                )
-            """)
 
-            # Pending transactions (awaiting confirmation)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS pending_transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    recurring_template_id INTEGER NOT NULL,
-                    transaction_date DATE NOT NULL,
-                    amount REAL NOT NULL,
-                    currency TEXT NOT NULL,
-                    description TEXT,
-                    destinataire TEXT NOT NULL,
-                    account_id INTEGER NOT NULL,
-                    type_id INTEGER NOT NULL,
-                    subtype_id INTEGER NOT NULL,
-                    tags TEXT,
-                    notified BOOLEAN DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (recurring_template_id) REFERENCES recurring_templates(id) ON DELETE CASCADE,
-                    FOREIGN KEY (account_id) REFERENCES accounts(id),
-                    FOREIGN KEY (type_id) REFERENCES transaction_types(id),
-                    FOREIGN KEY (subtype_id) REFERENCES transaction_subtypes(id)
-                )
-            """)
 
             # Debt tracking table
             cursor.execute("""
@@ -893,6 +896,26 @@ class FinanceDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_validations_account ON balance_validations(account_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_balance_validations_date ON balance_validations(validation_date)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_work_profiles_owner ON work_profiles(owner_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_exchange_rate_history_lookup ON exchange_rate_history(code, effective_date)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_import_profiles_signature ON import_profiles(header_signature)")
+
+            # A debt payment writes two ledger rows too: the interest, which is a
+            # real cost, and the principal, which just moves wealth around.
+            cursor.execute("PRAGMA table_info(debt_payments)")
+            dp_cols = [c[1] for c in cursor.fetchall()]
+            if 'principal_transaction_id' not in dp_cols:
+                cursor.execute("ALTER TABLE debt_payments "
+                               "ADD COLUMN principal_transaction_id INTEGER REFERENCES transactions(id)")
+                logger.info("Added principal_transaction_id column to debt_payments")
+
+            # A sale writes two ledger rows: the capital returned and the gain.
+            # linked_transaction_id holds the first, this one the second.
+            cursor.execute("PRAGMA table_info(investment_transactions)")
+            it_columns = [c[1] for c in cursor.fetchall()]
+            if 'gain_transaction_id' not in it_columns:
+                cursor.execute("ALTER TABLE investment_transactions "
+                               "ADD COLUMN gain_transaction_id INTEGER REFERENCES transactions(id)")
+                logger.info("Added gain_transaction_id column to investment_transactions")
 
             # Schema migrations - Add tags column to envelopes if it doesn't exist
             cursor.execute("PRAGMA table_info(envelopes)")
@@ -939,9 +962,37 @@ class FinanceDatabase:
             if cursor.rowcount:
                 logger.info("Migrated 'Investments' transaction type: expense → transfer")
 
-            # Drop recurring tables (feature removed)
+            # The recurring-transactions feature was removed. The DROPs stay so
+            # databases created before the removal are cleaned up; the CREATEs
+            # are gone, since creating these tables only to drop them 400 lines
+            # later ran on every single startup.
             cursor.execute("DROP TABLE IF EXISTS pending_transactions")
             cursor.execute("DROP TABLE IF EXISTS recurring_templates")
+
+            # One-off re-pricing of investment accounts. Their balance used to be
+            # left at whatever it was created with — almost always zero — because
+            # trades move cash on the linked account. Existing databases would
+            # otherwise keep reporting a net worth blind to the portfolio until
+            # the next trade or price refresh happened to trigger a sync.
+            cursor.execute("SELECT COUNT(*) FROM accounts WHERE account_type = 'investment'")
+            if cursor.fetchone()[0]:
+                repriced = self._sync_all_investment_account_balances(cursor)
+                logger.info(f"Valued {repriced} investment account(s) from their holdings")
+
+            # Stamp the schema revision. Every migration above is guarded by a
+            # PRAGMA table_info check, so they are idempotent and safe to re-run
+            # — but there was no way to tell which revision a given database had
+            # reached. Bump this whenever a migration is added.
+            # Seed the history with today's rates so lookups have a baseline.
+            # Anything dated earlier falls back to the oldest known rate, which
+            # is the current behaviour — no worse than before, and it improves
+            # on its own as rates get updated over time.
+            cursor.execute("""
+                INSERT OR IGNORE INTO exchange_rate_history (code, rate_to_eur, effective_date)
+                SELECT code, exchange_rate_to_eur, DATE('now') FROM currencies
+            """)
+
+            cursor.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
             conn.commit()
 
@@ -1008,7 +1059,13 @@ class FinanceDatabase:
                 "subtypes": ["Tuition", "Books", "Courses", "Supplies"]
             },
             "Investments": {
-                "category": "expense",
+                # transfer, not expense: buying securities converts cash into
+                # another asset, it does not consume anything. Seeded correctly
+                # here so a fresh database never has to be migrated — the
+                # migration below runs before this data exists and so found
+                # nothing, leaving new installs classifying purchases as
+                # spending until the first trade fixed it retroactively.
+                "category": "transfer",
                 "icon": "📊",
                 "color": "#6C5CE7",
                 "subtypes": ["Securities Purchase", "Investment Fees", "Trading Costs"]
@@ -1131,6 +1188,172 @@ class FinanceDatabase:
             logger.error(f"Failed to convert currency from {from_currency} to {to_currency}: {e}")
             return amount  # Return original amount if conversion fails
 
+    # ==================== IMPORT PROFILES ====================
+
+    @staticmethod
+    def header_signature(headers: List[str]) -> str:
+        """Stable fingerprint of a CSV header row.
+
+        Sorted and lowercased so a bank reordering its columns, or changing their
+        case, still matches the profile the user already configured.
+        """
+        return "|".join(sorted(h.strip().lower() for h in headers if h and h.strip()))
+
+    def get_import_profiles(self) -> List[Dict[str, Any]]:
+        """All saved import profiles, newest first."""
+        with self.db_connection(commit=False) as conn:
+            rows = conn.execute(
+                "SELECT * FROM import_profiles ORDER BY updated_at DESC"
+            ).fetchall()
+        return [self._decode_import_profile(r) for r in rows]
+
+    def get_import_profile(self, profile_id: int) -> Optional[Dict[str, Any]]:
+        with self.db_connection(commit=False) as conn:
+            row = conn.execute(
+                "SELECT * FROM import_profiles WHERE id = ?", (profile_id,)
+            ).fetchone()
+        return self._decode_import_profile(row) if row else None
+
+    def find_import_profile_by_headers(self, headers: List[str]) -> Optional[Dict[str, Any]]:
+        """The profile matching this file's columns, if one was saved before."""
+        with self.db_connection(commit=False) as conn:
+            row = conn.execute(
+                "SELECT * FROM import_profiles WHERE header_signature = ?",
+                (self.header_signature(headers),)
+            ).fetchone()
+        return self._decode_import_profile(row) if row else None
+
+    @staticmethod
+    def _decode_import_profile(row) -> Dict[str, Any]:
+        profile = dict(row)
+        profile['column_map'] = json.loads(profile['column_map'])
+        profile['row_filter'] = json.loads(profile['row_filter']) if profile.get('row_filter') else None
+        profile['invert_amount'] = bool(profile.get('invert_amount'))
+        return profile
+
+    def save_import_profile(self, profile: Dict[str, Any]) -> int:
+        """Create or update a profile, keyed on its name.
+
+        Re-importing from the same bank should not accumulate near-duplicate
+        profiles, so saving under an existing name replaces it.
+        """
+        required = {'name', 'headers', 'column_map'}
+        missing = required - set(profile)
+        if missing:
+            raise ValueError(f"Missing fields for import profile: {sorted(missing)}")
+
+        column_map = profile['column_map']
+        for field in ('date', 'amount'):
+            if not column_map.get(field):
+                raise ValueError(f"Column mapping must say which column holds the {field}")
+
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO import_profiles
+                    (name, header_signature, column_map, amount_format,
+                     date_format, invert_amount, row_filter)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    header_signature = excluded.header_signature,
+                    column_map = excluded.column_map,
+                    amount_format = excluded.amount_format,
+                    date_format = excluded.date_format,
+                    invert_amount = excluded.invert_amount,
+                    row_filter = excluded.row_filter,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                profile['name'],
+                self.header_signature(profile['headers']),
+                json.dumps(column_map),
+                profile.get('amount_format', 'european'),
+                profile.get('date_format'),
+                1 if profile.get('invert_amount') else 0,
+                json.dumps(profile['row_filter']) if profile.get('row_filter') else None,
+            ))
+            profile_id = cursor.lastrowid
+            if not profile_id:
+                profile_id = cursor.execute(
+                    "SELECT id FROM import_profiles WHERE name = ?", (profile['name'],)
+                ).fetchone()[0]
+
+        logger.info(f"Saved import profile '{profile['name']}' ({profile_id})")
+        return profile_id
+
+    def delete_import_profile(self, profile_id: int) -> bool:
+        with self.db_connection(commit=True) as conn:
+            return conn.execute(
+                "DELETE FROM import_profiles WHERE id = ?", (profile_id,)
+            ).rowcount > 0
+
+    def record_exchange_rate(self, code: str, rate_to_eur: float,
+                            effective_date: str = None) -> None:
+        """Record the rate a currency had on a given date.
+
+        Called whenever a rate is updated, so history accumulates from now on.
+        Re-recording the same day overwrites, rather than creating duplicates.
+        """
+        if effective_date is None:
+            effective_date = datetime.now().strftime('%Y-%m-%d')
+
+        with self.db_connection(commit=True) as conn:
+            conn.execute("""
+                INSERT INTO exchange_rate_history (code, rate_to_eur, effective_date)
+                VALUES (?, ?, ?)
+                ON CONFLICT(code, effective_date)
+                DO UPDATE SET rate_to_eur = excluded.rate_to_eur
+            """, (code, rate_to_eur, effective_date))
+        logger.info(f"Recorded exchange rate {code}={rate_to_eur} effective {effective_date}")
+
+    def get_rates_at(self, as_of_date: str = None) -> Dict[str, float]:
+        """Rate map as it stood on a date, for converting historical amounts.
+
+        For each currency, takes the most recent rate on or before the date. If
+        the history starts after that date — likely for transactions older than
+        this feature — falls back to the earliest recorded rate, and then to the
+        current one. That degrades to the previous behaviour instead of
+        returning nothing.
+        """
+        if as_of_date is None:
+            return self.get_exchange_rates_map()
+
+        with self.db_connection(commit=False) as conn:
+            rows = conn.execute("""
+                SELECT c.code,
+                       COALESCE(
+                           (SELECT h.rate_to_eur FROM exchange_rate_history h
+                             WHERE h.code = c.code AND h.effective_date <= ?
+                          ORDER BY h.effective_date DESC LIMIT 1),
+                           (SELECT h.rate_to_eur FROM exchange_rate_history h
+                             WHERE h.code = c.code
+                          ORDER BY h.effective_date ASC LIMIT 1),
+                           c.exchange_rate_to_eur
+                       ) AS rate
+                  FROM currencies c
+            """, (as_of_date,)).fetchall()
+        return {row['code']: row['rate'] for row in rows}
+
+    def convert_at_date(self, amount: float, from_currency: str,
+                        to_currency: str, as_of_date: str) -> float:
+        """Convert using the rate that applied on as_of_date, not today's."""
+        if from_currency == to_currency:
+            return amount
+        rates = self.get_rates_at(as_of_date)
+        return self.convert_with_rates(amount, from_currency, to_currency, rates)
+
+    def get_exchange_rate_history(self, code: str = None) -> List[Dict[str, Any]]:
+        """Recorded rates, newest first, optionally for a single currency."""
+        with self.db_connection(commit=False) as conn:
+            if code:
+                rows = conn.execute(
+                    "SELECT * FROM exchange_rate_history WHERE code = ? "
+                    "ORDER BY effective_date DESC", (code,)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM exchange_rate_history "
+                    "ORDER BY code, effective_date DESC").fetchall()
+        return [dict(r) for r in rows]
+
     def get_exchange_rates_map(self) -> Dict[str, float]:
         """Load all exchange rates in one query for batch conversions.
 
@@ -1209,90 +1432,89 @@ class FinanceDatabase:
 
     def add_account_type(self, name: str) -> int:
         """Add a new account type."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO account_types (name, is_default) VALUES (?, 0)", (name,))
-        type_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        logger.info(f"Added account type: {name}")
-        return type_id
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO account_types (name, is_default) VALUES (?, 0)", (name,))
+            type_id = cursor.lastrowid
+            logger.info(f"Added account type: {name}")
+            return type_id
 
     def delete_account_type(self, type_id: int) -> bool:
         """Delete an account type if not used."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
         
-        # Check if type has accounts
-        cursor.execute("SELECT COUNT(*) FROM accounts WHERE account_type = (SELECT name FROM account_types WHERE id = ?)", (type_id,))
-        if cursor.fetchone()[0] > 0:
-            conn.close()
-            return False
+            # Check if type has accounts
+            cursor.execute("SELECT COUNT(*) FROM accounts WHERE account_type = (SELECT name FROM account_types WHERE id = ?)", (type_id,))
+            if cursor.fetchone()[0] > 0:
+                return False
         
-        cursor.execute("DELETE FROM account_types WHERE id = ? AND is_default = 0", (type_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+            cursor.execute("DELETE FROM account_types WHERE id = ? AND is_default = 0", (type_id,))
+            success = cursor.rowcount > 0
+            return success
 
     # ==================== CURRENCIES ====================
 
     def get_currencies(self, active_only: bool = True) -> List[Dict[str, Any]]:
         """Get all currencies, optionally filtered by active status."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        if active_only:
-            cursor.execute("""
-                SELECT * FROM currencies
-                WHERE is_active = 1
-                ORDER BY code
-            """)
-        else:
-            cursor.execute("""
-                SELECT * FROM currencies
-                ORDER BY code
-            """)
+            if active_only:
+                cursor.execute("""
+                    SELECT * FROM currencies
+                    WHERE is_active = 1
+                    ORDER BY code
+                """)
+            else:
+                cursor.execute("""
+                    SELECT * FROM currencies
+                    ORDER BY code
+                """)
 
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
     def get_currency(self, code: str) -> Optional[Dict[str, Any]]:
         """Get a specific currency by code."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM currencies WHERE code = ?", (code,))
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM currencies WHERE code = ?", (code,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def add_currency(self, currency_data: Dict[str, Any]) -> int:
         """Add a new currency."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT INTO currencies (code, name, symbol, exchange_rate_to_eur, is_active)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            currency_data['code'].upper(),
-            currency_data['name'],
-            currency_data.get('symbol', ''),
-            currency_data.get('exchange_rate_to_eur', 1.0),
-            currency_data.get('is_active', 1)
-        ))
+            cursor.execute("""
+                INSERT INTO currencies (code, name, symbol, exchange_rate_to_eur, is_active)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                currency_data['code'].upper(),
+                currency_data['name'],
+                currency_data.get('symbol', ''),
+                currency_data.get('exchange_rate_to_eur', 1.0),
+                currency_data.get('is_active', 1)
+            ))
 
-        currency_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        logger.info(f"Added currency: {currency_data['code']}")
-        return currency_id
+            currency_id = cursor.lastrowid
+            logger.info(f"Added currency: {currency_data['code']}")
+            return currency_id
 
     def update_currency(self, code: str, **kwargs) -> bool:
-        """Update currency details."""
+        """Update currency details, recording any rate change in the history."""
         allowed_columns = {'name', 'symbol', 'exchange_rate_to_eur', 'is_active'}
-        return self._safe_update('currencies', code, kwargs, allowed_columns, id_column='code')
+        updated = self._safe_update('currencies', code, kwargs, allowed_columns, id_column='code')
+
+        # Snapshot the new rate so historical conversions stop using today's
+        # value for every past transaction. Without this the history table only
+        # ever holds its seed row.
+        if updated and 'exchange_rate_to_eur' in kwargs:
+            self.record_exchange_rate(code, kwargs['exchange_rate_to_eur'])
+
+        return updated
 
     def delete_currency(self, code: str) -> bool:
         """Delete a currency (soft delete by setting is_active = 0)."""
@@ -1310,47 +1532,45 @@ class FinanceDatabase:
     
     def get_accounts(self, owner_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get all accounts, optionally filtered by owner."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
         
-        if owner_id:
-            cursor.execute("""
-                SELECT a.*, b.name as bank_name, o.name as owner_name
-                FROM accounts a
-                LEFT JOIN banks b ON a.bank_id = b.id
-                JOIN owners o ON a.owner_id = o.id
-                WHERE a.owner_id = ?
-                ORDER BY a.name
-            """, (owner_id,))
-        else:
-            cursor.execute("""
-                SELECT a.*, b.name as bank_name, o.name as owner_name
-                FROM accounts a
-                LEFT JOIN banks b ON a.bank_id = b.id
-                JOIN owners o ON a.owner_id = o.id
-                ORDER BY a.name
-            """)
+            if owner_id:
+                cursor.execute("""
+                    SELECT a.*, b.name as bank_name, o.name as owner_name
+                    FROM accounts a
+                    LEFT JOIN banks b ON a.bank_id = b.id
+                    JOIN owners o ON a.owner_id = o.id
+                    WHERE a.owner_id = ?
+                    ORDER BY a.name
+                """, (owner_id,))
+            else:
+                cursor.execute("""
+                    SELECT a.*, b.name as bank_name, o.name as owner_name
+                    FROM accounts a
+                    LEFT JOIN banks b ON a.bank_id = b.id
+                    JOIN owners o ON a.owner_id = o.id
+                    ORDER BY a.name
+                """)
         
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
     def get_account(self, account_id: int) -> Optional[Dict[str, Any]]:
         """Get a single account by ID."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT a.*, b.name as bank_name, o.name as owner_name
-            FROM accounts a
-            LEFT JOIN banks b ON a.bank_id = b.id
-            JOIN owners o ON a.owner_id = o.id
-            WHERE a.id = ?
-        """, (account_id,))
+            cursor.execute("""
+                SELECT a.*, b.name as bank_name, o.name as owner_name
+                FROM accounts a
+                LEFT JOIN banks b ON a.bank_id = b.id
+                JOIN owners o ON a.owner_id = o.id
+                WHERE a.id = ?
+            """, (account_id,))
 
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def add_account(self, account_data: Dict[str, Any]) -> int:
         """
@@ -1359,53 +1579,51 @@ class FinanceDatabase:
         If opening_balance is provided and create_initial_validation is True,
         an initial balance validation checkpoint will be created automatically.
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        account_name = (account_data.get('name') or '').strip()
-        if not account_name:
-            account_type_label = account_data.get('account_type', 'Account')
-            account_name = f"{account_type_label.title()} Account"
+            account_name = (account_data.get('name') or '').strip()
+            if not account_name:
+                account_type_label = account_data.get('account_type', 'Account')
+                account_name = f"{account_type_label.title()} Account"
 
-        opening_balance = account_data.get('opening_balance', account_data.get('balance', 0))
-        opening_date = account_data.get('opening_date')
+            opening_balance = account_data.get('opening_balance', account_data.get('balance', 0))
+            opening_date = account_data.get('opening_date')
 
-        cursor.execute("""
-            INSERT INTO accounts (bank_id, name, account_type, currency, owner_id, opening_date, balance, opening_balance, linked_account_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            account_data.get('bank_id'),
-            account_name,
-            account_data['account_type'],
-            account_data['currency'],
-            account_data['owner_id'],
-            opening_date,
-            opening_balance,
-            opening_balance,  # opening_balance same as initial balance
-            account_data.get('linked_account_id')
-        ))
+            cursor.execute("""
+                INSERT INTO accounts (bank_id, name, account_type, currency, owner_id, opening_date, balance, opening_balance, linked_account_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                account_data.get('bank_id'),
+                account_name,
+                account_data['account_type'],
+                account_data['currency'],
+                account_data['owner_id'],
+                opening_date,
+                opening_balance,
+                opening_balance,  # opening_balance same as initial balance
+                account_data.get('linked_account_id')
+            ))
 
-        account_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+            account_id = cursor.lastrowid
 
-        # Create initial balance validation if requested (and not an investment account with 0 balance)
-        create_validation = account_data.get('create_initial_validation', True)
-        is_investment = account_data['account_type'] == 'investment'
+            # Create initial balance validation if requested (and not an investment account with 0 balance)
+            create_validation = account_data.get('create_initial_validation', True)
+            is_investment = account_data['account_type'] == 'investment'
 
-        if create_validation and opening_date and not (is_investment and opening_balance == 0):
-            validation_data = {
-                'account_id': account_id,
-                'validation_date': opening_date,
-                'system_balance': opening_balance,
-                'actual_balance': opening_balance,
-                'notes': 'Initial opening balance checkpoint'
-            }
-            self.add_balance_validation(validation_data)
-            logger.info(f"Created initial balance validation checkpoint for account {account_id}: {opening_balance}")
+            if create_validation and opening_date and not (is_investment and opening_balance == 0):
+                validation_data = {
+                    'account_id': account_id,
+                    'validation_date': opening_date,
+                    'system_balance': opening_balance,
+                    'actual_balance': opening_balance,
+                    'notes': 'Initial opening balance checkpoint'
+                }
+                self.add_balance_validation(validation_data)
+                logger.info(f"Created initial balance validation checkpoint for account {account_id}: {opening_balance}")
 
-        logger.info(f"Added account: {account_name} with opening balance: {opening_balance}")
-        return account_id
+            logger.info(f"Added account: {account_name} with opening balance: {opening_balance}")
+            return account_id
 
     def update_account(self, account_id: int, updates: Dict[str, Any]) -> bool:
         """
@@ -1433,20 +1651,17 @@ class FinanceDatabase:
 
     def delete_account(self, account_id: int) -> bool:
         """Delete an account if it has no transactions."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
         
-        # Check if account has transactions
-        cursor.execute("SELECT COUNT(*) FROM transactions WHERE account_id = ?", (account_id,))
-        if cursor.fetchone()[0] > 0:
-            conn.close()
-            return False
+            # Check if account has transactions
+            cursor.execute("SELECT COUNT(*) FROM transactions WHERE account_id = ?", (account_id,))
+            if cursor.fetchone()[0] > 0:
+                return False
         
-        cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+            cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+            success = cursor.rowcount > 0
+            return success
 
     def recalculate_all_balances(self) -> Dict[str, int]:
         """
@@ -1462,100 +1677,107 @@ class FinanceDatabase:
         Returns:
             Dictionary with statistics: {'accounts_updated': int, 'transactions_processed': int, 'historical_skipped': int}
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        # Resets every balance then replays the whole ledger. Doing that in
+        # one transaction matters more here than anywhere else: a failure
+        # part-way through would leave accounts reset to their opening
+        # balance with only some transactions re-applied.
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        # Get all accounts with their opening balances and dates
-        cursor.execute("SELECT id, opening_balance, opening_date FROM accounts")
-        accounts = cursor.fetchall()
-        account_opening_dates = {acc['id']: acc['opening_date'] for acc in accounts}
+            # Get all accounts with their opening balances and dates
+            cursor.execute("SELECT id, opening_balance, opening_date FROM accounts")
+            accounts = cursor.fetchall()
+            account_opening_dates = {acc['id']: acc['opening_date'] for acc in accounts}
 
-        # Reset all account balances to their opening_balance
-        for acc in accounts:
-            opening_bal = acc['opening_balance'] if acc['opening_balance'] is not None else 0
-            cursor.execute("UPDATE accounts SET balance = ? WHERE id = ?", (opening_bal, acc['id']))
-            logger.info(f"Reset account {acc['id']} to opening balance: {opening_bal}")
+            # Reset all account balances to their opening_balance
+            for acc in accounts:
+                opening_bal = acc['opening_balance'] if acc['opening_balance'] is not None else 0
+                cursor.execute("UPDATE accounts SET balance = ? WHERE id = ?", (opening_bal, acc['id']))
+                logger.info(f"Reset account {acc['id']} to opening balance: {opening_bal}")
 
-        logger.info(f"Reset {len(accounts)} account balances to their opening balances")
+            logger.info(f"Reset {len(accounts)} account balances to their opening balances")
 
-        # Get all confirmed transactions ordered by date
-        cursor.execute("""
-            SELECT t.id, t.account_id, t.amount, t.is_transfer, t.transfer_account_id,
-                   t.is_historical, t.transaction_date, t.linked_transfer_id, tt.category
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            WHERE t.confirmed = 1
-            ORDER BY t.transaction_date ASC, t.created_at ASC
-        """)
-        transactions = cursor.fetchall()
+            # Get all confirmed transactions ordered by date
+            cursor.execute("""
+                SELECT t.id, t.account_id, t.amount, t.is_transfer, t.transfer_account_id,
+                       t.is_historical, t.transaction_date, t.linked_transfer_id, tt.category
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                WHERE t.confirmed = 1
+                ORDER BY t.transaction_date ASC, t.created_at ASC
+            """)
+            transactions = cursor.fetchall()
 
-        transactions_processed = 0
-        historical_skipped = 0
-        processed_transfers = set()  # Track processed same-currency transfers
+            transactions_processed = 0
+            historical_skipped = 0
+            processed_transfers = set()  # Track processed same-currency transfers
 
-        for trans in transactions:
-            trans_dict = dict(trans)
+            for trans in transactions:
+                trans_dict = dict(trans)
 
-            # Skip historical transactions (they don't affect balance)
-            if trans_dict.get('is_historical', False):
-                historical_skipped += 1
-                continue
+                # Skip historical transactions (they don't affect balance)
+                if trans_dict.get('is_historical', False):
+                    historical_skipped += 1
+                    continue
 
-            # Skip transactions that occur before the account's opening date
-            account_id = trans_dict['account_id']
-            account_opening_date = account_opening_dates.get(account_id)
-            if account_opening_date and trans_dict['transaction_date'] < account_opening_date:
-                historical_skipped += 1
-                logger.info(f"Skipping transaction {trans_dict['id']} dated {trans_dict['transaction_date']} for account {account_id} - before opening date {account_opening_date}")
-                continue
+                # Skip transactions that occur before the account's opening date
+                account_id = trans_dict['account_id']
+                account_opening_date = account_opening_dates.get(account_id)
+                if account_opening_date and trans_dict['transaction_date'] < account_opening_date:
+                    historical_skipped += 1
+                    logger.info(f"Skipping transaction {trans_dict['id']} dated {trans_dict['transaction_date']} for account {account_id} - before opening date {account_opening_date}")
+                    continue
 
-            # Update primary account balance
-            # All amounts are already correctly signed:
-            # - Income: positive
-            # - Expense: negative
-            # - Transfer: negative (money leaving source account)
-            self._update_account_balance(
-                cursor,
-                trans_dict['account_id'],
-                trans_dict['amount'],
-                trans_dict['category']
-            )
+                # Update primary account balance
+                # All amounts are already correctly signed:
+                # - Income: positive
+                # - Expense: negative
+                # - Transfer: negative (money leaving source account)
+                self._update_account_balance(
+                    cursor,
+                    trans_dict['account_id'],
+                    trans_dict['amount'],
+                    trans_dict['category']
+                )
 
-            # Handle old-style single-entry transfers (update destination account too)
-            # For double-entry transfers (linked_transfer_id set), the mirror transaction
-            # already handles the destination side, so we skip this.
-            if (trans_dict['is_transfer'] and trans_dict['transfer_account_id']
-                    and trans_dict['category'] == 'transfer'
-                    and not trans_dict.get('linked_transfer_id')):
-                amount = abs(trans_dict['amount'])  # Use absolute value for destination
-                trans_id = trans_dict['id']
+                # Handle old-style single-entry transfers (update destination account too)
+                # For double-entry transfers (linked_transfer_id set), the mirror transaction
+                # already handles the destination side, so we skip this.
+                if (trans_dict['is_transfer'] and trans_dict['transfer_account_id']
+                        and trans_dict['category'] == 'transfer'
+                        and not trans_dict.get('linked_transfer_id')):
+                    amount = abs(trans_dict['amount'])  # Use absolute value for destination
+                    trans_id = trans_dict['id']
 
-                # For same-currency transfers, check if it's already been processed
-                # (to avoid double-counting when both source and dest transactions exist)
-                # Also ensure we don't process historical transfers
-                if amount > 0 and trans_id not in processed_transfers and not trans_dict.get('is_historical', False):
-                    # Check if transfer transaction is before destination account's opening date
-                    dest_account_id = trans_dict['transfer_account_id']
-                    dest_opening_date = account_opening_dates.get(dest_account_id)
-                    if dest_opening_date and trans_dict['transaction_date'] < dest_opening_date:
-                        logger.info(f"Skipping transfer to account {dest_account_id} dated {trans_dict['transaction_date']} - before opening date {dest_opening_date}")
-                    else:
-                        self._update_account_balance(cursor, trans_dict['transfer_account_id'], amount, 'transfer')
-                        processed_transfers.add(trans_id)
+                    # For same-currency transfers, check if it's already been processed
+                    # (to avoid double-counting when both source and dest transactions exist)
+                    # Also ensure we don't process historical transfers
+                    if amount > 0 and trans_id not in processed_transfers and not trans_dict.get('is_historical', False):
+                        # Check if transfer transaction is before destination account's opening date
+                        dest_account_id = trans_dict['transfer_account_id']
+                        dest_opening_date = account_opening_dates.get(dest_account_id)
+                        if dest_opening_date and trans_dict['transaction_date'] < dest_opening_date:
+                            logger.info(f"Skipping transfer to account {dest_account_id} dated {trans_dict['transaction_date']} - before opening date {dest_opening_date}")
+                        else:
+                            self._update_account_balance(cursor, trans_dict['transfer_account_id'], amount, 'transfer')
+                            processed_transfers.add(trans_id)
 
-            transactions_processed += 1
+                transactions_processed += 1
 
-        conn.commit()
-        conn.close()
+            # Investment accounts carry no transactions of their own — their
+            # balance is the portfolio, so replaying the ledger alone would leave
+            # them at their opening balance. Re-price them once the replay ends.
+            investment_accounts = self._sync_all_investment_account_balances(cursor)
 
-        logger.info(f"Recalculated balances for {len(accounts)} accounts")
-        logger.info(f"Processed {transactions_processed} transactions, skipped {historical_skipped} historical transactions")
+            logger.info(f"Recalculated balances for {len(accounts)} accounts "
+                        f"({investment_accounts} re-priced from their holdings)")
+            logger.info(f"Processed {transactions_processed} transactions, skipped {historical_skipped} historical transactions")
 
-        return {
-            'accounts_updated': len(accounts),
-            'transactions_processed': transactions_processed,
-            'historical_skipped': historical_skipped
-        }
+            return {
+                'accounts_updated': len(accounts),
+                'transactions_processed': transactions_processed,
+                'historical_skipped': historical_skipped
+            }
 
     def add_balance_validation(self, validation_data: Dict[str, Any]) -> int:
         """
@@ -1572,38 +1794,75 @@ class FinanceDatabase:
         Returns:
             validation_id: int
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        system_balance = validation_data['system_balance']
-        actual_balance = validation_data['actual_balance']
-        difference = actual_balance - system_balance
-        is_match = abs(difference) < 0.01  # Match if difference is less than 1 cent
+            system_balance = validation_data['system_balance']
+            actual_balance = validation_data['actual_balance']
+            difference = actual_balance - system_balance
+            is_match = abs(difference) < 0.01  # Match if difference is less than 1 cent
 
-        cursor.execute("""
-            INSERT INTO balance_validations
-            (account_id, validation_date, system_balance, actual_balance, difference, is_match, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            validation_data['account_id'],
-            validation_data['validation_date'],
-            system_balance,
-            actual_balance,
-            difference,
-            is_match,
-            validation_data.get('notes', '')
-        ))
+            cursor.execute("""
+                INSERT INTO balance_validations
+                (account_id, validation_date, system_balance, actual_balance, difference, is_match, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                validation_data['account_id'],
+                validation_data['validation_date'],
+                system_balance,
+                actual_balance,
+                difference,
+                is_match,
+                validation_data.get('notes', '')
+            ))
 
-        validation_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+            validation_id = cursor.lastrowid
 
-        if is_match:
-            logger.info(f"Balance validation {validation_id}: Match! Account {validation_data['account_id']}")
-        else:
-            logger.warning(f"Balance validation {validation_id}: Mismatch! Account {validation_data['account_id']}, Difference: {difference}")
+            if is_match:
+                logger.info(f"Balance validation {validation_id}: Match! Account {validation_data['account_id']}")
+            else:
+                logger.warning(f"Balance validation {validation_id}: Mismatch! Account {validation_data['account_id']}, Difference: {difference}")
 
-        return validation_id
+            return validation_id
+
+    def recalculate_account_balance(self, account_id: int) -> Dict[str, Any]:
+        """Rebuild one account's balance from its own ledger.
+
+        The global recalculation touches every account, which is a blunt answer
+        to "this one account is off by 12 euros". Returns what changed so the
+        caller can say whether it actually resolved anything.
+        """
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT account_type, balance, COALESCE(opening_balance, 0) AS opening, "
+                "opening_date FROM accounts WHERE id = ?", (account_id,))
+            account = cursor.fetchone()
+            if not account:
+                raise ValueError(f"Account {account_id} not found")
+
+            before = round(account['balance'] or 0, 2)
+
+            if account['account_type'] == 'investment':
+                # Not a running total of transactions — it is the portfolio.
+                self._sync_investment_account_balance(cursor, account_id)
+            else:
+                cursor.execute("""
+                    SELECT COALESCE(SUM(amount), 0) AS total
+                      FROM transactions
+                     WHERE account_id = ? AND confirmed = 1
+                       AND (? IS NULL OR transaction_date >= ?)
+                """, (account_id, account['opening_date'], account['opening_date']))
+                ledger = cursor.fetchone()['total']
+                cursor.execute("UPDATE accounts SET balance = ROUND(?, 2) WHERE id = ?",
+                               (account['opening'] + ledger, account_id))
+
+            cursor.execute("SELECT balance FROM accounts WHERE id = ?", (account_id,))
+            after = round(cursor.fetchone()['balance'], 2)
+
+        logger.info(f"Recalculated account {account_id}: {before} -> {after}")
+        return {'account_id': account_id, 'previous_balance': before,
+                'new_balance': after, 'adjustment': round(after - before, 2)}
 
     def get_balance_validations(self, account_id: int, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -1616,22 +1875,21 @@ class FinanceDatabase:
         Returns:
             List of validation records, most recent first
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT bv.*, a.name as account_name, a.currency
-            FROM balance_validations bv
-            JOIN accounts a ON bv.account_id = a.id
-            WHERE bv.account_id = ?
-            ORDER BY bv.validation_date DESC, bv.created_at DESC
-            LIMIT ?
-        """, (account_id, limit))
+            cursor.execute("""
+                SELECT bv.*, a.name as account_name, a.currency
+                FROM balance_validations bv
+                JOIN accounts a ON bv.account_id = a.id
+                WHERE bv.account_id = ?
+                ORDER BY bv.validation_date DESC, bv.created_at DESC
+                LIMIT ?
+            """, (account_id, limit))
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
 
-        return [dict(row) for row in rows]
+            return [dict(row) for row in rows]
 
     def get_latest_balance_validation(self, account_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -1653,25 +1911,24 @@ class FinanceDatabase:
         Returns:
             List of latest validation records for all accounts
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT bv.*, a.name as account_name, a.currency
-            FROM balance_validations bv
-            JOIN accounts a ON bv.account_id = a.id
-            WHERE bv.id IN (
-                SELECT MAX(id)
-                FROM balance_validations
-                GROUP BY account_id
-            )
-            ORDER BY bv.validation_date DESC
-        """)
+            cursor.execute("""
+                SELECT bv.*, a.name as account_name, a.currency
+                FROM balance_validations bv
+                JOIN accounts a ON bv.account_id = a.id
+                WHERE bv.id IN (
+                    SELECT MAX(id)
+                    FROM balance_validations
+                    GROUP BY account_id
+                )
+                ORDER BY bv.validation_date DESC
+            """)
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
 
-        return [dict(row) for row in rows]
+            return [dict(row) for row in rows]
 
     def calculate_balance_between_validations(self, account_id: int, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -1698,99 +1955,98 @@ class FinanceDatabase:
         """
         from datetime import date as dt_date
 
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        # Get account info
-        cursor.execute("SELECT opening_date, opening_balance, balance FROM accounts WHERE id = ?", (account_id,))
-        account = cursor.fetchone()
-        if not account:
-            raise ValueError(f"Account {account_id} not found")
+            # Get account info
+            cursor.execute("SELECT opening_date, opening_balance, balance FROM accounts WHERE id = ?", (account_id,))
+            account = cursor.fetchone()
+            if not account:
+                raise ValueError(f"Account {account_id} not found")
 
-        # Determine start date and starting balance
-        if start_date is None:
-            # Use most recent validation
-            latest_validation = self.get_latest_balance_validation(account_id)
-            if latest_validation:
-                start_date = latest_validation['validation_date']
-                starting_balance = latest_validation['actual_balance']
-                logger.info(f"Using last validation checkpoint: {start_date} with balance {starting_balance}")
+            # Determine start date and starting balance
+            if start_date is None:
+                # Use most recent validation
+                latest_validation = self.get_latest_balance_validation(account_id)
+                if latest_validation:
+                    start_date = latest_validation['validation_date']
+                    starting_balance = latest_validation['actual_balance']
+                    logger.info(f"Using last validation checkpoint: {start_date} with balance {starting_balance}")
+                else:
+                    # No validation exists, use opening balance
+                    start_date = account['opening_date']
+                    starting_balance = account['opening_balance'] if account['opening_balance'] is not None else 0
+                    logger.info(f"No validation found, using opening balance: {starting_balance} from {start_date}")
             else:
-                # No validation exists, use opening balance
-                start_date = account['opening_date']
-                starting_balance = account['opening_balance'] if account['opening_balance'] is not None else 0
-                logger.info(f"No validation found, using opening balance: {starting_balance} from {start_date}")
-        else:
-            # Start date provided, find validation at or before that date
+                # Start date provided, find validation at or before that date
+                cursor.execute("""
+                    SELECT actual_balance, validation_date
+                    FROM balance_validations
+                    WHERE account_id = ? AND validation_date <= ?
+                    ORDER BY validation_date DESC
+                    LIMIT 1
+                """, (account_id, start_date))
+                validation = cursor.fetchone()
+                if validation:
+                    starting_balance = validation['actual_balance']
+                    start_date = validation['validation_date']
+                else:
+                    starting_balance = account['opening_balance'] if account['opening_balance'] is not None else 0
+                    start_date = account['opening_date']
+
+            # Determine end date
+            if end_date is None:
+                end_date = dt_date.today().isoformat()
+
+            # Get all non-historical confirmed transactions between start and end date
             cursor.execute("""
-                SELECT actual_balance, validation_date
-                FROM balance_validations
-                WHERE account_id = ? AND validation_date <= ?
-                ORDER BY validation_date DESC
-                LIMIT 1
-            """, (account_id, start_date))
-            validation = cursor.fetchone()
-            if validation:
-                starting_balance = validation['actual_balance']
-                start_date = validation['validation_date']
-            else:
-                starting_balance = account['opening_balance'] if account['opening_balance'] is not None else 0
-                start_date = account['opening_date']
+                SELECT t.*, tt.category, tt.name as type_name, ts.name as subtype_name
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+                WHERE t.account_id = ?
+                  AND t.transaction_date > ?
+                  AND t.transaction_date <= ?
+                  AND t.confirmed = 1
+                  AND t.is_historical = 0
+                ORDER BY t.transaction_date ASC, t.created_at ASC
+            """, (account_id, start_date, end_date))
 
-        # Determine end date
-        if end_date is None:
-            end_date = dt_date.today().isoformat()
+            transactions = cursor.fetchall()
 
-        # Get all non-historical confirmed transactions between start and end date
-        cursor.execute("""
-            SELECT t.*, tt.category, tt.name as type_name, ts.name as subtype_name
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
-            WHERE t.account_id = ?
-              AND t.transaction_date > ?
-              AND t.transaction_date <= ?
-              AND t.confirmed = 1
-              AND t.is_historical = 0
-            ORDER BY t.transaction_date ASC, t.created_at ASC
-        """, (account_id, start_date, end_date))
+            # Calculate balance changes
+            balance = starting_balance
+            transaction_list = []
 
-        transactions = cursor.fetchall()
-        conn.close()
+            for trans in transactions:
+                trans_dict = dict(trans)
+                category = trans_dict['category']
+                amount = trans_dict['amount']
 
-        # Calculate balance changes
-        balance = starting_balance
-        transaction_list = []
+                # Calculate impact on balance
+                # Amounts are already signed (income=positive, expense=negative, transfer=signed)
+                balance += amount
+                impact = amount
 
-        for trans in transactions:
-            trans_dict = dict(trans)
-            category = trans_dict['category']
-            amount = trans_dict['amount']
+                transaction_list.append({
+                    'id': trans_dict['id'],
+                    'date': trans_dict['transaction_date'],
+                    'type': trans_dict['type_name'],
+                    'subtype': trans_dict['subtype_name'],
+                    'amount': amount,
+                    'impact': impact,
+                    'balance_after': balance,
+                    'destinataire': trans_dict['destinataire']
+                })
 
-            # Calculate impact on balance
-            # Amounts are already signed (income=positive, expense=negative, transfer=signed)
-            balance += amount
-            impact = amount
-
-            transaction_list.append({
-                'id': trans_dict['id'],
-                'date': trans_dict['transaction_date'],
-                'type': trans_dict['type_name'],
-                'subtype': trans_dict['subtype_name'],
-                'amount': amount,
-                'impact': impact,
-                'balance_after': balance,
-                'destinataire': trans_dict['destinataire']
-            })
-
-        return {
-            'starting_balance': starting_balance,
-            'starting_date': start_date,
-            'ending_date': end_date,
-            'transaction_count': len(transactions),
-            'calculated_balance': balance,
-            'transactions': transaction_list
-        }
+            return {
+                'starting_balance': starting_balance,
+                'starting_date': start_date,
+                'ending_date': end_date,
+                'transaction_count': len(transactions),
+                'calculated_balance': balance,
+                'transactions': transaction_list
+            }
 
     # ==================== WORK PROFILES ====================
 
@@ -1808,56 +2064,54 @@ class FinanceDatabase:
         Returns:
             profile_id: int
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        # Calculate hourly rate
-        monthly_salary = profile_data['monthly_salary']
-        working_hours = profile_data['working_hours_per_month']
-        hourly_rate = monthly_salary / working_hours if working_hours > 0 else 0
+            # Calculate hourly rate
+            monthly_salary = profile_data['monthly_salary']
+            working_hours = profile_data['working_hours_per_month']
+            hourly_rate = monthly_salary / working_hours if working_hours > 0 else 0
 
-        # Check if profile exists
-        cursor.execute("SELECT id FROM work_profiles WHERE owner_id = ?", (profile_data['owner_id'],))
-        existing = cursor.fetchone()
+            # Check if profile exists
+            cursor.execute("SELECT id FROM work_profiles WHERE owner_id = ?", (profile_data['owner_id'],))
+            existing = cursor.fetchone()
 
-        if existing:
-            # Update existing profile
-            cursor.execute("""
-                UPDATE work_profiles
-                SET monthly_salary = ?, working_hours_per_month = ?, hourly_rate = ?,
-                    currency = ?, tax_rate = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE owner_id = ?
-            """, (
-                monthly_salary,
-                working_hours,
-                hourly_rate,
-                profile_data.get('currency', 'EUR'),
-                profile_data.get('tax_rate', 0),
-                profile_data['owner_id']
-            ))
-            profile_id = existing['id']
-            logger.info(f"Updated work profile for owner {profile_data['owner_id']}")
-        else:
-            # Insert new profile
-            cursor.execute("""
-                INSERT INTO work_profiles
-                (owner_id, monthly_salary, working_hours_per_month, hourly_rate, currency, tax_rate)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                profile_data['owner_id'],
-                monthly_salary,
-                working_hours,
-                hourly_rate,
-                profile_data.get('currency', 'EUR'),
-                profile_data.get('tax_rate', 0)
-            ))
-            profile_id = cursor.lastrowid
-            logger.info(f"Created work profile for owner {profile_data['owner_id']}")
+            if existing:
+                # Update existing profile
+                cursor.execute("""
+                    UPDATE work_profiles
+                    SET monthly_salary = ?, working_hours_per_month = ?, hourly_rate = ?,
+                        currency = ?, tax_rate = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE owner_id = ?
+                """, (
+                    monthly_salary,
+                    working_hours,
+                    hourly_rate,
+                    profile_data.get('currency', 'EUR'),
+                    profile_data.get('tax_rate', 0),
+                    profile_data['owner_id']
+                ))
+                profile_id = existing['id']
+                logger.info(f"Updated work profile for owner {profile_data['owner_id']}")
+            else:
+                # Insert new profile
+                cursor.execute("""
+                    INSERT INTO work_profiles
+                    (owner_id, monthly_salary, working_hours_per_month, hourly_rate, currency, tax_rate)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    profile_data['owner_id'],
+                    monthly_salary,
+                    working_hours,
+                    hourly_rate,
+                    profile_data.get('currency', 'EUR'),
+                    profile_data.get('tax_rate', 0)
+                ))
+                profile_id = cursor.lastrowid
+                logger.info(f"Created work profile for owner {profile_data['owner_id']}")
 
-        conn.commit()
-        conn.close()
 
-        return profile_id
+            return profile_id
 
     def get_work_profile(self, owner_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -1869,20 +2123,19 @@ class FinanceDatabase:
         Returns:
             Profile dict or None if not found
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT wp.*, o.name as owner_name
-            FROM work_profiles wp
-            JOIN owners o ON wp.owner_id = o.id
-            WHERE wp.owner_id = ?
-        """, (owner_id,))
+            cursor.execute("""
+                SELECT wp.*, o.name as owner_name
+                FROM work_profiles wp
+                JOIN owners o ON wp.owner_id = o.id
+                WHERE wp.owner_id = ?
+            """, (owner_id,))
 
-        row = cursor.fetchone()
-        conn.close()
+            row = cursor.fetchone()
 
-        return dict(row) if row else None
+            return dict(row) if row else None
 
     def get_all_work_profiles(self) -> List[Dict[str, Any]]:
         """
@@ -1891,20 +2144,19 @@ class FinanceDatabase:
         Returns:
             List of profile dicts
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT wp.*, o.name as owner_name
-            FROM work_profiles wp
-            JOIN owners o ON wp.owner_id = o.id
-            ORDER BY o.name
-        """)
+            cursor.execute("""
+                SELECT wp.*, o.name as owner_name
+                FROM work_profiles wp
+                JOIN owners o ON wp.owner_id = o.id
+                ORDER BY o.name
+            """)
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
 
-        return [dict(row) for row in rows]
+            return [dict(row) for row in rows]
 
     def delete_work_profile(self, owner_id: int) -> bool:
         """
@@ -1916,151 +2168,223 @@ class FinanceDatabase:
         Returns:
             True if deleted, False otherwise
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("DELETE FROM work_profiles WHERE owner_id = ?", (owner_id,))
-        success = cursor.rowcount > 0
+            cursor.execute("DELETE FROM work_profiles WHERE owner_id = ?", (owner_id,))
+            success = cursor.rowcount > 0
 
-        conn.commit()
-        conn.close()
 
-        if success:
-            logger.info(f"Deleted work profile for owner {owner_id}")
+            if success:
+                logger.info(f"Deleted work profile for owner {owner_id}")
 
-        return success
+            return success
 
     # ==================== TRANSACTION TYPES ====================
 
     def get_types(self) -> List[Dict[str, Any]]:
         """Get all transaction types."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transaction_types ORDER BY name")
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM transaction_types ORDER BY name")
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
     def get_subtypes(self, type_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get subtypes, optionally filtered by type."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        if type_id:
-            cursor.execute("""
-                SELECT s.*, t.name as type_name 
-                FROM transaction_subtypes s
-                JOIN transaction_types t ON s.type_id = t.id
-                WHERE s.type_id = ?
-                ORDER BY s.name
-            """, (type_id,))
-        else:
-            cursor.execute("""
-                SELECT s.*, t.name as type_name 
-                FROM transaction_subtypes s
-                JOIN transaction_types t ON s.type_id = t.id
-                ORDER BY t.name, s.name
-            """)
+            if type_id:
+                cursor.execute("""
+                    SELECT s.*, t.name as type_name 
+                    FROM transaction_subtypes s
+                    JOIN transaction_types t ON s.type_id = t.id
+                    WHERE s.type_id = ?
+                    ORDER BY s.name
+                """, (type_id,))
+            else:
+                cursor.execute("""
+                    SELECT s.*, t.name as type_name 
+                    FROM transaction_subtypes s
+                    JOIN transaction_types t ON s.type_id = t.id
+                    ORDER BY t.name, s.name
+                """)
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def get_recipients_with_counts(self, limit: int = 500) -> List[Dict[str, Any]]:
+        """Every payee as stored, with how many transactions carry it.
+
+        Case variants are listed separately on purpose: "Rewe" and "ReWe" are
+        different values on disk, and hiding that would leave no way to spot
+        what needs fixing.
+        """
+        with self.db_connection(commit=False) as conn:
+            rows = conn.execute("""
+                SELECT TRIM(destinataire) AS recipient,
+                       COUNT(*) AS transaction_count,
+                       MIN(transaction_date) AS first_seen,
+                       MAX(transaction_date) AS last_seen
+                  FROM transactions
+                 WHERE destinataire IS NOT NULL AND TRIM(destinataire) != ''
+                 GROUP BY TRIM(destinataire)
+                 ORDER BY transaction_count DESC, recipient
+                 LIMIT ?
+            """, (limit,)).fetchall()
         return [dict(row) for row in rows]
+
+    def rename_recipient(self, old_name: str, new_name: str,
+                         apply_changes: bool = False) -> Dict[str, Any]:
+        """Rename a payee across every transaction that uses it.
+
+        Normalisation on write only fixes the first letter, so a typo further
+        along — "ReWe" — stays until someone corrects it. This corrects all of
+        them at once.
+
+        When the new name already exists the two collapse into one. That is
+        usually the point, but it is not obvious from a rename dialog, so the
+        result says so and callers are expected to preview first
+        (apply_changes=False) and confirm.
+
+        Nothing but the label changes: no amount, account or balance is touched.
+        """
+        old_name = (old_name or "").strip()
+        target = normalise_recipient(new_name)
+
+        if not old_name:
+            raise ValueError("No payee given to rename")
+        if not target:
+            raise ValueError("The new name cannot be empty")
+        if target == old_name:
+            raise ValueError(f"'{old_name}' is already spelled that way")
+
+        with self.db_connection(commit=False) as conn:
+            affected = conn.execute(
+                "SELECT COUNT(*) FROM transactions WHERE TRIM(destinataire) = ?",
+                (old_name,)).fetchone()[0]
+            existing = conn.execute(
+                "SELECT COUNT(*) FROM transactions WHERE TRIM(destinataire) = ?",
+                (target,)).fetchone()[0]
+
+        result = {
+            'old_name': old_name,
+            'new_name': target,
+            'affected': affected,
+            'existing_count': existing,
+            'merges_into_existing': existing > 0,
+            'applied': False,
+        }
+
+        if not apply_changes or affected == 0:
+            return result
+
+        with self.db_connection(commit=True) as conn:
+            conn.execute(
+                "UPDATE transactions SET destinataire = ? WHERE TRIM(destinataire) = ?",
+                (target, old_name))
+
+        result['applied'] = True
+        logger.info(f"Renamed payee '{old_name}' to '{target}' on {affected} transaction(s)"
+                    + (f", merged with {existing} existing" if existing else ""))
+        return result
 
     def get_distinct_recipients(self, limit: int = 100) -> List[str]:
         """Get distinct recipients from transactions, ordered by most recent usage."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT DISTINCT destinataire
-            FROM transactions
-            WHERE destinataire IS NOT NULL AND destinataire != ''
-            ORDER BY id DESC
-            LIMIT ?
-        """, (limit,))
+            cursor.execute("""
+                -- One entry per payee regardless of how it was capitalised.
+                SELECT DISTINCT destinataire
+                FROM transactions
+                WHERE destinataire IS NOT NULL AND destinataire != ''
+                ORDER BY id DESC
+                LIMIT ?
+            """, (limit,))
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
 
-        # Return unique recipients (removing duplicates while preserving order)
-        recipients = []
-        seen = set()
-        for row in rows:
-            recipient = row['destinataire']
-            if recipient and recipient not in seen:
-                recipients.append(recipient)
-                seen.add(recipient)
+            # Return unique recipients (removing duplicates while preserving order)
+            recipients = []
+            seen = set()
+            for row in rows:
+                recipient = row['destinataire']
+                if recipient and recipient not in seen:
+                    recipients.append(recipient)
+                    seen.add(recipient)
 
-        return sorted(recipients)  # Sort alphabetically for easier selection
+            return sorted(recipients)  # Sort alphabetically for easier selection
 
     def get_first_transaction_year(self) -> int:
         """Get the year of the first transaction in the database."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT MIN(strftime('%Y', transaction_date)) as first_year
-            FROM transactions
-            WHERE confirmed = 1
-        """)
-        result = cursor.fetchone()
+        # This one never closed its connection at all — not only on failure, but
+        # on the happy path too, leaking one per call.
+        with self.db_connection(commit=False) as conn:
+            result = conn.execute("""
+                SELECT MIN(strftime('%Y', transaction_date)) as first_year
+                FROM transactions
+                WHERE confirmed = 1
+            """).fetchone()
+
         if result and result['first_year']:
             return int(result['first_year'])
         return datetime.now().year
 
     def get_distinct_tags(self, limit: int = 100) -> List[str]:
         """Get distinct tags from transactions and envelopes, ordered by most recent usage."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        # Get tags from transactions
-        cursor.execute("""
-            SELECT DISTINCT tags
-            FROM transactions
-            WHERE tags IS NOT NULL AND tags != ''
-            ORDER BY id DESC
-            LIMIT ?
-        """, (limit,))
+            # Get tags from transactions
+            cursor.execute("""
+                SELECT DISTINCT tags
+                FROM transactions
+                WHERE tags IS NOT NULL AND tags != ''
+                ORDER BY id DESC
+                LIMIT ?
+            """, (limit,))
 
-        transaction_rows = cursor.fetchall()
+            transaction_rows = cursor.fetchall()
 
-        # Get tags from envelopes
-        cursor.execute("""
-            SELECT DISTINCT tags
-            FROM envelopes
-            WHERE tags IS NOT NULL AND tags != ''
-            ORDER BY id DESC
-        """)
+            # Get tags from envelopes
+            cursor.execute("""
+                SELECT DISTINCT tags
+                FROM envelopes
+                WHERE tags IS NOT NULL AND tags != ''
+                ORDER BY id DESC
+            """)
 
-        envelope_rows = cursor.fetchall()
-        conn.close()
+            envelope_rows = cursor.fetchall()
 
-        # Parse tags (they might be comma-separated) and return unique tags
-        all_tags = []
-        seen = set()
+            # Parse tags (they might be comma-separated) and return unique tags
+            all_tags = []
+            seen = set()
 
-        # Process transaction tags
-        for row in transaction_rows:
-            tags_str = row['tags']
-            if tags_str:
-                # Split by comma and clean up whitespace
-                tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
-                for tag in tags_list:
-                    if tag and tag not in seen:
-                        all_tags.append(tag)
-                        seen.add(tag)
+            # Process transaction tags
+            for row in transaction_rows:
+                tags_str = row['tags']
+                if tags_str:
+                    # Split by comma and clean up whitespace
+                    tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+                    for tag in tags_list:
+                        if tag and tag not in seen:
+                            all_tags.append(tag)
+                            seen.add(tag)
 
-        # Process envelope tags
-        for row in envelope_rows:
-            tags_str = row['tags']
-            if tags_str:
-                # Split by comma and clean up whitespace
-                tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
-                for tag in tags_list:
-                    if tag and tag not in seen:
-                        all_tags.append(tag)
-                        seen.add(tag)
+            # Process envelope tags
+            for row in envelope_rows:
+                tags_str = row['tags']
+                if tags_str:
+                    # Split by comma and clean up whitespace
+                    tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+                    for tag in tags_list:
+                        if tag and tag not in seen:
+                            all_tags.append(tag)
+                            seen.add(tag)
 
-        return sorted(all_tags)  # Sort alphabetically for easier selection
+            return sorted(all_tags)  # Sort alphabetically for easier selection
 
     def get_tag_report(self, tag: str, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
         """Get detailed report for a specific tag.
@@ -2073,218 +2397,213 @@ class FinanceDatabase:
         Returns:
             Dictionary with tag statistics, transactions breakdown
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        # Build query
-        query = """
-            SELECT t.*,
-                   tt.name as type_name, tt.category, tt.icon, tt.color,
-                   ts.name as subtype_name,
-                   a.name as account_name,
-                   b.name as bank_name,
-                   o.name as owner_name
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            JOIN transaction_subtypes ts ON t.subtype_id = ts.id
-            JOIN accounts a ON t.account_id = a.id
-            LEFT JOIN banks b ON a.bank_id = b.id
-            JOIN owners o ON a.owner_id = o.id
-            WHERE (t.tags LIKE ? OR t.tags = ?)
-        """
-        params = [f"%{tag}%", tag]
+            # Build query
+            query = """
+                SELECT t.*,
+                       tt.name as type_name, tt.category, tt.icon, tt.color,
+                       ts.name as subtype_name,
+                       a.name as account_name,
+                       b.name as bank_name,
+                       o.name as owner_name
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+                JOIN accounts a ON t.account_id = a.id
+                LEFT JOIN banks b ON a.bank_id = b.id
+                JOIN owners o ON a.owner_id = o.id
+                WHERE (t.tags LIKE ? OR t.tags = ?)
+            """
+            params = [f"%{tag}%", tag]
 
-        if start_date:
-            query += " AND t.transaction_date >= ?"
-            params.append(start_date)
-        if end_date:
-            query += " AND t.transaction_date <= ?"
-            params.append(end_date)
+            if start_date:
+                query += " AND t.transaction_date >= ?"
+                params.append(start_date)
+            if end_date:
+                query += " AND t.transaction_date <= ?"
+                params.append(end_date)
 
-        query += " ORDER BY t.transaction_date DESC"
+            query += " ORDER BY t.transaction_date DESC"
 
-        cursor.execute(query, params)
-        transactions = [dict(row) for row in cursor.fetchall()]
+            cursor.execute(query, params)
+            transactions = [dict(row) for row in cursor.fetchall()]
 
-        # Also get envelope transactions for envelopes with this tag
-        env_query = """
-            SELECT et.*, e.name as envelope_name, e.tags,
-                   a.name as account_name, a.currency as account_currency,
-                   'Envelope Allocation' as type_name,
-                   'envelope' as category
-            FROM envelope_transactions et
-            JOIN envelopes e ON et.envelope_id = e.id
-            JOIN accounts a ON et.account_id = a.id
-            WHERE (e.tags LIKE ? OR e.tags = ?)
-        """
-        env_params = [f"%{tag}%", tag]
+            # Also get envelope transactions for envelopes with this tag
+            env_query = """
+                SELECT et.*, e.name as envelope_name, e.tags,
+                       a.name as account_name, a.currency as account_currency,
+                       'Envelope Allocation' as type_name,
+                       'envelope' as category
+                FROM envelope_transactions et
+                JOIN envelopes e ON et.envelope_id = e.id
+                JOIN accounts a ON et.account_id = a.id
+                WHERE (e.tags LIKE ? OR e.tags = ?)
+            """
+            env_params = [f"%{tag}%", tag]
 
-        if start_date:
-            env_query += " AND et.transaction_date >= ?"
-            env_params.append(start_date)
-        if end_date:
-            env_query += " AND et.transaction_date <= ?"
-            env_params.append(end_date)
+            if start_date:
+                env_query += " AND et.transaction_date >= ?"
+                env_params.append(start_date)
+            if end_date:
+                env_query += " AND et.transaction_date <= ?"
+                env_params.append(end_date)
 
-        env_query += " ORDER BY et.transaction_date DESC"
+            env_query += " ORDER BY et.transaction_date DESC"
 
-        cursor.execute(env_query, env_params)
-        envelope_transactions = [dict(row) for row in cursor.fetchall()]
+            cursor.execute(env_query, env_params)
+            envelope_transactions = [dict(row) for row in cursor.fetchall()]
 
-        # Get envelopes with this tag and calculate budget vs spending
-        cursor.execute("""
-            SELECT id, name, target_amount, current_amount, tags
-            FROM envelopes
-            WHERE (tags LIKE ? OR tags = ?)
-            AND is_active = 1
-        """, [f"%{tag}%", tag])
-        envelopes_with_tag = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+            # Get envelopes with this tag and calculate budget vs spending
+            cursor.execute("""
+                SELECT id, name, target_amount, current_amount, tags
+                FROM envelopes
+                WHERE (tags LIKE ? OR tags = ?)
+                AND is_active = 1
+            """, [f"%{tag}%", tag])
+            envelopes_with_tag = [dict(row) for row in cursor.fetchall()]
 
-        # Load display currency and exchange rates once for all conversions
-        display_currency = self.get_preference('display_currency', 'EUR')
-        exchange_rates = self.get_exchange_rates_map()
+            # Load display currency and exchange rates once for all conversions
+            display_currency = self.get_preference('display_currency', 'EUR')
+            exchange_rates = self.get_exchange_rates_map()
 
-        def _conv(amount, currency):
-            return self.convert_with_rates(amount, currency or 'EUR', display_currency, exchange_rates)
+            def _conv(amount, currency):
+                return self.convert_with_rates(amount, currency or 'EUR', display_currency, exchange_rates)
 
-        # Calculate statistics with currency conversion
-        total_transactions = len(transactions) + len(envelope_transactions)
-        total_income = sum(
-            _conv(t['amount'], t.get('currency', 'EUR'))
-            for t in transactions if t['category'] == 'income'
-        )
-        total_expenses = sum(
-            _conv(abs(t['amount']), t.get('currency', 'EUR'))
-            for t in transactions if t['category'] == 'expense'
-        )
+            # Calculate statistics with currency conversion
+            total_transactions = len(transactions) + len(envelope_transactions)
+            total_income = sum(
+                _conv(t['amount'], t.get('currency', 'EUR'))
+                for t in transactions if t['category'] == 'income'
+            )
+            total_expenses = sum(
+                _conv(abs(t['amount']), t.get('currency', 'EUR'))
+                for t in transactions if t['category'] == 'expense'
+            )
 
-        # Envelope allocations are treated as expenses (money moved to savings)
-        envelope_allocations = sum(
-            _conv(et['amount'], et.get('account_currency', 'EUR'))
-            for et in envelope_transactions
-        )
-        total_expenses += envelope_allocations
+            # Envelope allocations are treated as expenses (money moved to savings)
+            envelope_allocations = sum(
+                _conv(et['amount'], et.get('account_currency', 'EUR'))
+                for et in envelope_transactions
+            )
+            total_expenses += envelope_allocations
 
-        net = total_income - total_expenses
+            net = total_income - total_expenses
 
-        # Breakdown by category
-        by_category = {}
-        by_account = {}
-        by_month = {}
-        by_envelope = {}
+            # Breakdown by category
+            by_category = {}
+            by_account = {}
+            by_month = {}
+            by_envelope = {}
 
-        for t in transactions:
-            t_currency = t.get('currency', 'EUR')
-            converted = _conv(t['amount'], t_currency)
-            converted_abs = _conv(abs(t['amount']), t_currency)
+            for t in transactions:
+                t_currency = t.get('currency', 'EUR')
+                converted = _conv(t['amount'], t_currency)
+                converted_abs = _conv(abs(t['amount']), t_currency)
 
-            # By category
-            cat = t['type_name']
-            by_category[cat] = by_category.get(cat, 0) + converted
+                # By category
+                cat = t['type_name']
+                by_category[cat] = by_category.get(cat, 0) + converted
 
-            # By account
-            acc = t['account_name']
-            by_account[acc] = by_account.get(acc, 0) + converted_abs
+                # By account
+                acc = t['account_name']
+                by_account[acc] = by_account.get(acc, 0) + converted_abs
 
-            # By month
-            from datetime import datetime
-            trans_date = datetime.fromisoformat(t['transaction_date'])
-            month_key = f"{trans_date.year}-{trans_date.month:02d}"
-            if month_key not in by_month:
-                by_month[month_key] = {'income': 0, 'expenses': 0, 'envelopes': 0}
+                # By month
+                from datetime import datetime
+                trans_date = datetime.fromisoformat(t['transaction_date'])
+                month_key = f"{trans_date.year}-{trans_date.month:02d}"
+                if month_key not in by_month:
+                    by_month[month_key] = {'income': 0, 'expenses': 0, 'envelopes': 0}
 
-            if t['category'] == 'income':
-                by_month[month_key]['income'] += converted
-            elif t['category'] == 'expense':
-                by_month[month_key]['expenses'] += converted_abs
+                if t['category'] == 'income':
+                    by_month[month_key]['income'] += converted
+                elif t['category'] == 'expense':
+                    by_month[month_key]['expenses'] += converted_abs
 
-        # Process envelope transactions
-        for et in envelope_transactions:
-            et_currency = et.get('account_currency', 'EUR')
-            et_converted = _conv(et['amount'], et_currency)
-            et_converted_abs = _conv(abs(et['amount']), et_currency)
+            # Process envelope transactions
+            for et in envelope_transactions:
+                et_currency = et.get('account_currency', 'EUR')
+                et_converted = _conv(et['amount'], et_currency)
+                et_converted_abs = _conv(abs(et['amount']), et_currency)
 
-            # By category (add to "Envelope Allocation" category)
-            by_category['Envelope Allocation'] = by_category.get('Envelope Allocation', 0) + et_converted
+                # By category (add to "Envelope Allocation" category)
+                by_category['Envelope Allocation'] = by_category.get('Envelope Allocation', 0) + et_converted
 
-            # By account
-            acc = et['account_name']
-            by_account[acc] = by_account.get(acc, 0) + et_converted_abs
+                # By account
+                acc = et['account_name']
+                by_account[acc] = by_account.get(acc, 0) + et_converted_abs
 
-            # By envelope
-            env = et['envelope_name']
-            by_envelope[env] = by_envelope.get(env, 0) + et_converted
+                # By envelope
+                env = et['envelope_name']
+                by_envelope[env] = by_envelope.get(env, 0) + et_converted
 
-            # By month
-            from datetime import datetime
-            trans_date = datetime.fromisoformat(et['transaction_date'])
-            month_key = f"{trans_date.year}-{trans_date.month:02d}"
-            if month_key not in by_month:
-                by_month[month_key] = {'income': 0, 'expenses': 0, 'envelopes': 0}
+                # By month
+                from datetime import datetime
+                trans_date = datetime.fromisoformat(et['transaction_date'])
+                month_key = f"{trans_date.year}-{trans_date.month:02d}"
+                if month_key not in by_month:
+                    by_month[month_key] = {'income': 0, 'expenses': 0, 'envelopes': 0}
 
-            by_month[month_key]['envelopes'] += et_converted
+                by_month[month_key]['envelopes'] += et_converted
 
-        # Combine all transactions for display
-        all_transactions = transactions + envelope_transactions
+            # Combine all transactions for display
+            all_transactions = transactions + envelope_transactions
 
-        # Build envelope budget data
-        envelope_budget_data = []
+            # Build envelope budget data
+            envelope_budget_data = []
 
-        total_envelope_budget = 0
-        for env in envelopes_with_tag:
-            envelope_budget_data.append({
-                'name': env['name'],
-                'budget': env['current_amount'],  # Money available in envelope
-                'target': env['target_amount']
-            })
-            total_envelope_budget += env['current_amount']
+            total_envelope_budget = 0
+            for env in envelopes_with_tag:
+                envelope_budget_data.append({
+                    'name': env['name'],
+                    'budget': env['current_amount'],  # Money available in envelope
+                    'target': env['target_amount']
+                })
+                total_envelope_budget += env['current_amount']
 
-        return {
-            'tag': tag,
-            'start_date': start_date,
-            'end_date': end_date,
-            'total_transactions': total_transactions,
-            'total_income': total_income,
-            'total_expenses': total_expenses,
-            'envelope_allocations': envelope_allocations,
-            'net': net,
-            'by_category': by_category,
-            'by_account': by_account,
-            'by_envelope': by_envelope,
-            'by_month': by_month,
-            'transactions': all_transactions,
-            'envelope_budget_data': envelope_budget_data,
-            'total_envelope_budget': total_envelope_budget
-        }
+            return {
+                'tag': tag,
+                'start_date': start_date,
+                'end_date': end_date,
+                'total_transactions': total_transactions,
+                'total_income': total_income,
+                'total_expenses': total_expenses,
+                'envelope_allocations': envelope_allocations,
+                'net': net,
+                'by_category': by_category,
+                'by_account': by_account,
+                'by_envelope': by_envelope,
+                'by_month': by_month,
+                'transactions': all_transactions,
+                'envelope_budget_data': envelope_budget_data,
+                'total_envelope_budget': total_envelope_budget
+            }
 
     def add_type(self, name: str, category: str, icon: str = None, color: str = None) -> int:
         """Add a new transaction type."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO transaction_types (name, category, icon, color) VALUES (?, ?, ?, ?)",
-            (name, category, icon, color)
-        )
-        type_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        logger.info(f"Added type: {name}")
-        return type_id
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO transaction_types (name, category, icon, color) VALUES (?, ?, ?, ?)",
+                (name, category, icon, color)
+            )
+            type_id = cursor.lastrowid
+            logger.info(f"Added type: {name}")
+            return type_id
 
     def add_subtype(self, type_id: int, name: str) -> int:
         """Add a new transaction subtype."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO transaction_subtypes (type_id, name) VALUES (?, ?)",
-            (type_id, name)
-        )
-        subtype_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        logger.info(f"Added subtype: {name}")
-        return subtype_id
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO transaction_subtypes (type_id, name) VALUES (?, ?)",
+                (type_id, name)
+            )
+            subtype_id = cursor.lastrowid
+            logger.info(f"Added subtype: {name}")
+            return subtype_id
 
     def update_type(self, type_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing transaction type."""
@@ -2311,20 +2630,17 @@ class FinanceDatabase:
 
     def delete_type(self, type_id: int) -> bool:
         """Delete a type if not used."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
         
-        # Check if type has transactions
-        cursor.execute("SELECT COUNT(*) FROM transactions WHERE type_id = ?", (type_id,))
-        if cursor.fetchone()[0] > 0:
-            conn.close()
-            return False
+            # Check if type has transactions
+            cursor.execute("SELECT COUNT(*) FROM transactions WHERE type_id = ?", (type_id,))
+            if cursor.fetchone()[0] > 0:
+                return False
         
-        cursor.execute("DELETE FROM transaction_types WHERE id = ?", (type_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+            cursor.execute("DELETE FROM transaction_types WHERE id = ?", (type_id,))
+            success = cursor.rowcount > 0
+            return success
 
     def update_subtype(self, subtype_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing subtype."""
@@ -2347,20 +2663,17 @@ class FinanceDatabase:
 
     def delete_subtype(self, subtype_id: int) -> bool:
         """Delete a subtype if not used."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
         
-        # Check if subtype has transactions
-        cursor.execute("SELECT COUNT(*) FROM transactions WHERE subtype_id = ?", (subtype_id,))
-        if cursor.fetchone()[0] > 0:
-            conn.close()
-            return False
+            # Check if subtype has transactions
+            cursor.execute("SELECT COUNT(*) FROM transactions WHERE subtype_id = ?", (subtype_id,))
+            if cursor.fetchone()[0] > 0:
+                return False
         
-        cursor.execute("DELETE FROM transaction_subtypes WHERE id = ?", (subtype_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+            cursor.execute("DELETE FROM transaction_subtypes WHERE id = ?", (subtype_id,))
+            success = cursor.rowcount > 0
+            return success
 
     # ==================== TRANSACTIONS ====================
 
@@ -2394,6 +2707,118 @@ class FinanceDatabase:
 
         logger.debug(f"Updated balance for account {account_id}: {transaction_category} {amount}")
 
+    def _sync_investment_account_balance(self, cursor, account_id: int) -> None:
+        """Set an investment account's balance to the market value it holds.
+
+        Trades move cash on the *linked* account, never on this one, so this
+        balance is not a running total of transactions — it is the portfolio,
+        priced. Anything else leaves net worth blind to what you own.
+
+        Holdings priced in another currency are converted at today's rate: a
+        position's value is a present-day figure, so a present-day rate is the
+        right one.
+        """
+        cursor.execute(
+            "SELECT account_type, currency FROM accounts WHERE id = ?", (account_id,)
+        )
+        account = cursor.fetchone()
+        if not account or account['account_type'] != 'investment':
+            return
+
+        # Quantity and price follow the same rules as get_investment_holdings():
+        # the stored columns are only trusted when set, otherwise both are derived
+        # from the trades. A position with no quoted price yet is valued at what
+        # it cost — better than valuing it at zero, which is what made a fresh
+        # purchase vanish from net worth.
+        cursor.execute("""
+            SELECT
+                CASE WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
+                     ELSE COALESCE(SUM(CASE
+                              WHEN t.transaction_type = 'buy'  THEN t.shares
+                              WHEN t.transaction_type = 'sell' THEN -t.shares
+                              ELSE 0 END), 0)
+                END AS quantity,
+                CASE WHEN h.current_price IS NOT NULL AND h.current_price > 0
+                     THEN h.current_price
+                     WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
+                     THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END)
+                          / SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
+                     ELSE COALESCE(h.average_cost, 0)
+                END AS price,
+                COALESCE(h.currency, s.currency) AS currency
+            FROM investment_holdings h
+            JOIN securities s ON h.security_id = s.id
+            LEFT JOIN investment_transactions t ON t.holding_id = h.id
+            WHERE h.account_id = ?
+            GROUP BY h.id
+        """, (account_id,))
+        holdings = cursor.fetchall()
+
+        rates = self.get_exchange_rates_map()
+        total = 0.0
+        for holding in holdings:
+            value = (holding['quantity'] or 0) * (holding['price'] or 0)
+            if value:
+                total += self.convert_with_rates(
+                    value, holding['currency'], account['currency'], rates)
+
+        cursor.execute(
+            "UPDATE accounts SET balance = ROUND(?, 2) WHERE id = ?", (total, account_id)
+        )
+        logger.debug(f"Investment account {account_id} valued at {total:.2f}")
+
+    def _sync_all_investment_account_balances(self, cursor) -> int:
+        """Re-value every investment account. Used after a full rebuild."""
+        cursor.execute("SELECT id FROM accounts WHERE account_type = 'investment'")
+        account_ids = [row['id'] for row in cursor.fetchall()]
+        for account_id in account_ids:
+            self._sync_investment_account_balance(cursor, account_id)
+        return len(account_ids)
+
+    def find_stale_historical_flags(self) -> List[Dict[str, Any]]:
+        """Transactions flagged historical that are not.
+
+        is_historical is set once, at insert, by comparing the date to the
+        account's opening date. Change the opening date afterwards — or import a
+        row before it is set — and the flag stays wrong for good.
+
+        It matters because the two ways a balance is produced disagree about it:
+        the incremental update skips a transaction on the flag, while
+        recalculate_all_balances() and verify_balances() judge by the date. A
+        stale flag therefore shows up as drift that no edit explains.
+        """
+        with self.db_connection(commit=False) as conn:
+            rows = conn.execute("""
+                SELECT t.id, t.account_id, a.name AS account_name, a.opening_date,
+                       t.transaction_date, t.amount, t.destinataire, t.description
+                  FROM transactions t
+                  JOIN accounts a ON a.id = t.account_id
+                 WHERE COALESCE(t.is_historical, 0) = 1
+                   AND a.opening_date IS NOT NULL
+                   AND t.transaction_date >= a.opening_date
+                 ORDER BY a.name, t.transaction_date
+            """).fetchall()
+        return [dict(row) for row in rows]
+
+    def clear_stale_historical_flags(self) -> int:
+        """Unset the flag where the date says the transaction is not historical.
+
+        Balances are left alone: run a recalculation afterwards, which is the
+        authority anyway.
+        """
+        with self.db_connection(commit=True) as conn:
+            cleared = conn.execute("""
+                UPDATE transactions
+                   SET is_historical = 0
+                 WHERE COALESCE(is_historical, 0) = 1
+                   AND account_id IN (SELECT id FROM accounts WHERE opening_date IS NOT NULL)
+                   AND transaction_date >= (
+                        SELECT opening_date FROM accounts WHERE id = transactions.account_id)
+            """).rowcount
+        if cleared:
+            logger.info(f"Cleared {cleared} stale historical flag(s)")
+        return cleared
+
     def verify_balances(self) -> List[Dict[str, Any]]:
         """Compare each account's stored balance against its own ledger.
 
@@ -2413,15 +2838,36 @@ class FinanceDatabase:
                     a.name,
                     a.currency,
                     ROUND(COALESCE(a.balance, 0), 2) AS stored,
-                    ROUND(COALESCE(a.opening_balance, 0) + COALESCE((
+                    ROUND(COALESCE(a.opening_balance, 0)
+                          + COALESCE((
                         SELECT SUM(t.amount)
                         FROM transactions t
                         WHERE t.account_id = a.id
                           AND t.confirmed = 1
                           AND (a.opening_date IS NULL
                                OR t.transaction_date >= a.opening_date)
+                    ), 0)
+                          + COALESCE((
+                        -- Legacy single-entry transfers: one row debits the
+                        -- source and is expected to credit the destination,
+                        -- with no mirror row of its own. recalculate_all_balances()
+                        -- applies that credit, so the check must too — otherwise
+                        -- every pre-double-entry transfer looks like drift.
+                        SELECT SUM(ABS(t.amount))
+                        FROM transactions t
+                        WHERE t.transfer_account_id = a.id
+                          AND t.is_transfer = 1
+                          AND t.confirmed = 1
+                          AND t.linked_transfer_id IS NULL
+                          AND COALESCE(t.is_historical, 0) = 0
+                          AND (a.opening_date IS NULL
+                               OR t.transaction_date >= a.opening_date)
                     ), 0), 2) AS derived
                 FROM accounts a
+                -- Investment accounts are excluded: their balance is the market
+                -- value of what they hold, not a sum of transactions, so this
+                -- comparison would flag every one of them as drifting.
+                WHERE a.account_type != 'investment'
                 ORDER BY a.name
             """).fetchall()
 
@@ -2477,7 +2923,7 @@ class FinanceDatabase:
             transaction_data['account_id'],
             transaction_data['transaction_date'],
             transaction_data['amount'],
-            transaction_data['destinataire']
+            normalise_recipient(transaction_data['destinataire'])
         ))
 
         duplicate = cursor.fetchone()
@@ -2496,7 +2942,7 @@ class FinanceDatabase:
             transaction_data['amount'],
             transaction_data['currency'],
             transaction_data.get('description', ''),
-            transaction_data['destinataire'],
+            normalise_recipient(transaction_data['destinataire']),
             transaction_data['type_id'],
             transaction_data['subtype_id'],
             transaction_data.get('tags', ''),
@@ -2571,7 +3017,7 @@ class FinanceDatabase:
                         destination_amount,  # Positive: money arriving
                         dest_currency,
                         transaction_data.get('description', ''),
-                        source_account_name,  # Destinataire = source account name
+                        normalise_recipient(source_account_name),  # Destinataire = source account
                         transaction_data['type_id'],
                         transaction_data['subtype_id'],
                         transaction_data.get('tags', ''),
@@ -2603,148 +3049,151 @@ class FinanceDatabase:
 
     def get_transactions(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Get transactions with optional filters."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        query = """
-            SELECT t.*,
-                   tt.name as type_name, tt.category, tt.icon, tt.color,
-                   ts.name as subtype_name,
-                   a.name as account_name, a.account_type, a.currency as account_currency,
-                   b.name as bank_name,
-                   COALESCE(t.owner_id, a.owner_id) as effective_owner_id,
-                   COALESCE(ot.name, o.name) as owner_name,
-                   ta.name as transfer_account_name, ta.account_type as transfer_account_type,
-                   tb.name as transfer_bank_name
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            JOIN transaction_subtypes ts ON t.subtype_id = ts.id
-            JOIN accounts a ON t.account_id = a.id
-            LEFT JOIN banks b ON a.bank_id = b.id
-            JOIN owners o ON a.owner_id = o.id
-            LEFT JOIN owners ot ON t.owner_id = ot.id
-            LEFT JOIN accounts ta ON t.transfer_account_id = ta.id
-            LEFT JOIN banks tb ON ta.bank_id = tb.id
-            WHERE 1=1
-        """
-        params = []
+            query = """
+                SELECT t.*,
+                       tt.name as type_name, tt.category, tt.icon, tt.color,
+                       ts.name as subtype_name,
+                       a.name as account_name, a.account_type, a.currency as account_currency,
+                       b.name as bank_name,
+                       COALESCE(t.owner_id, a.owner_id) as effective_owner_id,
+                       COALESCE(ot.name, o.name) as owner_name,
+                       ta.name as transfer_account_name, ta.account_type as transfer_account_type,
+                       tb.name as transfer_bank_name
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+                JOIN accounts a ON t.account_id = a.id
+                LEFT JOIN banks b ON a.bank_id = b.id
+                JOIN owners o ON a.owner_id = o.id
+                LEFT JOIN owners ot ON t.owner_id = ot.id
+                LEFT JOIN accounts ta ON t.transfer_account_id = ta.id
+                LEFT JOIN banks tb ON ta.bank_id = tb.id
+                WHERE 1=1
+            """
+            params = []
 
-        if filters:
-            if 'account_id' in filters:
-                query += " AND t.account_id = ?"
-                params.append(filters['account_id'])
-            if 'start_date' in filters:
-                query += " AND t.transaction_date >= ?"
-                params.append(filters['start_date'])
-            if 'end_date' in filters:
-                query += " AND t.transaction_date <= ?"
-                params.append(filters['end_date'])
-            if 'type_id' in filters:
-                query += " AND t.type_id = ?"
-                params.append(filters['type_id'])
-            if 'subtype_id' in filters:
-                query += " AND t.subtype_id = ?"
-                params.append(filters['subtype_id'])
-            if 'destinataire' in filters:
-                query += " AND t.destinataire = ?"
-                params.append(filters['destinataire'])
-            if 'tags' in filters:
-                query += " AND t.tags LIKE ?"
-                params.append(f"%{filters['tags']}%")
-            if 'owner_id' in filters:
-                query += " AND COALESCE(t.owner_id, a.owner_id) = ?"
-                params.append(filters['owner_id'])
-            if 'transfer_account_id' in filters:
-                query += " AND t.transfer_account_id = ?"
-                params.append(filters['transfer_account_id'])
+            if filters:
+                if 'account_id' in filters:
+                    query += " AND t.account_id = ?"
+                    params.append(filters['account_id'])
+                if 'start_date' in filters:
+                    query += " AND t.transaction_date >= ?"
+                    params.append(filters['start_date'])
+                if 'end_date' in filters:
+                    query += " AND t.transaction_date <= ?"
+                    params.append(filters['end_date'])
+                if 'type_id' in filters:
+                    query += " AND t.type_id = ?"
+                    params.append(filters['type_id'])
+                if 'subtype_id' in filters:
+                    query += " AND t.subtype_id = ?"
+                    params.append(filters['subtype_id'])
+                if 'destinataire' in filters:
+                    # Case-insensitive and partial: the field invites free text but
+                    # matched exactly, so typing "carref" found nothing and
+                    # "CARREFOUR" and "Carrefour" behaved as different payees.
+                    query += " AND LOWER(t.destinataire) LIKE LOWER(?)"
+                    params.append(f"%{filters['destinataire']}%")
+                if 'tags' in filters:
+                    query += " AND t.tags LIKE ?"
+                    params.append(f"%{filters['tags']}%")
+                if 'owner_id' in filters:
+                    query += " AND COALESCE(t.owner_id, a.owner_id) = ?"
+                    params.append(filters['owner_id'])
+                if 'transfer_account_id' in filters:
+                    query += " AND t.transfer_account_id = ?"
+                    params.append(filters['transfer_account_id'])
 
-        query += " ORDER BY t.transaction_date DESC, t.created_at DESC"
+            query += " ORDER BY t.transaction_date DESC, t.created_at DESC"
 
-        if filters:
-            if 'limit' in filters:
-                query += " LIMIT ?"
-                params.append(filters['limit'])
-            if 'offset' in filters:
-                query += " OFFSET ?"
-                params.append(filters['offset'])
+            if filters:
+                if 'limit' in filters:
+                    query += " LIMIT ?"
+                    params.append(filters['limit'])
+                if 'offset' in filters:
+                    query += " OFFSET ?"
+                    params.append(filters['offset'])
 
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
 
-        return [dict(row) for row in rows]
+            return [dict(row) for row in rows]
 
     def count_transactions(self, filters: Optional[Dict[str, Any]] = None) -> int:
         """Count transactions matching filters (ignores limit/offset)."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        query = "SELECT COUNT(*) FROM transactions t JOIN accounts a ON t.account_id = a.id WHERE 1=1"
-        params = []
+            query = "SELECT COUNT(*) FROM transactions t JOIN accounts a ON t.account_id = a.id WHERE 1=1"
+            params = []
 
-        if filters:
-            if 'account_id' in filters:
-                query += " AND t.account_id = ?"
-                params.append(filters['account_id'])
-            if 'start_date' in filters:
-                query += " AND t.transaction_date >= ?"
-                params.append(filters['start_date'])
-            if 'end_date' in filters:
-                query += " AND t.transaction_date <= ?"
-                params.append(filters['end_date'])
-            if 'type_id' in filters:
-                query += " AND t.type_id = ?"
-                params.append(filters['type_id'])
-            if 'subtype_id' in filters:
-                query += " AND t.subtype_id = ?"
-                params.append(filters['subtype_id'])
-            if 'owner_id' in filters:
-                query += " AND COALESCE(t.owner_id, a.owner_id) = ?"
-                params.append(filters['owner_id'])
-            if 'destinataire' in filters:
-                query += " AND t.destinataire = ?"
-                params.append(filters['destinataire'])
-            if 'tags' in filters:
-                query += " AND t.tags LIKE ?"
-                params.append(f"%{filters['tags']}%")
+            if filters:
+                if 'account_id' in filters:
+                    query += " AND t.account_id = ?"
+                    params.append(filters['account_id'])
+                if 'start_date' in filters:
+                    query += " AND t.transaction_date >= ?"
+                    params.append(filters['start_date'])
+                if 'end_date' in filters:
+                    query += " AND t.transaction_date <= ?"
+                    params.append(filters['end_date'])
+                if 'type_id' in filters:
+                    query += " AND t.type_id = ?"
+                    params.append(filters['type_id'])
+                if 'subtype_id' in filters:
+                    query += " AND t.subtype_id = ?"
+                    params.append(filters['subtype_id'])
+                if 'owner_id' in filters:
+                    query += " AND COALESCE(t.owner_id, a.owner_id) = ?"
+                    params.append(filters['owner_id'])
+                if 'destinataire' in filters:
+                    # Case-insensitive and partial: the field invites free text but
+                    # matched exactly, so typing "carref" found nothing and
+                    # "CARREFOUR" and "Carrefour" behaved as different payees.
+                    query += " AND LOWER(t.destinataire) LIKE LOWER(?)"
+                    params.append(f"%{filters['destinataire']}%")
+                if 'tags' in filters:
+                    query += " AND t.tags LIKE ?"
+                    params.append(f"%{filters['tags']}%")
 
-        cursor.execute(query, params)
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count
+            cursor.execute(query, params)
+            count = cursor.fetchone()[0]
+            return count
 
     def get_transaction(self, transaction_id: int) -> Optional[Dict[str, Any]]:
         """Get a single transaction by ID."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        query = """
-            SELECT t.*,
-                   tt.name as type_name, tt.category, tt.icon, tt.color,
-                   ts.name as subtype_name,
-                   a.name as account_name, a.account_type, a.currency as account_currency,
-                   b.name as bank_name,
-                   COALESCE(t.owner_id, a.owner_id) as effective_owner_id,
-                   COALESCE(ot.name, o.name) as owner_name,
-                   ta.name as transfer_account_name, ta.account_type as transfer_account_type,
-                   tb.name as transfer_bank_name
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            JOIN transaction_subtypes ts ON t.subtype_id = ts.id
-            JOIN accounts a ON t.account_id = a.id
-            LEFT JOIN banks b ON a.bank_id = b.id
-            JOIN owners o ON a.owner_id = o.id
-            LEFT JOIN owners ot ON t.owner_id = ot.id
-            LEFT JOIN accounts ta ON t.transfer_account_id = ta.id
-            LEFT JOIN banks tb ON ta.bank_id = tb.id
-            WHERE t.id = ?
-        """
+            query = """
+                SELECT t.*,
+                       tt.name as type_name, tt.category, tt.icon, tt.color,
+                       ts.name as subtype_name,
+                       a.name as account_name, a.account_type, a.currency as account_currency,
+                       b.name as bank_name,
+                       COALESCE(t.owner_id, a.owner_id) as effective_owner_id,
+                       COALESCE(ot.name, o.name) as owner_name,
+                       ta.name as transfer_account_name, ta.account_type as transfer_account_type,
+                       tb.name as transfer_bank_name
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+                JOIN accounts a ON t.account_id = a.id
+                LEFT JOIN banks b ON a.bank_id = b.id
+                JOIN owners o ON a.owner_id = o.id
+                LEFT JOIN owners ot ON t.owner_id = ot.id
+                LEFT JOIN accounts ta ON t.transfer_account_id = ta.id
+                LEFT JOIN banks tb ON ta.bank_id = tb.id
+                WHERE t.id = ?
+            """
 
-        cursor.execute(query, (transaction_id,))
-        row = cursor.fetchone()
-        conn.close()
+            cursor.execute(query, (transaction_id,))
+            row = cursor.fetchone()
 
-        return dict(row) if row else None
+            return dict(row) if row else None
 
     def update_transaction(self, transaction_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing transaction."""
@@ -2784,6 +3233,11 @@ class FinanceDatabase:
         updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
         if not updates:
             return False
+
+        # Same tidy-up as on insert, so editing a payee cannot reintroduce the
+        # stray casing and whitespace that fragment the recipient list.
+        if 'destinataire' in updates:
+            updates['destinataire'] = normalise_recipient(updates['destinataire'])
 
         linked_transfer_id = old_transaction.get('linked_transfer_id')
 
@@ -2999,52 +3453,48 @@ class FinanceDatabase:
 
     def get_envelopes(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
         """Get all envelopes."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
         
-        if include_inactive:
-            cursor.execute("SELECT * FROM envelopes ORDER BY is_active DESC, name")
-        else:
-            cursor.execute("SELECT * FROM envelopes WHERE is_active = 1 ORDER BY name")
+            if include_inactive:
+                cursor.execute("SELECT * FROM envelopes ORDER BY is_active DESC, name")
+            else:
+                cursor.execute("SELECT * FROM envelopes WHERE is_active = 1 ORDER BY name")
         
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
     def get_envelope(self, envelope_id: int) -> Optional[Dict[str, Any]]:
         """Get a specific envelope."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM envelopes WHERE id = ?", (envelope_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM envelopes WHERE id = ?", (envelope_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def add_envelope(self, envelope_data: Dict[str, Any]) -> int:
         """Add a new envelope."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT INTO envelopes
-            (name, description, target_amount, current_amount, deadline, color, is_active, tags)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            envelope_data['name'],
-            envelope_data.get('description', ''),
-            envelope_data['target_amount'],
-            envelope_data.get('current_amount', 0),
-            envelope_data.get('deadline'),
-            envelope_data.get('color', '#4ECDC4'),
-            envelope_data.get('is_active', 1),
-            envelope_data.get('tags', '')
-        ))
+            cursor.execute("""
+                INSERT INTO envelopes
+                (name, description, target_amount, current_amount, deadline, color, is_active, tags)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                envelope_data['name'],
+                envelope_data.get('description', ''),
+                envelope_data['target_amount'],
+                envelope_data.get('current_amount', 0),
+                envelope_data.get('deadline'),
+                envelope_data.get('color', '#4ECDC4'),
+                envelope_data.get('is_active', 1),
+                envelope_data.get('tags', '')
+            ))
 
-        envelope_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        logger.info(f"Added envelope: {envelope_data['name']}")
-        return envelope_id
+            envelope_id = cursor.lastrowid
+            logger.info(f"Added envelope: {envelope_data['name']}")
+            return envelope_id
 
     def update_envelope(self, envelope_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing envelope."""
@@ -3077,17 +3527,15 @@ class FinanceDatabase:
 
     def delete_envelope(self, envelope_id: int) -> bool:
         """Delete an envelope (soft delete - mark as inactive)."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("UPDATE envelopes SET is_active = 0 WHERE id = ?", (envelope_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
+            cursor.execute("UPDATE envelopes SET is_active = 0 WHERE id = ?", (envelope_id,))
+            success = cursor.rowcount > 0
 
-        if success:
-            logger.info(f"Deleted (deactivated) envelope {envelope_id}")
-        return success
+            if success:
+                logger.info(f"Deleted (deactivated) envelope {envelope_id}")
+            return success
 
     def permanent_delete_envelope(self, envelope_id: int) -> bool:
         """Permanently delete an envelope and all its transactions."""
@@ -3116,64 +3564,147 @@ class FinanceDatabase:
 
     def add_envelope_transaction(self, envelope_transaction_data: Dict[str, Any]) -> int:
         """Add money to an envelope (allocation). Optionally link to an existing transaction."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        transaction_date = (
-            envelope_transaction_data.get('transaction_date')
-            or datetime.now().strftime('%Y-%m-%d')
-        )
+            transaction_date = (
+                envelope_transaction_data.get('transaction_date')
+                or datetime.now().strftime('%Y-%m-%d')
+            )
 
-        # Insert envelope transaction with optional transaction_id link
-        cursor.execute("""
-            INSERT INTO envelope_transactions
-            (envelope_id, transaction_date, amount, account_id, description, transaction_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            envelope_transaction_data['envelope_id'],
-            transaction_date,
-            envelope_transaction_data['amount'],
-            envelope_transaction_data['account_id'],
-            envelope_transaction_data.get('description', ''),
-            envelope_transaction_data.get('transaction_id')
-        ))
+            # Insert envelope transaction with optional transaction_id link
+            cursor.execute("""
+                INSERT INTO envelope_transactions
+                (envelope_id, transaction_date, amount, account_id, description, transaction_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                envelope_transaction_data['envelope_id'],
+                transaction_date,
+                envelope_transaction_data['amount'],
+                envelope_transaction_data['account_id'],
+                envelope_transaction_data.get('description', ''),
+                envelope_transaction_data.get('transaction_id')
+            ))
 
-        transaction_id = cursor.lastrowid
+            transaction_id = cursor.lastrowid
 
-        # Update envelope current_amount
-        cursor.execute("""
-            UPDATE envelopes
-            SET current_amount = current_amount + ?
-            WHERE id = ?
-        """, (envelope_transaction_data['amount'], envelope_transaction_data['envelope_id']))
+            # Update envelope current_amount
+            cursor.execute("""
+                UPDATE envelopes
+                SET current_amount = current_amount + ?
+                WHERE id = ?
+            """, (envelope_transaction_data['amount'], envelope_transaction_data['envelope_id']))
 
-        conn.commit()
-        conn.close()
-        logger.info(f"Added envelope transaction: {envelope_transaction_data['amount']} to envelope {envelope_transaction_data['envelope_id']}")
-        return transaction_id
+            logger.info(f"Added envelope transaction: {envelope_transaction_data['amount']} to envelope {envelope_transaction_data['envelope_id']}")
+            return transaction_id
+
+    def get_envelope_allocations_by_account(self) -> List[Dict[str, Any]]:
+        """What each account has reserved, and what is genuinely free.
+
+        Envelopes never move money — they earmark it — so an account's balance
+        says nothing about how much of it is already promised. Without this,
+        "1 000 EUR available" could be entirely spoken for.
+        """
+        with self.db_connection(commit=False) as conn:
+            rows = conn.execute("""
+                SELECT a.id, a.name, a.currency, a.account_type,
+                       ROUND(COALESCE(a.balance, 0), 2) AS balance,
+                       ROUND(COALESCE((
+                           SELECT SUM(et.amount)
+                             FROM envelope_transactions et
+                             JOIN envelopes e ON e.id = et.envelope_id
+                            WHERE et.account_id = a.id AND e.is_active = 1
+                       ), 0), 2) AS allocated
+                  FROM accounts a
+                 ORDER BY a.name
+            """).fetchall()
+
+        return [{
+            'account_id': row['id'],
+            'name': row['name'],
+            'currency': row['currency'],
+            'account_type': row['account_type'],
+            'balance': row['balance'],
+            'allocated': row['allocated'],
+            'available': round(row['balance'] - row['allocated'], 2),
+            'over_allocated': row['allocated'] > row['balance'],
+        } for row in rows]
+
+    def get_envelope_allocations_detail(self, account_id: int = None) -> List[Dict[str, Any]]:
+        """Which envelope holds what, on which account."""
+        query = """
+            SELECT e.id AS envelope_id, e.name AS envelope_name, e.color,
+                   et.account_id, a.name AS account_name, a.currency,
+                   ROUND(SUM(et.amount), 2) AS allocated
+              FROM envelope_transactions et
+              JOIN envelopes e ON e.id = et.envelope_id
+              LEFT JOIN accounts a ON a.id = et.account_id
+             WHERE e.is_active = 1
+        """
+        params = []
+        if account_id:
+            query += " AND et.account_id = ?"
+            params.append(account_id)
+        query += " GROUP BY e.id, et.account_id HAVING allocated != 0 ORDER BY e.name"
+
+        with self.db_connection(commit=False) as conn:
+            return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+    def check_envelope_allocation(self, account_id: int, amount: float,
+                                  envelope_id: int = None) -> Optional[str]:
+        """Warn when an allocation would promise more than an account holds.
+
+        Returns a message, or None when there is nothing to say. Deliberately a
+        warning and not a refusal: earmarking money you expect to arrive is a
+        legitimate way to plan.
+        """
+        if not account_id or amount <= 0:
+            return None
+
+        with self.db_connection(commit=False) as conn:
+            row = conn.execute("""
+                SELECT ROUND(COALESCE(a.balance, 0), 2) AS balance, a.name, a.currency,
+                       ROUND(COALESCE((
+                           SELECT SUM(et.amount)
+                             FROM envelope_transactions et
+                             JOIN envelopes e ON e.id = et.envelope_id
+                            WHERE et.account_id = a.id AND e.is_active = 1
+                       ), 0), 2) AS allocated
+                  FROM accounts a WHERE a.id = ?
+            """, (account_id,)).fetchone()
+
+        if not row:
+            return None
+
+        free = round(row['balance'] - row['allocated'], 2)
+        if amount <= free:
+            return None
+
+        return (f"{row['name']} holds {row['balance']:,.2f} {row['currency']} with "
+                f"{row['allocated']:,.2f} already reserved, so only {free:,.2f} is "
+                f"free — this allocation of {amount:,.2f} goes beyond it.")
 
     def get_envelope_transactions(self, envelope_id: int) -> List[Dict[str, Any]]:
         """Get all transactions for an envelope, including linked transaction details if present."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT
-                et.*,
-                a.name as account_name,
-                t.transaction_date as linked_transaction_date,
-                t.description as linked_transaction_description,
-                t.amount as linked_transaction_amount
-            FROM envelope_transactions et
-            LEFT JOIN accounts a ON et.account_id = a.id
-            LEFT JOIN transactions t ON et.transaction_id = t.id
-            WHERE et.envelope_id = ?
-            ORDER BY et.transaction_date DESC
-        """, (envelope_id,))
+            cursor.execute("""
+                SELECT
+                    et.*,
+                    a.name as account_name,
+                    t.transaction_date as linked_transaction_date,
+                    t.description as linked_transaction_description,
+                    t.amount as linked_transaction_amount
+                FROM envelope_transactions et
+                LEFT JOIN accounts a ON et.account_id = a.id
+                LEFT JOIN transactions t ON et.transaction_id = t.id
+                WHERE et.envelope_id = ?
+                ORDER BY et.transaction_date DESC
+            """, (envelope_id,))
 
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
     def get_envelope_progress(self, envelope_id: int) -> Dict[str, Any]:
         """Calculate envelope progress."""
@@ -3238,87 +3769,99 @@ class FinanceDatabase:
 
     def get_debts(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
         """Get all debts."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
         
-        if include_inactive:
-            query = """
-                SELECT d.*, a.name as account_name
-                FROM debts d
-                LEFT JOIN accounts a ON d.linked_account_id = a.id
-                ORDER BY d.is_active DESC, d.name
-            """
-        else:
-            query = """
-                SELECT d.*, a.name as account_name
-                FROM debts d
-                LEFT JOIN accounts a ON d.linked_account_id = a.id
-                WHERE d.is_active = 1
-                ORDER BY d.name
-            """
+            if include_inactive:
+                query = """
+                    SELECT d.*, a.name as account_name
+                    FROM debts d
+                    LEFT JOIN accounts a ON d.linked_account_id = a.id
+                    ORDER BY d.is_active DESC, d.name
+                """
+            else:
+                query = """
+                    SELECT d.*, a.name as account_name
+                    FROM debts d
+                    LEFT JOIN accounts a ON d.linked_account_id = a.id
+                    WHERE d.is_active = 1
+                    ORDER BY d.name
+                """
         
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
     def get_debt(self, debt_id: int) -> Optional[Dict[str, Any]]:
         """Get a specific debt by ID."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT d.*, a.name as account_name
-            FROM debts d
-            LEFT JOIN accounts a ON d.linked_account_id = a.id
-            WHERE d.id = ?
-        """, (debt_id,))
+            cursor.execute("""
+                SELECT d.*, a.name as account_name
+                FROM debts d
+                LEFT JOIN accounts a ON d.linked_account_id = a.id
+                WHERE d.id = ?
+            """, (debt_id,))
 
-        row = cursor.fetchone()
-        conn.close()
+            row = cursor.fetchone()
 
-        return dict(row) if row else None
+            return dict(row) if row else None
 
     def add_debt(self, debt_data: Dict[str, Any]) -> int:
-        """Add a new debt and create associated recurring transaction template.
+        """Add a new debt.
 
-        Note: linked_account_id is required for creating recurring payment template.
+        linked_account_id is required because every payment recorded against
+        this debt is debited from that account — see add_debt_payment().
         """
-        # Validate required account link
         if not debt_data.get('linked_account_id'):
-            raise ValueError("linked_account_id is required to create a debt with automatic recurring payments")
+            raise ValueError(
+                "linked_account_id is required: payments on this debt need an "
+                "account to be debited from"
+            )
 
         # Get or create Debt type and subtype BEFORE opening connection
         debt_type_id, debt_subtype_id = self.get_or_create_debt_subtype(debt_data['name'])
 
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT INTO debts
-            (name, principal_amount, current_balance, interest_rate, interest_type,
-             monthly_payment, payment_day, start_date, linked_account_id, currency, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            debt_data['name'],
-            debt_data['principal_amount'],
-            debt_data.get('current_balance', debt_data['principal_amount']),
-            debt_data['interest_rate'],
-            debt_data['interest_type'],
-            debt_data['monthly_payment'],
-            debt_data['payment_day'],
-            debt_data['start_date'],
-            debt_data['linked_account_id'],
-            debt_data.get('currency', 'EUR'),
-            debt_data.get('is_active', 1)
-        ))
+            cursor.execute("""
+                INSERT INTO debts
+                (name, principal_amount, current_balance, interest_rate, interest_type,
+                 monthly_payment, payment_day, start_date, linked_account_id, currency, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                debt_data['name'],
+                debt_data['principal_amount'],
+                debt_data.get('current_balance', debt_data['principal_amount']),
+                debt_data['interest_rate'],
+                debt_data['interest_type'],
+                debt_data['monthly_payment'],
+                debt_data['payment_day'],
+                debt_data['start_date'],
+                debt_data['linked_account_id'],
+                debt_data.get('currency', 'EUR'),
+                debt_data.get('is_active', 1)
+            ))
 
-        debt_id = cursor.lastrowid
+            debt_id = cursor.lastrowid
 
-        conn.commit()
-        conn.close()
-        logger.info(f"Added debt: {debt_data['name']}")
-        return debt_id
+            logger.info(f"Added debt: {debt_data['name']}")
+            return debt_id
+
+    def _rename_debt_subtypes(self, cursor, old_name: str, new_name: str) -> None:
+        """Follow a debt rename through to the categories its payments use."""
+        if old_name == new_name:
+            return
+        cursor.execute(
+            "SELECT id FROM transaction_types "
+            "WHERE name IN ('Debt', 'Debt Interest', 'Debt Principal')")
+        for type_row in cursor.fetchall():
+            for suffix in ('', ' (extra)'):
+                cursor.execute(
+                    "UPDATE transaction_subtypes SET name = ? WHERE type_id = ? AND name = ?",
+                    (f"{new_name}{suffix}", type_row['id'], f"{old_name}{suffix}"))
 
     def update_debt(self, debt_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing debt."""
@@ -3335,11 +3878,22 @@ class FinanceDatabase:
         try:
             cursor = conn.cursor()
 
+            # A rename has to reach the categories the payments are filed under,
+            # or past payments end up orphaned in a subtype nothing points at.
+            previous_name = None
+            if 'name' in updates:
+                row = cursor.execute(
+                    "SELECT name FROM debts WHERE id = ?", (debt_id,)).fetchone()
+                previous_name = row['name'] if row else None
+
             set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
             values = list(updates.values()) + [debt_id]
 
             cursor.execute(f"UPDATE debts SET {set_clause} WHERE id = ?", values)
             success = cursor.rowcount > 0
+
+            if success and previous_name:
+                self._rename_debt_subtypes(cursor, previous_name, updates['name'])
 
             # If debt fully paid off, deactivate it
             if success and 'current_balance' in updates and updates['current_balance'] <= 0:
@@ -3353,15 +3907,71 @@ class FinanceDatabase:
 
     def delete_debt(self, debt_id: int) -> bool:
         """Deactivate a debt."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (debt_id,))
-        success = cursor.rowcount > 0
+            cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (debt_id,))
+            success = cursor.rowcount > 0
 
-        conn.commit()
-        conn.close()
-        return success
+            return success
+
+    def get_or_create_debt_category(self, debt_name: str, payment_type: str = 'regular',
+                                    part: str = 'interest') -> tuple[int, int]:
+        """Type and subtype a debt payment row is filed under.
+
+        A payment splits in two and the halves are not the same kind of money, so
+        they cannot share a type: category lives on the type, not the row.
+
+            Debt Interest  (expense)  -> what the loan costs you
+            Debt Principal (transfer) -> cash turning into a smaller debt
+
+        Each debt gets its own subtype under both, plus an "(extra)" sibling, so
+        reports show per-loan figures instead of one shared 'Payment' bucket.
+        The legacy 'Debt' type is left alone; scripts/split_debt_payments.py
+        moves old rows across.
+        """
+        type_name, category = (
+            ('Debt Interest', 'expense') if part == 'interest'
+            else ('Debt Principal', 'transfer'))
+        subtype_name = self.get_debt_subtype_name(debt_name, payment_type)
+
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM transaction_types WHERE name = ?", (type_name,))
+            row = cursor.fetchone()
+            if row:
+                type_id = row['id']
+            else:
+                cursor.execute(
+                    "INSERT INTO transaction_types (name, category, icon, color) "
+                    "VALUES (?, ?, ?, ?)",
+                    (type_name, category, '💳', '#E17055'))
+                type_id = cursor.lastrowid
+                logger.info(f"Created '{type_name}' transaction type ({category})")
+
+            cursor.execute(
+                "SELECT id FROM transaction_subtypes WHERE type_id = ? AND name = ?",
+                (type_id, subtype_name))
+            sub = cursor.fetchone()
+            if sub:
+                subtype_id = sub['id']
+            else:
+                cursor.execute(
+                    "INSERT INTO transaction_subtypes (type_id, name) VALUES (?, ?)",
+                    (type_id, subtype_name))
+                subtype_id = cursor.lastrowid
+                logger.info(f"Created debt subtype '{subtype_name}' under {type_name}")
+
+        return type_id, subtype_id
+
+    def get_debt_subtype_name(self, debt_name: str, payment_type: str = 'regular') -> str:
+        """Subtype a debt's payments are filed under.
+
+        Each debt gets its own, so reports show what each loan actually costs
+        rather than one undifferentiated 'Payment' bucket. Extra payments get a
+        sibling so they can be told apart at a glance.
+        """
+        return f"{debt_name} (extra)" if payment_type == 'extra' else debt_name
 
     def get_or_create_debt_subtype(self, debt_name: str) -> tuple[int, int]:
         """
@@ -3370,48 +3980,45 @@ class FinanceDatabase:
         Returns:
             tuple: (type_id, subtype_id) for the Debt type and specific debt subtype
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        # Get or create the 'Debt' transaction type
-        cursor.execute("SELECT id FROM transaction_types WHERE name = 'Debt'")
-        result = cursor.fetchone()
+            # Get or create the 'Debt' transaction type
+            cursor.execute("SELECT id FROM transaction_types WHERE name = 'Debt'")
+            result = cursor.fetchone()
 
-        if not result:
-            # Create the Debt transaction type if it doesn't exist
-            cursor.execute(
-                "INSERT INTO transaction_types (name, category, icon, color) VALUES (?, ?, ?, ?)",
-                ('Debt', 'expense', '💳', '#E17055')
-            )
-            debt_type_id = cursor.lastrowid
-            conn.commit()
-            logger.info("Created 'Debt' transaction type")
-        else:
-            debt_type_id = result['id']
+            if not result:
+                # Create the Debt transaction type if it doesn't exist
+                cursor.execute(
+                    "INSERT INTO transaction_types (name, category, icon, color) VALUES (?, ?, ?, ?)",
+                    ('Debt', 'expense', '💳', '#E17055')
+                )
+                debt_type_id = cursor.lastrowid
+                logger.info("Created 'Debt' transaction type")
+            else:
+                debt_type_id = result['id']
 
-        # Check if subtype for this debt already exists
-        cursor.execute("""
-            SELECT id FROM transaction_subtypes
-            WHERE type_id = ? AND name = ?
-        """, (debt_type_id, debt_name))
-
-        subtype_result = cursor.fetchone()
-
-        if subtype_result:
-            subtype_id = subtype_result['id']
-            logger.info(f"Using existing debt subtype: {debt_name}")
-        else:
-            # Create new subtype for this debt
+            # Check if subtype for this debt already exists
             cursor.execute("""
-                INSERT INTO transaction_subtypes (type_id, name)
-                VALUES (?, ?)
+                SELECT id FROM transaction_subtypes
+                WHERE type_id = ? AND name = ?
             """, (debt_type_id, debt_name))
-            subtype_id = cursor.lastrowid
-            conn.commit()
-            logger.info(f"Created new debt subtype: {debt_name}")
 
-        conn.close()
-        return (debt_type_id, subtype_id)
+            subtype_result = cursor.fetchone()
+
+            if subtype_result:
+                subtype_id = subtype_result['id']
+                logger.info(f"Using existing debt subtype: {debt_name}")
+            else:
+                # Create new subtype for this debt
+                cursor.execute("""
+                    INSERT INTO transaction_subtypes (type_id, name)
+                    VALUES (?, ?)
+                """, (debt_type_id, debt_name))
+                subtype_id = cursor.lastrowid
+                logger.info(f"Created new debt subtype: {debt_name}")
+
+            return (debt_type_id, subtype_id)
 
     def ensure_investment_types_exist(self):
         """
@@ -3422,91 +4029,113 @@ class FinanceDatabase:
         - Investments (expense) -> Securities Purchase
         - Investment Income (income) -> Dividends, Sale Proceeds
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        # 1. Ensure 'Investments' type exists (for buying securities - transfer, not expense)
-        # Investment purchases are wealth conversion (cash → securities), not consumption.
-        cursor.execute("SELECT id, category FROM transaction_types WHERE name = 'Investments'")
-        result = cursor.fetchone()
+            # 1. Ensure 'Investments' type exists (for buying securities - transfer, not expense)
+            # Investment purchases are wealth conversion (cash → securities), not consumption.
+            cursor.execute("SELECT id, category FROM transaction_types WHERE name = 'Investments'")
+            result = cursor.fetchone()
 
-        if not result:
-            cursor.execute(
-                "INSERT INTO transaction_types (name, category, icon, color) VALUES (?, ?, ?, ?)",
-                ('Investments', 'transfer', '📈', '#6C5CE7')
-            )
-            investments_type_id = cursor.lastrowid
-            conn.commit()
-            logger.info("Created 'Investments' transaction type")
-        else:
-            investments_type_id = result['id']
-            # Migrate existing records: change category from 'expense' to 'transfer'
-            if result['category'] == 'expense':
+            if not result:
                 cursor.execute(
-                    "UPDATE transaction_types SET category = 'transfer' WHERE name = 'Investments'",
+                    "INSERT INTO transaction_types (name, category, icon, color) VALUES (?, ?, ?, ?)",
+                    ('Investments', 'transfer', '📈', '#6C5CE7')
                 )
-                conn.commit()
-                logger.info("Migrated 'Investments' transaction type category from 'expense' to 'transfer'")
+                investments_type_id = cursor.lastrowid
+                logger.info("Created 'Investments' transaction type")
+            else:
+                investments_type_id = result['id']
+                # Migrate existing records: change category from 'expense' to 'transfer'
+                if result['category'] == 'expense':
+                    cursor.execute(
+                        "UPDATE transaction_types SET category = 'transfer' WHERE name = 'Investments'",
+                    )
+                    logger.info("Migrated 'Investments' transaction type category from 'expense' to 'transfer'")
 
-        # Add 'Securities Purchase' subtype
-        cursor.execute("""
-            SELECT id FROM transaction_subtypes
-            WHERE type_id = ? AND name = 'Securities Purchase'
-        """, (investments_type_id,))
-
-        if not cursor.fetchone():
+            # Add 'Securities Purchase' subtype
             cursor.execute("""
-                INSERT INTO transaction_subtypes (type_id, name)
-                VALUES (?, 'Securities Purchase')
+                SELECT id FROM transaction_subtypes
+                WHERE type_id = ? AND name = 'Securities Purchase'
             """, (investments_type_id,))
-            conn.commit()
-            logger.info("Created 'Securities Purchase' subtype")
 
-        # 2. Ensure 'Investment Income' type exists
-        cursor.execute("SELECT id FROM transaction_types WHERE name = 'Investment Income'")
-        result = cursor.fetchone()
+            if not cursor.fetchone():
+                cursor.execute("""
+                    INSERT INTO transaction_subtypes (type_id, name)
+                    VALUES (?, 'Securities Purchase')
+                """, (investments_type_id,))
+                logger.info("Created 'Securities Purchase' subtype")
 
-        if not result:
-            cursor.execute(
-                "INSERT INTO transaction_types (name, category, icon, color) VALUES (?, ?, ?, ?)",
-                ('Investment Income', 'income', '💰', '#00B894')
-            )
-            inv_income_type_id = cursor.lastrowid
-            conn.commit()
-            logger.info("Created 'Investment Income' transaction type")
-        else:
-            inv_income_type_id = result['id']
+            # 2. Ensure 'Investment Income' type exists
+            cursor.execute("SELECT id FROM transaction_types WHERE name = 'Investment Income'")
+            result = cursor.fetchone()
 
-        # Add 'Sale Proceeds' subtype if missing
-        cursor.execute("""
-            SELECT id FROM transaction_subtypes
-            WHERE type_id = ? AND name = 'Sale Proceeds'
-        """, (inv_income_type_id,))
+            if not result:
+                cursor.execute(
+                    "INSERT INTO transaction_types (name, category, icon, color) VALUES (?, ?, ?, ?)",
+                    ('Investment Income', 'income', '💰', '#00B894')
+                )
+                inv_income_type_id = cursor.lastrowid
+                logger.info("Created 'Investment Income' transaction type")
+            else:
+                inv_income_type_id = result['id']
 
-        if not cursor.fetchone():
+            # 'Securities Sale' carries the capital coming back from a sale.
+            # It sits under Investments (transfer) because returning your own
+            # money is not income — only the gain above cost is.
+            cursor.execute("SELECT id FROM transaction_types WHERE name = 'Investments'")
+            inv_type = cursor.fetchone()
+            if inv_type:
+                cursor.execute(
+                    "SELECT id FROM transaction_subtypes WHERE type_id = ? AND name = 'Securities Sale'",
+                    (inv_type['id'],))
+                if not cursor.fetchone():
+                    cursor.execute(
+                        "INSERT INTO transaction_subtypes (type_id, name) VALUES (?, 'Securities Sale')",
+                        (inv_type['id'],))
+                    logger.info("Created 'Securities Sale' subtype")
+
+            # 'Realised Gain' carries only the profit. Signed: a loss is negative,
+            # which the monthly summary counts on the expense side.
+            cursor.execute("SELECT id FROM transaction_types WHERE name = 'Investment Income'")
+            income_type = cursor.fetchone()
+            if income_type:
+                cursor.execute(
+                    "SELECT id FROM transaction_subtypes WHERE type_id = ? AND name = 'Realised Gain'",
+                    (income_type['id'],))
+                if not cursor.fetchone():
+                    cursor.execute(
+                        "INSERT INTO transaction_subtypes (type_id, name) VALUES (?, 'Realised Gain')",
+                        (income_type['id'],))
+                    logger.info("Created 'Realised Gain' subtype")
+
+            # Add 'Sale Proceeds' subtype if missing
             cursor.execute("""
-                INSERT INTO transaction_subtypes (type_id, name)
-                VALUES (?, 'Sale Proceeds')
+                SELECT id FROM transaction_subtypes
+                WHERE type_id = ? AND name = 'Sale Proceeds'
             """, (inv_income_type_id,))
-            conn.commit()
-            logger.info("Created 'Sale Proceeds' subtype")
 
-        # Ensure 'Dividends' subtype exists
-        cursor.execute("""
-            SELECT id FROM transaction_subtypes
-            WHERE type_id = ? AND name = 'Dividends'
-        """, (inv_income_type_id,))
+            if not cursor.fetchone():
+                cursor.execute("""
+                    INSERT INTO transaction_subtypes (type_id, name)
+                    VALUES (?, 'Sale Proceeds')
+                """, (inv_income_type_id,))
+                logger.info("Created 'Sale Proceeds' subtype")
 
-        if not cursor.fetchone():
+            # Ensure 'Dividends' subtype exists
             cursor.execute("""
-                INSERT INTO transaction_subtypes (type_id, name)
-                VALUES (?, 'Dividends')
+                SELECT id FROM transaction_subtypes
+                WHERE type_id = ? AND name = 'Dividends'
             """, (inv_income_type_id,))
-            conn.commit()
-            logger.info("Created 'Dividends' subtype")
 
-        conn.close()
-        logger.info("All investment transaction types verified/created")
+            if not cursor.fetchone():
+                cursor.execute("""
+                    INSERT INTO transaction_subtypes (type_id, name)
+                    VALUES (?, 'Dividends')
+                """, (inv_income_type_id,))
+                logger.info("Created 'Dividends' subtype")
+
+            logger.info("All investment transaction types verified/created")
 
     def add_debt_payment(self, payment_data: Dict[str, Any]) -> int:
         """Record a debt payment linked to a transaction."""
@@ -3551,11 +4180,15 @@ class FinanceDatabase:
 
             cursor.execute("""
                 INSERT INTO debt_payments
-                (debt_id, transaction_id, payment_date, amount, principal_paid, interest_paid, extra_payment, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (debt_id, transaction_id, principal_transaction_id, payment_date,
+                 amount, principal_paid, interest_paid, extra_payment, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 payment_data['debt_id'],
                 payment_data.get('transaction_id'),
+                # The second ledger row. Without it, deleting a payment would
+                # reverse the interest and leave the principal behind.
+                payment_data.get('principal_transaction_id'),
                 payment_data['payment_date'],
                 total_payment,
                 principal_paid,
@@ -3589,22 +4222,66 @@ class FinanceDatabase:
         finally:
             conn.close()
 
+    def delete_debt_payment(self, payment_id: int) -> bool:
+        """Undo a payment: remove its ledger rows and give the debt back its balance.
+
+        There was no way to delete one at all, so a mistyped amount was permanent
+        — and with a payment now writing two rows, correcting one by hand would
+        mean finding both.
+        """
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT * FROM debt_payments WHERE id = ?", (payment_id,))
+            payment = cursor.fetchone()
+            if not payment:
+                return False
+            payment = dict(payment)
+
+            # Give the debt back what this payment took off it.
+            restored = (payment.get('principal_paid') or 0) + (payment.get('extra_payment') or 0)
+            cursor.execute(
+                "UPDATE debts SET current_balance = ROUND(current_balance + ?, 2), "
+                "is_active = 1 WHERE id = ?",
+                (restored, payment['debt_id']))
+
+            # Drop the payment row first: it holds foreign keys to both ledger
+            # rows, so deleting those while it still points at them is refused.
+            cursor.execute("DELETE FROM debt_payments WHERE id = ?", (payment_id,))
+
+            # Reverse the cash and drop both ledger rows.
+            for column in ('transaction_id', 'principal_transaction_id'):
+                row_id = payment.get(column)
+                if not row_id:
+                    continue
+                cursor.execute(
+                    "SELECT t.account_id, t.amount, tt.category FROM transactions t "
+                    "JOIN transaction_types tt ON t.type_id = tt.id WHERE t.id = ?",
+                    (row_id,))
+                row = cursor.fetchone()
+                if row:
+                    self._update_account_balance(
+                        cursor, row['account_id'], -row['amount'], row['category'])
+                    cursor.execute("DELETE FROM transactions WHERE id = ?", (row_id,))
+
+            logger.info(f"Deleted debt payment {payment_id}, restored {restored:.2f} to debt {payment['debt_id']}")
+            return True
+
     def get_debt_payments(self, debt_id: int) -> List[Dict[str, Any]]:
         """Get all payments for a specific debt."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT dp.*, t.destinataire, t.description
-            FROM debt_payments dp
-            JOIN transactions t ON dp.transaction_id = t.id
-            WHERE dp.debt_id = ?
-            ORDER BY dp.payment_date DESC
-        """, (debt_id,))
+            cursor.execute("""
+                SELECT dp.*, t.destinataire, t.description
+                FROM debt_payments dp
+                JOIN transactions t ON dp.transaction_id = t.id
+                WHERE dp.debt_id = ?
+                ORDER BY dp.payment_date DESC
+            """, (debt_id,))
         
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
     def calculate_debt_payoff(self, debt_id: int) -> Dict[str, Any]:
         """Calculate payoff information for a debt."""
@@ -3744,33 +4421,32 @@ class FinanceDatabase:
 
     def get_budgets(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
         """Get all budgets."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        if include_inactive:
-            query = """
-                SELECT b.*, tt.name as type_name, tt.icon, tt.color,
-                       o.name as owner_name
-                FROM budgets b
-                JOIN transaction_types tt ON b.type_id = tt.id
-                LEFT JOIN owners o ON b.owner_id = o.id
-                ORDER BY b.is_active DESC, tt.name
-            """
-        else:
-            query = """
-                SELECT b.*, tt.name as type_name, tt.icon, tt.color,
-                       o.name as owner_name
-                FROM budgets b
-                JOIN transaction_types tt ON b.type_id = tt.id
-                LEFT JOIN owners o ON b.owner_id = o.id
-                WHERE b.is_active = 1
-                ORDER BY tt.name
-            """
+            if include_inactive:
+                query = """
+                    SELECT b.*, tt.name as type_name, tt.icon, tt.color,
+                           o.name as owner_name
+                    FROM budgets b
+                    JOIN transaction_types tt ON b.type_id = tt.id
+                    LEFT JOIN owners o ON b.owner_id = o.id
+                    ORDER BY b.is_active DESC, tt.name
+                """
+            else:
+                query = """
+                    SELECT b.*, tt.name as type_name, tt.icon, tt.color,
+                           o.name as owner_name
+                    FROM budgets b
+                    JOIN transaction_types tt ON b.type_id = tt.id
+                    LEFT JOIN owners o ON b.owner_id = o.id
+                    WHERE b.is_active = 1
+                    ORDER BY tt.name
+                """
 
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
     def add_budget(self, budget_data: Dict[str, Any]) -> int:
         """Add a new budget.
@@ -3785,28 +4461,26 @@ class FinanceDatabase:
                 - end_date: Optional budget end date
                 - is_active: Whether budget is active (default 1)
         """
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT INTO budgets (type_id, owner_id, amount, currency, period, start_date, end_date, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            budget_data['type_id'],
-            budget_data.get('owner_id'),
-            budget_data['amount'],
-            budget_data.get('currency', 'EUR'),
-            budget_data.get('period', 'monthly'),
-            budget_data['start_date'],
-            budget_data.get('end_date'),
-            budget_data.get('is_active', 1)
-        ))
+            cursor.execute("""
+                INSERT INTO budgets (type_id, owner_id, amount, currency, period, start_date, end_date, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                budget_data['type_id'],
+                budget_data.get('owner_id'),
+                budget_data['amount'],
+                budget_data.get('currency', 'EUR'),
+                budget_data.get('period', 'monthly'),
+                budget_data['start_date'],
+                budget_data.get('end_date'),
+                budget_data.get('is_active', 1)
+            ))
 
-        budget_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        logger.info(f"Added budget for type {budget_data['type_id']} in {budget_data.get('currency', 'EUR')}")
-        return budget_id
+            budget_id = cursor.lastrowid
+            logger.info(f"Added budget for type {budget_data['type_id']} in {budget_data.get('currency', 'EUR')}")
+            return budget_id
 
     def update_budget(self, budget_id: int, updates: Dict[str, Any]) -> bool:
         """Update a budget."""
@@ -3836,14 +4510,12 @@ class FinanceDatabase:
 
     def delete_budget(self, budget_id: int) -> bool:
         """Deactivate a budget."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("UPDATE budgets SET is_active = 0 WHERE id = ?", (budget_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+            cursor.execute("UPDATE budgets SET is_active = 0 WHERE id = ?", (budget_id,))
+            success = cursor.rowcount > 0
+            return success
 
     # ==================== REPORTING ====================
 
@@ -3870,18 +4542,28 @@ class FinanceDatabase:
                 return raw_amount
             return self.convert_with_rates(raw_amount, acct_currency, display_currency, exchange_rates)
 
-        income = sum(convert(t, t['amount']) for t in transactions if t['category'] == 'income')
-        expenses = sum(convert(t, abs(t['amount'])) for t in transactions if t['category'] == 'expense')
+        # Bucketing follows the sign, not just the category — the same rule the
+        # by-owner summary already used, so the two agree. A negative row in an
+        # income category is money going out (a realised loss, a refunded
+        # salary) and belongs on the expense side, not as negative income.
+        def is_money_in(t):
+            return t['amount'] > 0 and t['category'] != 'transfer'
+
+        def is_money_out(t):
+            return t['amount'] < 0 and t['category'] != 'transfer'
+
+        income = sum(convert(t, t['amount']) for t in transactions if is_money_in(t))
+        expenses = sum(convert(t, abs(t['amount'])) for t in transactions if is_money_out(t))
 
         income_by_cat = {}
         expense_by_cat = {}
         expense_by_cat_detailed = {}
 
         for t in transactions:
-            if t['category'] == 'income':
+            if is_money_in(t):
                 amt = convert(t, t['amount'])
                 income_by_cat[t['type_name']] = income_by_cat.get(t['type_name'], 0) + amt
-            elif t['category'] == 'expense':
+            elif is_money_out(t):
                 amt = convert(t, abs(t['amount']))
                 expense_by_cat[t['type_name']] = expense_by_cat.get(t['type_name'], 0) + amt
 
@@ -3991,102 +4673,101 @@ class FinanceDatabase:
             budgets.append(b)
 
         # Aggregate expense spending per (type_id, owner_id) in a single query
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT t.type_id, a.owner_id, a.currency as account_currency,
-                   SUM(ABS(t.amount)) as total
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            JOIN accounts a ON t.account_id = a.id
-            WHERE tt.category = 'expense'
-              AND t.transaction_date >= ?
-              AND t.transaction_date < ?
-            GROUP BY t.type_id, a.owner_id, a.currency
-        """, (start_date.isoformat(), end_date.isoformat()))
-        rows = cursor.fetchall()
-        conn.close()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT t.type_id, a.owner_id, a.currency as account_currency,
+                       SUM(ABS(t.amount)) as total
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                JOIN accounts a ON t.account_id = a.id
+                WHERE tt.category = 'expense'
+                  AND t.transaction_date >= ?
+                  AND t.transaction_date < ?
+                GROUP BY t.type_id, a.owner_id, a.currency
+            """, (start_date.isoformat(), end_date.isoformat()))
+            rows = cursor.fetchall()
 
-        # Load exchange rates once for efficient batch conversion
-        exchange_rates = self.get_exchange_rates_map()
+            # Load exchange rates once for efficient batch conversion
+            exchange_rates = self.get_exchange_rates_map()
 
-        # Group budgets by (type_id, owner_id) for currency lookup
-        budget_currency_map = {(b['type_id'], b.get('owner_id')): b.get('currency', 'EUR') for b in budgets}
+            # Group budgets by (type_id, owner_id) for currency lookup
+            budget_currency_map = {(b['type_id'], b.get('owner_id')): b.get('currency', 'EUR') for b in budgets}
 
-        # Build actual spending maps with currency conversion
-        # (type_id, owner_id) -> amount in that budget's currency
-        actual_by_type_and_owner = {}  # owner-scoped budgets
-        actual_by_type_all = {}        # unscoped budgets (all owners)
+            # Build actual spending maps with currency conversion
+            # (type_id, owner_id) -> amount in that budget's currency
+            actual_by_type_and_owner = {}  # owner-scoped budgets
+            actual_by_type_all = {}        # unscoped budgets (all owners)
 
-        for row in rows:
-            type_id = row['type_id']
-            owner_id = row['owner_id']
-            account_currency = row['account_currency'] or 'EUR'
-            amount = row['total']
+            for row in rows:
+                type_id = row['type_id']
+                owner_id = row['owner_id']
+                account_currency = row['account_currency'] or 'EUR'
+                amount = row['total']
 
-            # Convert to budget currency for owner-scoped bucket
-            budget_currency_owner = budget_currency_map.get((type_id, owner_id), display_currency)
-            converted_owner = self.convert_with_rates(amount, account_currency, budget_currency_owner, exchange_rates) \
-                if account_currency != budget_currency_owner else amount
-            key = (type_id, owner_id)
-            actual_by_type_and_owner[key] = actual_by_type_and_owner.get(key, 0) + converted_owner
+                # Convert to budget currency for owner-scoped bucket
+                budget_currency_owner = budget_currency_map.get((type_id, owner_id), display_currency)
+                converted_owner = self.convert_with_rates(amount, account_currency, budget_currency_owner, exchange_rates) \
+                    if account_currency != budget_currency_owner else amount
+                key = (type_id, owner_id)
+                actual_by_type_and_owner[key] = actual_by_type_and_owner.get(key, 0) + converted_owner
 
-            # Convert to budget currency for all-owners bucket
-            budget_currency_all = budget_currency_map.get((type_id, None), display_currency)
-            converted_all = self.convert_with_rates(amount, account_currency, budget_currency_all, exchange_rates) \
-                if account_currency != budget_currency_all else amount
-            actual_by_type_all[type_id] = actual_by_type_all.get(type_id, 0) + converted_all
+                # Convert to budget currency for all-owners bucket
+                budget_currency_all = budget_currency_map.get((type_id, None), display_currency)
+                converted_all = self.convert_with_rates(amount, account_currency, budget_currency_all, exchange_rates) \
+                    if account_currency != budget_currency_all else amount
+                actual_by_type_all[type_id] = actual_by_type_all.get(type_id, 0) + converted_all
 
-        # Compare budgets vs actual
-        results = []
-        for budget in budgets:
-            budget_currency = budget.get('currency', 'EUR')
-            budget_owner_id = budget.get('owner_id')
+            # Compare budgets vs actual
+            results = []
+            for budget in budgets:
+                budget_currency = budget.get('currency', 'EUR')
+                budget_owner_id = budget.get('owner_id')
 
-            if budget['period'] == 'monthly':
-                budget_amount = budget['amount']
-            else:  # yearly
-                budget_amount = budget['amount'] / 12
+                if budget['period'] == 'monthly':
+                    budget_amount = budget['amount']
+                else:  # yearly
+                    budget_amount = budget['amount'] / 12
 
-            if budget_owner_id:
-                actual = actual_by_type_and_owner.get((budget['type_id'], budget_owner_id), 0)
-            else:
-                actual = actual_by_type_all.get(budget['type_id'], 0)
+                if budget_owner_id:
+                    actual = actual_by_type_and_owner.get((budget['type_id'], budget_owner_id), 0)
+                else:
+                    actual = actual_by_type_all.get(budget['type_id'], 0)
 
-            difference = budget_amount - actual
-            percentage = (actual / budget_amount * 100) if budget_amount > 0 else 0
+                difference = budget_amount - actual
+                percentage = (actual / budget_amount * 100) if budget_amount > 0 else 0
 
-            # Convert to display currency for UI if different
-            budget_display = budget_amount
-            actual_display = actual
-            difference_display = difference
-            if budget_currency != display_currency:
-                budget_display = self.convert_with_rates(budget_amount, budget_currency, display_currency, exchange_rates)
-                actual_display = self.convert_with_rates(actual, budget_currency, display_currency, exchange_rates)
-                difference_display = self.convert_with_rates(difference, budget_currency, display_currency, exchange_rates)
+                # Convert to display currency for UI if different
+                budget_display = budget_amount
+                actual_display = actual
+                difference_display = difference
+                if budget_currency != display_currency:
+                    budget_display = self.convert_with_rates(budget_amount, budget_currency, display_currency, exchange_rates)
+                    actual_display = self.convert_with_rates(actual, budget_currency, display_currency, exchange_rates)
+                    difference_display = self.convert_with_rates(difference, budget_currency, display_currency, exchange_rates)
 
-            results.append({
-                'budget_id': budget['id'],
-                'type_id': budget['type_id'],
-                'type_name': budget['type_name'],
-                'icon': budget['icon'],
-                'color': budget['color'],
-                'owner_id': budget_owner_id,
-                'owner_name': budget.get('owner_name'),
-                'budget': round(budget_display, 2),
-                'actual': round(actual_display, 2),
-                'difference': round(difference_display, 2),
-                'percentage': round(percentage, 1),
-                'status': 'over' if difference < 0 else 'under' if difference > 0 else 'exact',
-                'budget_currency': budget_currency,
-                'budget_original': round(budget_amount, 2),
-                'actual_original': round(actual, 2)
-            })
+                results.append({
+                    'budget_id': budget['id'],
+                    'type_id': budget['type_id'],
+                    'type_name': budget['type_name'],
+                    'icon': budget['icon'],
+                    'color': budget['color'],
+                    'owner_id': budget_owner_id,
+                    'owner_name': budget.get('owner_name'),
+                    'budget': round(budget_display, 2),
+                    'actual': round(actual_display, 2),
+                    'difference': round(difference_display, 2),
+                    'percentage': round(percentage, 1),
+                    'status': 'over' if difference < 0 else 'under' if difference > 0 else 'exact',
+                    'budget_currency': budget_currency,
+                    'budget_original': round(budget_amount, 2),
+                    'actual_original': round(actual, 2)
+                })
 
-        return {
-            'categories': results,
-            'display_currency': display_currency
-        }
+            return {
+                'categories': results,
+                'display_currency': display_currency
+            }
 
     def get_income_vs_expenses_trend(self, start_date: str, end_date: str, group_by: str = 'month') -> Dict[str, Any]:
         """Get income vs expenses trend over time.
@@ -4159,7 +4840,11 @@ class FinanceDatabase:
             as_of_date = datetime.now().date().isoformat()
 
         # Get dashboard currency preference
-        dashboard_currency = self.get_preference('dashboard_currency', 'DKK')
+        # display_currency, like every other figure in the app. This used to read
+        # a separate 'display_currency' that defaulted to DKK, was used here and
+        # nowhere else, and was absent from the settings whitelist — so net worth
+        # was reported in a currency the user could neither see nor change.
+        display_currency = self.get_preference('display_currency', 'EUR')
 
         # Get all accounts
         accounts = self.get_accounts()
@@ -4169,13 +4854,13 @@ class FinanceDatabase:
         total_assets = 0
         for a in accounts:
             original_balance = a['balance']
-            converted_balance = self.convert_currency(original_balance, a['currency'], dashboard_currency)
+            converted_balance = self.convert_currency(original_balance, a['currency'], display_currency)
             total_assets += converted_balance
             accounts_converted.append({
                 'name': a['name'],
                 'balance': converted_balance,
                 'original_balance': original_balance,
-                'currency': dashboard_currency,
+                'currency': display_currency,
                 'original_currency': a['currency']
             })
 
@@ -4186,13 +4871,13 @@ class FinanceDatabase:
         for d in debts:
             original_balance = d['current_balance']
             debt_currency = d.get('currency', 'EUR')
-            converted_balance = self.convert_currency(original_balance, debt_currency, dashboard_currency)
+            converted_balance = self.convert_currency(original_balance, debt_currency, display_currency)
             total_debts += converted_balance
             debts_converted.append({
                 'name': d['name'],
                 'balance': converted_balance,
                 'original_balance': original_balance,
-                'currency': dashboard_currency,
+                'currency': display_currency,
                 'original_currency': debt_currency
             })
 
@@ -4204,7 +4889,7 @@ class FinanceDatabase:
             'total_assets': total_assets,
             'total_debts': total_debts,
             'net_worth': net_worth,
-            'currency': dashboard_currency,
+            'currency': display_currency,
             'accounts': accounts_converted,
             'debts': debts_converted
         }
@@ -4232,13 +4917,12 @@ class FinanceDatabase:
 
         if start_date is None:
             # Find earliest transaction or account opening date
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT MIN(transaction_date) FROM transactions")
-            earliest_txn = cursor.fetchone()[0]
-            cursor.execute("SELECT MIN(opening_date) FROM accounts")
-            earliest_acc = cursor.fetchone()[0]
-            conn.close()
+            with self.db_connection(commit=False) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT MIN(transaction_date) FROM transactions")
+                earliest_txn = cursor.fetchone()[0]
+                cursor.execute("SELECT MIN(opening_date) FROM accounts")
+                earliest_acc = cursor.fetchone()[0]
 
             if earliest_txn and earliest_acc:
                 start_date = min(earliest_txn, earliest_acc)
@@ -4273,91 +4957,141 @@ class FinanceDatabase:
         # Calculate net worth at each date
         trend_data = []
         accounts = self.get_accounts(owner_id=owner_id)
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        for calc_date in calculation_dates:
-            total_assets = 0
+            for calc_date in calculation_dates:
+                total_assets = 0
 
-            # Calculate balance for each account at this date
-            for account in accounts:
-                opening_date = account.get('opening_date')
-                opening_balance = account.get('opening_balance', 0) or 0
+                # Calculate balance for each account at this date
+                for account in accounts:
+                    opening_date = account.get('opening_date')
+                    opening_balance = account.get('opening_balance', 0) or 0
 
-                # If account was opened after calc_date, skip it
-                if opening_date and opening_date > calc_date:
-                    continue
+                    # If account was opened after calc_date, skip it
+                    if opening_date and opening_date > calc_date:
+                        continue
 
-                # Start with opening balance
-                balance = opening_balance
+                    # An investment account carries no transactions of its own —
+                    # its worth is the portfolio. Replaying the ledger would show
+                    # it as empty, which is why the trend disagreed with current
+                    # net worth by exactly the value of the holdings.
+                    #
+                    # Quantity is reconstructed from the trades up to this date,
+                    # so what you had then is right. The price is today's: no
+                    # price history is kept, so past points value old positions
+                    # at current quotes.
+                    if account.get('account_type') == 'investment':
+                        cursor.execute("""
+                            SELECT COALESCE(SUM(
+                                       CASE WHEN it.transaction_type = 'buy'  THEN it.shares
+                                            WHEN it.transaction_type = 'sell' THEN -it.shares
+                                            ELSE 0 END), 0) AS quantity,
+                                   -- Same fallback as _sync_investment_account_balance:
+                                   -- an unquoted holding is worth what it cost, not zero.
+                                   -- Life insurance and similar have no market price, and
+                                   -- treating them as worthless made the trend disagree
+                                   -- with current net worth by tens of thousands.
+                                   CASE WHEN h.current_price > 0 THEN h.current_price
+                                        WHEN SUM(CASE WHEN it.transaction_type = 'buy'
+                                                      THEN it.shares ELSE 0 END) > 0
+                                        THEN SUM(CASE WHEN it.transaction_type = 'buy'
+                                                      THEN it.total_amount ELSE 0 END)
+                                             / SUM(CASE WHEN it.transaction_type = 'buy'
+                                                        THEN it.shares ELSE 0 END)
+                                        ELSE COALESCE(h.average_cost, 0)
+                                   END AS price,
+                                   COALESCE(h.currency, s.currency) AS currency
+                              FROM investment_holdings h
+                              JOIN securities s ON h.security_id = s.id
+                              LEFT JOIN investment_transactions it
+                                     ON it.holding_id = h.id AND it.transaction_date <= ?
+                             WHERE h.account_id = ?
+                             GROUP BY h.id
+                        """, (calc_date, account['id']))
+                        for holding in cursor.fetchall():
+                            held = (holding['quantity'] or 0) * (holding['price'] or 0)
+                            if held:
+                                total_assets += self.convert_currency(
+                                    held, holding['currency'], display_currency)
+                        continue
 
-                # Add all confirmed transactions up to this date
-                if opening_date:
-                    # If we have an opening date, only count transactions after it
+                    # Start with opening balance
+                    balance = opening_balance
+
+                    # Add all confirmed transactions up to this date
+                    if opening_date:
+                        # If we have an opening date, only count transactions after it
+                        cursor.execute("""
+                            SELECT amount
+                            FROM transactions
+                            WHERE account_id = ?
+                              AND transaction_date <= ?
+                              AND transaction_date >= ?
+                              AND confirmed = 1
+                            ORDER BY transaction_date
+                        """, (account['id'], calc_date, opening_date))
+                    else:
+                        # No opening date: count all transactions up to calc_date
+                        cursor.execute("""
+                            SELECT amount
+                            FROM transactions
+                            WHERE account_id = ?
+                              AND transaction_date <= ?
+                              AND confirmed = 1
+                            ORDER BY transaction_date
+                        """, (account['id'], calc_date))
+
+                    transactions = cursor.fetchall()
+                    for txn in transactions:
+                        balance += txn[0]
+
+                    # Convert to display currency
+                    converted_balance = self.convert_currency(balance, account['currency'], display_currency)
+                    total_assets += converted_balance
+
+                # Get historical debt balances at this snapshot date
+                # Balance at date = principal_amount - sum of principal reductions up to that date
+                total_debts = 0
+                debts = self.get_debts(include_inactive=True)
+                # Filter debts by owner if specified
+                if owner_id:
+                    debts = [d for d in debts if d.get('owner_id') == owner_id]
+                for debt in debts:
+                    # You owe the money from the day you borrow it, not from the
+                    # day the instalments begin. start_date is the first payment
+                    # date — using it here hid a loan contracted in January whose
+                    # repayments only start in October, so the chart and the
+                    # net worth card disagreed by the whole principal.
+                    #
+                    # created_at is when the debt entered the books, which is the
+                    # closest thing to a contract date the table records.
+                    appeared = (debt.get('created_at') or debt.get('start_date') or '')[:10]
+                    if appeared and appeared > calc_date:
+                        continue
+                    principal_amount = debt.get('principal_amount', 0) or 0
+                    # Sum all principal reductions (principal_paid + extra_payment) up to calc_date
                     cursor.execute("""
-                        SELECT amount
-                        FROM transactions
-                        WHERE account_id = ?
-                          AND transaction_date <= ?
-                          AND transaction_date >= ?
-                          AND confirmed = 1
-                        ORDER BY transaction_date
-                    """, (account['id'], calc_date, opening_date))
-                else:
-                    # No opening date: count all transactions up to calc_date
-                    cursor.execute("""
-                        SELECT amount
-                        FROM transactions
-                        WHERE account_id = ?
-                          AND transaction_date <= ?
-                          AND confirmed = 1
-                        ORDER BY transaction_date
-                    """, (account['id'], calc_date))
+                        SELECT COALESCE(SUM(principal_paid + extra_payment), 0)
+                        FROM debt_payments
+                        WHERE debt_id = ? AND payment_date <= ?
+                    """, (debt['id'], calc_date))
+                    total_principal_paid = cursor.fetchone()[0] or 0
+                    debt_balance = max(0, principal_amount - total_principal_paid)
+                    if debt_balance > 0:
+                        debt_currency = debt.get('currency', 'EUR')
+                        converted_debt = self.convert_currency(debt_balance, debt_currency, display_currency)
+                        total_debts += converted_debt
 
-                transactions = cursor.fetchall()
-                for txn in transactions:
-                    balance += txn[0]
+                net_worth = total_assets - total_debts
 
-                # Convert to display currency
-                converted_balance = self.convert_currency(balance, account['currency'], display_currency)
-                total_assets += converted_balance
+                trend_data.append({
+                    'date': calc_date,
+                    'assets': total_assets,
+                    'debts': total_debts,
+                    'net_worth': net_worth
+                })
 
-            # Get historical debt balances at this snapshot date
-            # Balance at date = principal_amount - sum of principal reductions up to that date
-            total_debts = 0
-            debts = self.get_debts(include_inactive=True)
-            # Filter debts by owner if specified
-            if owner_id:
-                debts = [d for d in debts if d.get('owner_id') == owner_id]
-            for debt in debts:
-                debt_start = debt.get('start_date') or ''
-                # Skip debts that hadn't started yet at this snapshot date
-                if debt_start and debt_start > calc_date:
-                    continue
-                principal_amount = debt.get('principal_amount', 0) or 0
-                # Sum all principal reductions (principal_paid + extra_payment) up to calc_date
-                cursor.execute("""
-                    SELECT COALESCE(SUM(principal_paid + extra_payment), 0)
-                    FROM debt_payments
-                    WHERE debt_id = ? AND payment_date <= ?
-                """, (debt['id'], calc_date))
-                total_principal_paid = cursor.fetchone()[0] or 0
-                debt_balance = max(0, principal_amount - total_principal_paid)
-                if debt_balance > 0:
-                    debt_currency = debt.get('currency', 'EUR')
-                    converted_debt = self.convert_currency(debt_balance, debt_currency, display_currency)
-                    total_debts += converted_debt
-
-            net_worth = total_assets - total_debts
-
-            trend_data.append({
-                'date': calc_date,
-                'assets': total_assets,
-                'debts': total_debts,
-                'net_worth': net_worth
-            })
-
-        conn.close()
 
         return {
             'start_date': start_date,
@@ -4373,71 +5107,67 @@ class FinanceDatabase:
     # Securities (master list of investment instruments)
     def get_securities(self, search: str = None, limit: int = None) -> List[Dict[str, Any]]:
         """Get securities from master list, optionally filtered by search term."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
         
-        query = "SELECT * FROM securities"
-        params = []
+            query = "SELECT * FROM securities"
+            params = []
         
-        if search:
-            query += " WHERE symbol LIKE ? OR name LIKE ? OR isin LIKE ?"
-            params = [f"%{search}%", f"%{search}%", f"%{search}%"]
+            if search:
+                query += " WHERE symbol LIKE ? OR name LIKE ? OR isin LIKE ?"
+                params = [f"%{search}%", f"%{search}%", f"%{search}%"]
         
-        query += " ORDER BY symbol"
+            query += " ORDER BY symbol"
         
-        if limit:
-            query += " LIMIT ?"
-            params.append(limit)
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
         
-        cursor.execute(query, params)
-        securities = cursor.fetchall()
-        conn.close()
+            cursor.execute(query, params)
+            securities = cursor.fetchall()
 
-        return [dict(s) for s in securities]
+            return [dict(s) for s in securities]
 
     def get_security(self, security_id: int) -> Dict[str, Any]:
         """Get a single security by ID."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM securities WHERE id = ?", (security_id,))
-        security = cursor.fetchone()
-        conn.close()
+            cursor.execute("SELECT * FROM securities WHERE id = ?", (security_id,))
+            security = cursor.fetchone()
         
-        return security
+            return security
 
     def add_security(self, security_data: Dict[str, Any]) -> int:
         """Add a new security to the master list."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
         
-        required_fields = ['symbol', 'name', 'investment_type', 'currency']
-        for field in required_fields:
-            if field not in security_data:
-                raise ValueError(f"Missing required field: {field}")
+            required_fields = ['symbol', 'name', 'investment_type', 'currency']
+            for field in required_fields:
+                if field not in security_data:
+                    raise ValueError(f"Missing required field: {field}")
         
-        cursor.execute("""
-            INSERT INTO securities 
-            (symbol, name, investment_type, isin, exchange, currency, sector, country, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            security_data['symbol'].upper(),
-            security_data['name'],
-            security_data['investment_type'],
-            security_data.get('isin'),
-            security_data.get('exchange'),
-            security_data['currency'],
-            security_data.get('sector'),
-            security_data.get('country'),
-            security_data.get('notes', '')
-        ))
+            cursor.execute("""
+                INSERT INTO securities 
+                (symbol, name, investment_type, isin, exchange, currency, sector, country, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                security_data['symbol'].upper(),
+                security_data['name'],
+                security_data['investment_type'],
+                security_data.get('isin'),
+                security_data.get('exchange'),
+                security_data['currency'],
+                security_data.get('sector'),
+                security_data.get('country'),
+                security_data.get('notes', '')
+            ))
         
-        security_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+            security_id = cursor.lastrowid
         
-        logger.info(f"Added security: {security_data['symbol']} - {security_data['name']}")
-        return security_id
+            logger.info(f"Added security: {security_data['symbol']} - {security_data['name']}")
+            return security_id
 
     def update_security(self, security_id: int, update_data: Dict[str, Any]) -> bool:
         """Update security information.
@@ -4453,328 +5183,335 @@ class FinanceDatabase:
         if not update_data:
             return False
 
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        set_clause = ", ".join([f"{key} = ?" for key in update_data.keys()])
-        values = list(update_data.values()) + [security_id]
+            set_clause = ", ".join([f"{key} = ?" for key in update_data.keys()])
+            values = list(update_data.values()) + [security_id]
 
-        cursor.execute(f"UPDATE securities SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
+            cursor.execute(f"UPDATE securities SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
 
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
+            success = cursor.rowcount > 0
 
-        if success:
-            logger.info(f"Updated security {security_id}")
-        return success
+            if success:
+                logger.info(f"Updated security {security_id}")
+            return success
 
     def delete_security(self, security_id: int) -> bool:
         """Delete a security from master list (only if not used by any holdings)."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
         
-        # Check if security is used by any holdings
-        cursor.execute("SELECT COUNT(*) FROM investment_holdings WHERE security_id = ?", (security_id,))
-        count = cursor.fetchone()[0]
+            # Check if security is used by any holdings
+            cursor.execute("SELECT COUNT(*) FROM investment_holdings WHERE security_id = ?", (security_id,))
+            count = cursor.fetchone()[0]
         
-        if count > 0:
-            raise ValueError("Cannot delete security that is used by existing holdings")
+            if count > 0:
+                raise ValueError("Cannot delete security that is used by existing holdings")
         
-        cursor.execute("DELETE FROM securities WHERE id = ?", (security_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
+            cursor.execute("DELETE FROM securities WHERE id = ?", (security_id,))
+            success = cursor.rowcount > 0
         
-        if success:
-            logger.info(f"Deleted security {security_id}")
-        return success
+            if success:
+                logger.info(f"Deleted security {security_id}")
+            return success
 
     def get_investment_holdings(self, account_id: int = None) -> List[Dict[str, Any]]:
         """Get all investment holdings with calculated quantity and average cost from transactions."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        if account_id:
-            query = """
-                SELECT h.id as holding_id,
-                       h.account_id,
-                       h.security_id,
-                       h.quantity as calculated_quantity,
-                       h.average_cost as calculated_average_cost,
-                       h.currency as holding_currency,
-                       h.current_price,
-                       h.last_price_update,
-                       h.created_at as holding_created_at,
-                       s.symbol,
-                       s.name,
-                       s.investment_type,
-                       s.isin,
-                       s.exchange,
-                       s.currency as security_currency,
-                       s.sector,
-                       s.country,
-                       s.notes as security_notes,
-                       a.name as account_name,
-                       a.currency as account_currency,
-                       -- Prefer stored values, fall back to transaction calculations
-                       CASE
-                           WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
-                           ELSE COALESCE(
-                               SUM(CASE
-                                   WHEN t.transaction_type = 'buy' THEN t.shares
-                                   WHEN t.transaction_type = 'sell' THEN -t.shares
-                                   ELSE 0
-                               END), 0
-                           )
-                       END as quantity,
-                       CASE
-                           WHEN h.average_cost IS NOT NULL AND h.average_cost > 0 THEN h.average_cost
-                           WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
-                           THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END) /
-                                SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
-                           ELSE 0
-                       END as average_cost
-                FROM investment_holdings h
-                JOIN securities s ON h.security_id = s.id
-                JOIN accounts a ON h.account_id = a.id
-                LEFT JOIN investment_transactions t ON h.id = t.holding_id
-                WHERE h.account_id = ?
-                GROUP BY h.id
-                ORDER BY s.symbol
-            """
-            cursor.execute(query, (account_id,))
-        else:
-            query = """
-                SELECT h.id as holding_id,
-                       h.account_id,
-                       h.security_id,
-                       h.quantity as calculated_quantity,
-                       h.average_cost as calculated_average_cost,
-                       h.currency as holding_currency,
-                       h.current_price,
-                       h.last_price_update,
-                       h.created_at as holding_created_at,
-                       s.symbol,
-                       s.name,
-                       s.investment_type,
-                       s.isin,
-                       s.exchange,
-                       s.currency as security_currency,
-                       s.sector,
-                       s.country,
-                       s.notes as security_notes,
-                       a.name as account_name,
-                       a.currency as account_currency,
-                       -- Prefer stored values, fall back to transaction calculations
-                       CASE
-                           WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
-                           ELSE COALESCE(
-                               SUM(CASE
-                                   WHEN t.transaction_type = 'buy' THEN t.shares
-                                   WHEN t.transaction_type = 'sell' THEN -t.shares
-                                   ELSE 0
-                               END), 0
-                           )
-                       END as quantity,
-                       CASE
-                           WHEN h.average_cost IS NOT NULL AND h.average_cost > 0 THEN h.average_cost
-                           WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
-                           THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END) /
-                                SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
-                           ELSE 0
-                       END as average_cost
-                FROM investment_holdings h
-                JOIN securities s ON h.security_id = s.id
-                JOIN accounts a ON h.account_id = a.id
-                LEFT JOIN investment_transactions t ON h.id = t.holding_id
-                GROUP BY h.id
-                ORDER BY a.name, s.symbol
-            """
-            cursor.execute(query)
+            if account_id:
+                query = """
+                    SELECT h.id as holding_id,
+                           h.account_id,
+                           h.security_id,
+                           h.quantity as calculated_quantity,
+                           h.average_cost as calculated_average_cost,
+                           h.currency as holding_currency,
+                           h.current_price,
+                           h.last_price_update,
+                           h.created_at as holding_created_at,
+                           s.symbol,
+                           s.name,
+                           s.investment_type,
+                           s.isin,
+                           s.exchange,
+                           s.currency as security_currency,
+                           s.sector,
+                           s.country,
+                           s.notes as security_notes,
+                           a.name as account_name,
+                           a.currency as account_currency,
+                           -- Prefer stored values, fall back to transaction calculations
+                           CASE
+                               WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
+                               ELSE COALESCE(
+                                   SUM(CASE
+                                       WHEN t.transaction_type = 'buy' THEN t.shares
+                                       WHEN t.transaction_type = 'sell' THEN -t.shares
+                                       ELSE 0
+                                   END), 0
+                               )
+                           END as quantity,
+                           CASE
+                               WHEN h.average_cost IS NOT NULL AND h.average_cost > 0 THEN h.average_cost
+                               WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
+                               THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END) /
+                                    SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
+                               ELSE 0
+                           END as average_cost
+                    FROM investment_holdings h
+                    JOIN securities s ON h.security_id = s.id
+                    JOIN accounts a ON h.account_id = a.id
+                    LEFT JOIN investment_transactions t ON h.id = t.holding_id
+                    WHERE h.account_id = ?
+                    GROUP BY h.id
+                    ORDER BY s.symbol
+                """
+                cursor.execute(query, (account_id,))
+            else:
+                query = """
+                    SELECT h.id as holding_id,
+                           h.account_id,
+                           h.security_id,
+                           h.quantity as calculated_quantity,
+                           h.average_cost as calculated_average_cost,
+                           h.currency as holding_currency,
+                           h.current_price,
+                           h.last_price_update,
+                           h.created_at as holding_created_at,
+                           s.symbol,
+                           s.name,
+                           s.investment_type,
+                           s.isin,
+                           s.exchange,
+                           s.currency as security_currency,
+                           s.sector,
+                           s.country,
+                           s.notes as security_notes,
+                           a.name as account_name,
+                           a.currency as account_currency,
+                           -- Prefer stored values, fall back to transaction calculations
+                           CASE
+                               WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
+                               ELSE COALESCE(
+                                   SUM(CASE
+                                       WHEN t.transaction_type = 'buy' THEN t.shares
+                                       WHEN t.transaction_type = 'sell' THEN -t.shares
+                                       ELSE 0
+                                   END), 0
+                               )
+                           END as quantity,
+                           CASE
+                               WHEN h.average_cost IS NOT NULL AND h.average_cost > 0 THEN h.average_cost
+                               WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
+                               THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END) /
+                                    SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
+                               ELSE 0
+                           END as average_cost
+                    FROM investment_holdings h
+                    JOIN securities s ON h.security_id = s.id
+                    JOIN accounts a ON h.account_id = a.id
+                    LEFT JOIN investment_transactions t ON h.id = t.holding_id
+                    GROUP BY h.id
+                    ORDER BY a.name, s.symbol
+                """
+                cursor.execute(query)
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
         
-        # Process rows to merge calculated values with transaction-based values
-        holdings = []
-        for row in rows:
-            holding = dict(row)
-            # Use transaction-based values if available, otherwise use stored values
-            holding['quantity'] = holding['quantity'] or holding['calculated_quantity']
-            holding['average_cost'] = holding['average_cost'] or holding['calculated_average_cost']
+            # Process rows to merge calculated values with transaction-based values
+            holdings = []
+            for row in rows:
+                holding = dict(row)
+                # Use transaction-based values if available, otherwise use stored values
+                holding['quantity'] = holding['quantity'] or holding['calculated_quantity']
+                holding['average_cost'] = holding['average_cost'] or holding['calculated_average_cost']
             
-            # Map holding_id to id for frontend compatibility
-            if 'holding_id' in holding:
-                holding['id'] = holding['holding_id']
-                del holding['holding_id']
+                # Map holding_id to id for frontend compatibility
+                if 'holding_id' in holding:
+                    holding['id'] = holding['holding_id']
+                    del holding['holding_id']
             
-            holdings.append(holding)
+                holdings.append(holding)
         
-        return holdings
+            return holdings
 
     def add_investment_holding(self, holding_data: Dict[str, Any]) -> int:
         """Add a new investment holding with optional ISIN."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        # First, ensure the security exists in the securities table
-        security_id = None
+            # First, ensure the security exists in the securities table
+            security_id = None
         
-        # If security_id is provided directly, use it
-        if 'security_id' in holding_data and holding_data['security_id']:
-            security_id = holding_data['security_id']
-        else:
-            # Otherwise, check if security already exists by symbol
-            cursor.execute("SELECT id FROM securities WHERE symbol = ?", (holding_data['symbol'].upper(),))
-            existing_security = cursor.fetchone()
-            
-            if existing_security:
-                security_id = existing_security['id']
+            # If security_id is provided directly, use it
+            if 'security_id' in holding_data and holding_data['security_id']:
+                security_id = holding_data['security_id']
             else:
-                # Create new security
-                cursor.execute("""
-                    INSERT INTO securities 
-                    (symbol, name, investment_type, isin, currency, notes)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    holding_data['symbol'].upper(),
-                    holding_data['name'],
-                    holding_data['investment_type'],
-                    holding_data.get('isin', '').upper() if holding_data.get('isin') else None,
-                    holding_data['currency'],
-                    holding_data.get('notes', '')
-                ))
-                security_id = cursor.lastrowid
+                # Otherwise, check if security already exists by symbol
+                cursor.execute("SELECT id FROM securities WHERE symbol = ?", (holding_data['symbol'].upper(),))
+                existing_security = cursor.fetchone()
+            
+                if existing_security:
+                    security_id = existing_security['id']
+                else:
+                    # Create new security
+                    cursor.execute("""
+                        INSERT INTO securities 
+                        (symbol, name, investment_type, isin, currency, notes)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        holding_data['symbol'].upper(),
+                        holding_data['name'],
+                        holding_data['investment_type'],
+                        holding_data.get('isin', '').upper() if holding_data.get('isin') else None,
+                        holding_data['currency'],
+                        holding_data.get('notes', '')
+                    ))
+                    security_id = cursor.lastrowid
 
-        # Now create the holding
-        cursor.execute("""
-            INSERT INTO investment_holdings
-            (account_id, security_id, currency, current_price)
-            VALUES (?, ?, ?, ?)
-        """, (
-            holding_data['account_id'],
-            security_id,
-            holding_data['currency'],
-            holding_data.get('current_price', 0)
-        ))
+            # Now create the holding
+            cursor.execute("""
+                INSERT INTO investment_holdings
+                (account_id, security_id, currency, current_price)
+                VALUES (?, ?, ?, ?)
+            """, (
+                holding_data['account_id'],
+                security_id,
+                holding_data['currency'],
+                holding_data.get('current_price', 0)
+            ))
 
-        holding_id = cursor.lastrowid
-        conn.commit()
+            holding_id = cursor.lastrowid
         
-        # Get symbol for logging if available
-        symbol_for_log = holding_data.get('symbol', 'Unknown')
-        if symbol_for_log == 'Unknown' and security_id:
-            # If we don't have symbol but have security_id, fetch it for logging
-            cursor_log = conn.cursor()
-            cursor_log.execute("SELECT symbol FROM securities WHERE id = ?", (security_id,))
-            security_row = cursor_log.fetchone()
-            if security_row:
-                symbol_for_log = security_row['symbol']
+            # Get symbol for logging if available
+            symbol_for_log = holding_data.get('symbol', 'Unknown')
+            if symbol_for_log == 'Unknown' and security_id:
+                # If we don't have symbol but have security_id, fetch it for logging
+                cursor_log = conn.cursor()
+                cursor_log.execute("SELECT symbol FROM securities WHERE id = ?", (security_id,))
+                security_row = cursor_log.fetchone()
+                if security_row:
+                    symbol_for_log = security_row['symbol']
         
-        logger.info(f"Added investment holding: {symbol_for_log} (ISIN: {holding_data.get('isin', 'N/A')})")
-        conn.close()
-        return holding_id
+            logger.info(f"Added investment holding: {symbol_for_log} (ISIN: {holding_data.get('isin', 'N/A')})")
+
+            # A new position may already carry a quantity and price.
+            self._sync_investment_account_balance(cursor, holding_data['account_id'])
+
+            return holding_id
 
     def update_investment_holding(self, holding_id: int, update_data: Dict[str, Any]) -> bool:
         """Update an existing investment holding."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        # Build update query dynamically based on provided fields
-        update_fields = []
-        update_values = []
+            # Build update query dynamically based on provided fields
+            update_fields = []
+            update_values = []
 
-        # Only update fields that are actually provided in update_data
-        if 'security_id' in update_data:
-            update_fields.append("security_id = ?")
-            update_values.append(update_data['security_id'])
-
-        if 'quantity' in update_data:
-            update_fields.append("quantity = ?")
-            update_values.append(update_data['quantity'])
-
-        if 'purchase_price' in update_data:
-            update_fields.append("average_cost = ?")
-            update_values.append(update_data['purchase_price'])
-
-        if 'purchase_date' in update_data:
-            update_fields.append("purchase_date = ?")
-            update_values.append(update_data['purchase_date'])
-
-        if 'account_id' in update_data:
-            update_fields.append("account_id = ?")
-            update_values.append(update_data['account_id'])
-
-        if 'currency' in update_data:
-            update_fields.append("currency = ?")
-            update_values.append(update_data['currency'])
-
-        if 'current_price' in update_data:
-            update_fields.append("current_price = ?")
-            update_values.append(update_data['current_price'])
-
-        if 'notes' in update_data:
-            update_fields.append("notes = ?")
-            update_values.append(update_data['notes'])
-        
-        if not update_fields:
-            # No fields to update
-            conn.close()
-            return False
-        
-        update_values.append(holding_id)
-        
-        query = f"""
-            UPDATE investment_holdings
-            SET {', '.join(update_fields)}
-            WHERE id = ?
-        """
-        
-        cursor.execute(query, update_values)
-
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-
-        if success:
-            # Build log message based on what was actually updated
-            updated_fields = []
+            # Only update fields that are actually provided in update_data
             if 'security_id' in update_data:
-                updated_fields.append(f"security_id={update_data['security_id']}")
+                update_fields.append("security_id = ?")
+                update_values.append(update_data['security_id'])
+
             if 'quantity' in update_data:
-                updated_fields.append(f"quantity={update_data['quantity']}")
+                update_fields.append("quantity = ?")
+                update_values.append(update_data['quantity'])
+
             if 'purchase_price' in update_data:
-                updated_fields.append(f"price={update_data['purchase_price']}")
+                update_fields.append("average_cost = ?")
+                update_values.append(update_data['purchase_price'])
+
             if 'purchase_date' in update_data:
-                updated_fields.append(f"purchase_date={update_data['purchase_date']}")
+                update_fields.append("purchase_date = ?")
+                update_values.append(update_data['purchase_date'])
+
             if 'account_id' in update_data:
-                updated_fields.append(f"account_id={update_data['account_id']}")
+                update_fields.append("account_id = ?")
+                update_values.append(update_data['account_id'])
+
             if 'currency' in update_data:
-                updated_fields.append(f"currency={update_data['currency']}")
+                update_fields.append("currency = ?")
+                update_values.append(update_data['currency'])
+
+            if 'current_price' in update_data:
+                update_fields.append("current_price = ?")
+                update_values.append(update_data['current_price'])
+
             if 'notes' in update_data:
-                updated_fields.append("notes")
+                update_fields.append("notes = ?")
+                update_values.append(update_data['notes'])
+        
+            if not update_fields:
+                # No fields to update
+                return False
+        
+            update_values.append(holding_id)
+        
+            query = f"""
+                UPDATE investment_holdings
+                SET {', '.join(update_fields)}
+                WHERE id = ?
+            """
+        
+            cursor.execute(query, update_values)
 
-            logger.info(f"Updated investment holding ID {holding_id}: {', '.join(updated_fields)}")
+            success = cursor.rowcount > 0
 
-        return success
+            if success:
+                # Build log message based on what was actually updated
+                updated_fields = []
+                if 'security_id' in update_data:
+                    updated_fields.append(f"security_id={update_data['security_id']}")
+                if 'quantity' in update_data:
+                    updated_fields.append(f"quantity={update_data['quantity']}")
+                if 'purchase_price' in update_data:
+                    updated_fields.append(f"price={update_data['purchase_price']}")
+                if 'purchase_date' in update_data:
+                    updated_fields.append(f"purchase_date={update_data['purchase_date']}")
+                if 'account_id' in update_data:
+                    updated_fields.append(f"account_id={update_data['account_id']}")
+                if 'currency' in update_data:
+                    updated_fields.append(f"currency={update_data['currency']}")
+                if 'notes' in update_data:
+                    updated_fields.append("notes")
+
+                logger.info(f"Updated investment holding ID {holding_id}: {', '.join(updated_fields)}")
+
+            if success:
+                # The holding may have moved account: re-price both.
+                for account_id in {row['account_id'] for row in cursor.execute(
+                        "SELECT account_id FROM investment_holdings WHERE id = ?",
+                        (holding_id,)).fetchall()} | {update_data.get('account_id')}:
+                    if account_id:
+                        self._sync_investment_account_balance(cursor, account_id)
+
+            return success
 
     def update_holding_price(self, holding_id: int, new_price: float) -> bool:
         """Update the current price of a holding."""
 
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            UPDATE investment_holdings
-            SET current_price = ?, last_price_update = ?
-            WHERE id = ?
-        """, (new_price, datetime.now().isoformat(), holding_id))
+            cursor.execute("""
+                UPDATE investment_holdings
+                SET current_price = ?, last_price_update = ?
+                WHERE id = ?
+            """, (new_price, datetime.now().isoformat(), holding_id))
 
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+            success = cursor.rowcount > 0
+
+            if success:
+                account_id = cursor.execute(
+                    "SELECT account_id FROM investment_holdings WHERE id = ?",
+                    (holding_id,)).fetchone()['account_id']
+                self._sync_investment_account_balance(cursor, account_id)
+
+            return success
 
     def delete_investment_holding(self, holding_id: int) -> bool:
         """
@@ -4874,6 +5611,8 @@ class FinanceDatabase:
         success = cursor.rowcount > 0
 
         if success:
+            # The position is gone; whatever remains in the account is its value.
+            self._sync_investment_account_balance(cursor, investment_account_id)
             logger.info(f"Deleted investment holding: {symbol} (ID: {holding_id}) with {len(transactions)} transactions")
 
         return success
@@ -4957,20 +5696,54 @@ class FinanceDatabase:
             destinataire = holding_name
 
         elif transaction_type == 'sell':
-            # Income: Sale Proceeds
+            # Two rows, not one. The money received is part capital coming back
+            # and part profit; only the profit is income. Booking the whole
+            # amount as income overstated it by the cost of the shares sold.
             cursor.execute("""
                 SELECT tt.id as type_id, ts.id as subtype_id
                 FROM transaction_types tt
                 JOIN transaction_subtypes ts ON ts.type_id = tt.id
-                WHERE tt.name = 'Investment Income' AND ts.name = 'Sale Proceeds'
+                WHERE tt.name = 'Investments' AND ts.name = 'Securities Sale'
             """)
             type_info = cursor.fetchone()
             if not type_info:
-                raise ValueError("Transaction type 'Investment Income - Sale Proceeds' not found in database")
+                raise ValueError("Transaction type 'Investments - Securities Sale' not found in database")
 
-            # Cash impact: positive (money coming into linked account)
+            cursor.execute("""
+                SELECT tt.id as type_id, ts.id as subtype_id
+                FROM transaction_types tt
+                JOIN transaction_subtypes ts ON ts.type_id = tt.id
+                WHERE tt.name = 'Investment Income' AND ts.name = 'Realised Gain'
+            """)
+            gain_type_info = cursor.fetchone()
+            if not gain_type_info:
+                raise ValueError("Transaction type 'Investment Income - Realised Gain' not found in database")
+
             cash_impact = total_amount - fees - tax
-            description = f"Sale of {trans_data.get('shares', 0)} shares of {symbol}"
+
+            # Average cost of the shares being sold, from the trades so far.
+            cursor.execute("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN transaction_type = 'buy'  THEN shares ELSE 0 END), 0)
+                  - COALESCE(SUM(CASE WHEN transaction_type = 'sell' THEN shares ELSE 0 END), 0)
+                        AS shares_held,
+                    COALESCE(SUM(CASE WHEN transaction_type = 'buy'
+                                      THEN total_amount + fees ELSE 0 END), 0) AS gross_cost,
+                    COALESCE(SUM(CASE WHEN transaction_type = 'buy'  THEN shares ELSE 0 END), 0)
+                        AS shares_bought
+                FROM investment_transactions
+                WHERE holding_id = ?
+            """, (trans_data['holding_id'],))
+            prior = cursor.fetchone()
+
+            shares_sold = trans_data.get('shares') or 0
+            avg_cost = ((prior['gross_cost'] / prior['shares_bought'])
+                        if prior['shares_bought'] else 0)
+            # Never book back more capital than was ever put in.
+            cost_of_sold = round(min(avg_cost * shares_sold, prior['gross_cost']), 2)
+            realised_gain = round(cash_impact - cost_of_sold, 2)
+
+            description = f"Sale of {shares_sold} shares of {symbol}"
             destinataire = holding_name
 
         elif transaction_type == 'dividend':
@@ -4993,25 +5766,43 @@ class FinanceDatabase:
         else:
             raise ValueError(f"Unknown transaction type: {transaction_type}")
 
-        # Create the regular transaction in the LINKED account (not investment account)
-        cursor.execute("""
-            INSERT INTO transactions
-            (account_id, transaction_date, amount, currency, description,
-             destinataire, type_id, subtype_id, confirmed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            linked_account_id,  # Transaction goes to the linked account
-            trans_data['transaction_date'],
-            cash_impact,  # Store with correct sign: negative for purchases, positive for sales/dividends
-            linked_account_currency,
+        # Create the ledger row(s) in the LINKED account (not the investment one).
+        # A sale writes two: the capital returned, then the gain. Everything else
+        # writes one. The rows always sum to the cash that actually moved.
+        ledger_rows = [(
+            cost_of_sold if transaction_type == 'sell' else cash_impact,
+            type_info['type_id'], type_info['subtype_id'],
             trans_data.get('notes', description),
-            destinataire,
-            type_info['type_id'],
-            type_info['subtype_id'],
-            True
-        ))
+        )]
+        if transaction_type == 'sell' and realised_gain:
+            ledger_rows.append((
+                realised_gain,
+                gain_type_info['type_id'], gain_type_info['subtype_id'],
+                f"Realised {'gain' if realised_gain > 0 else 'loss'} on {symbol}",
+            ))
 
-        linked_transaction_id = cursor.lastrowid
+        written_ids = []
+        for amount, row_type_id, row_subtype_id, row_description in ledger_rows:
+            cursor.execute("""
+                INSERT INTO transactions
+                (account_id, transaction_date, amount, currency, description,
+                 destinataire, type_id, subtype_id, confirmed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                linked_account_id,
+                trans_data['transaction_date'],
+                amount,
+                linked_account_currency,
+                row_description,
+                destinataire,
+                row_type_id,
+                row_subtype_id,
+                True
+            ))
+            written_ids.append(cursor.lastrowid)
+
+        linked_transaction_id = written_ids[0]
+        gain_transaction_id = written_ids[1] if len(written_ids) > 1 else None
 
         # Check if transaction is before linked account opening date
         cursor.execute("SELECT opening_date FROM accounts WHERE id = ?", (linked_account_id,))
@@ -5033,8 +5824,9 @@ class FinanceDatabase:
         cursor.execute("""
             INSERT INTO investment_transactions
             (holding_id, transaction_type, transaction_date, shares, price_per_share,
-             total_amount, fees, tax, currency, notes, linked_transaction_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             total_amount, fees, tax, currency, notes, linked_transaction_id,
+             gain_transaction_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trans_data['holding_id'],
             transaction_type,
@@ -5046,42 +5838,46 @@ class FinanceDatabase:
             tax,
             trans_data['currency'],
             trans_data.get('notes'),
-            linked_transaction_id
+            linked_transaction_id,
+            gain_transaction_id
         ))
 
         trans_id = cursor.lastrowid
+
+        # The trade changed the position, so the account holding it is worth
+        # something different now.
+        self._sync_investment_account_balance(cursor, investment_account_id)
 
         logger.info(f"Added investment transaction: {transaction_type}, cash impact: {cash_impact} on linked account {linked_account_id}, linked to transaction {linked_transaction_id}")
         return trans_id
 
     def get_investment_transactions(self, holding_id: int = None) -> List[Dict[str, Any]]:
         """Get investment transactions, optionally filtered by holding."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
         
-        if holding_id:
-            query = """
-                SELECT it.*, s.symbol, s.name
-                FROM investment_transactions it
-                JOIN investment_holdings h ON it.holding_id = h.id
-                JOIN securities s ON h.security_id = s.id
-                WHERE it.holding_id = ?
-                ORDER BY it.transaction_date DESC
-            """
-            cursor.execute(query, (holding_id,))
-        else:
-            query = """
-                SELECT it.*, s.symbol, s.name
-                FROM investment_transactions it
-                JOIN investment_holdings h ON it.holding_id = h.id
-                JOIN securities s ON h.security_id = s.id
-                ORDER BY it.transaction_date DESC
-            """
-            cursor.execute(query)
+            if holding_id:
+                query = """
+                    SELECT it.*, s.symbol, s.name
+                    FROM investment_transactions it
+                    JOIN investment_holdings h ON it.holding_id = h.id
+                    JOIN securities s ON h.security_id = s.id
+                    WHERE it.holding_id = ?
+                    ORDER BY it.transaction_date DESC
+                """
+                cursor.execute(query, (holding_id,))
+            else:
+                query = """
+                    SELECT it.*, s.symbol, s.name
+                    FROM investment_transactions it
+                    JOIN investment_holdings h ON it.holding_id = h.id
+                    JOIN securities s ON h.security_id = s.id
+                    ORDER BY it.transaction_date DESC
+                """
+                cursor.execute(query)
         
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(row) for row in rows]
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
 
     def update_investment_transaction(self, transaction_id: int, trans_data: Dict[str, Any]) -> bool:
         """
@@ -5301,6 +6097,7 @@ class FinanceDatabase:
         success = cursor.rowcount > 0
 
         if success:
+            self._sync_investment_account_balance(cursor, investment_account_id)
             logger.info(f"Updated investment transaction {transaction_id}")
         return success
 
@@ -5375,104 +6172,120 @@ class FinanceDatabase:
         cursor.execute("DELETE FROM investment_transactions WHERE id = ?", (transaction_id,))
         success = cursor.rowcount > 0
 
-        # Then the linked regular transaction it pointed at.
-        if trans.get('linked_transaction_id'):
-            cursor.execute("DELETE FROM transactions WHERE id = ?", (trans['linked_transaction_id'],))
+        # Then the ledger rows it pointed at. A sale wrote two — the capital
+        # returned and the gain — and both have to go.
+        for column in ('linked_transaction_id', 'gain_transaction_id'):
+            row_id = trans.get(column)
+            if row_id:
+                cursor.execute("DELETE FROM transactions WHERE id = ?", (row_id,))
 
         if success:
+            self._sync_investment_account_balance(cursor, investment_account_id)
             logger.info(f"Deleted investment transaction {transaction_id}")
         return success
 
     def calculate_holding_summary(self, holding_id: int) -> Dict[str, Any]:
         """Calculate summary for a holding (shares, cost basis, gains, etc.)."""
-        from datetime import datetime
+        from datetime import datetime, timedelta
         
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
         
-        # Get holding info
-        cursor.execute("SELECT * FROM investment_holdings WHERE id = ?", (holding_id,))
-        holding = dict(cursor.fetchone())
+            # Identity (symbol, name, type) lives on securities — the holding
+            # only points at it. A bare SELECT * here is what made this function
+            # raise KeyError on every call once the two tables were split.
+            cursor.execute("""
+                SELECT h.*, s.symbol, s.name, s.investment_type,
+                       COALESCE(h.currency, s.currency) AS currency
+                FROM investment_holdings h
+                JOIN securities s ON h.security_id = s.id
+                WHERE h.id = ?
+            """, (holding_id,))
+            row = cursor.fetchone()
+            if row is None:
+                raise ValueError(f"Holding {holding_id} not found")
+            holding = dict(row)
         
-        # Get all transactions
-        cursor.execute("""
-            SELECT * FROM investment_transactions 
-            WHERE holding_id = ? 
-            ORDER BY transaction_date
-        """, (holding_id,))
-        transactions = [dict(row) for row in cursor.fetchall()]
+            # Get all transactions
+            cursor.execute("""
+                SELECT * FROM investment_transactions 
+                WHERE holding_id = ? 
+                ORDER BY transaction_date
+            """, (holding_id,))
+            transactions = [dict(row) for row in cursor.fetchall()]
         
-        conn.close()
         
-        # Calculate totals
-        total_shares = 0
-        total_cost = 0
-        total_dividends = 0
-        realized_gains = 0
+            # Calculate totals
+            total_shares = 0
+            total_cost = 0
+            total_dividends = 0
+            realized_gains = 0
         
-        for trans in transactions:
-            if trans['transaction_type'] == 'buy':
-                total_shares += trans['shares']
-                total_cost += trans['total_amount'] + trans['fees']
-            elif trans['transaction_type'] == 'sell':
-                shares_sold = trans['shares']
-                total_shares -= shares_sold
+            for trans in transactions:
+                if trans['transaction_type'] == 'buy':
+                    total_shares += trans['shares']
+                    total_cost += trans['total_amount'] + trans['fees']
+                elif trans['transaction_type'] == 'sell':
+                    shares_sold = trans['shares']
+                    total_shares -= shares_sold
                 
-                # Calculate realized gain (simplified - FIFO)
-                avg_cost_per_share = total_cost / (total_shares + shares_sold) if (total_shares + shares_sold) > 0 else 0
-                cost_of_sold = avg_cost_per_share * shares_sold
-                realized_gains += (trans['total_amount'] - trans['fees']) - cost_of_sold
-                total_cost -= cost_of_sold
-            elif trans['transaction_type'] == 'dividend':
-                total_dividends += trans['total_amount']
+                    # Calculate realized gain (simplified - FIFO)
+                    avg_cost_per_share = total_cost / (total_shares + shares_sold) if (total_shares + shares_sold) > 0 else 0
+                    cost_of_sold = avg_cost_per_share * shares_sold
+                    realized_gains += (trans['total_amount'] - trans['fees']) - cost_of_sold
+                    total_cost -= cost_of_sold
+                elif trans['transaction_type'] == 'dividend':
+                    total_dividends += trans['total_amount']
         
-        # Current value
-        current_price = holding['current_price']
-        current_value = total_shares * current_price if total_shares > 0 else 0
+            # Current value
+            current_price = holding['current_price']
+            current_value = total_shares * current_price if total_shares > 0 else 0
         
-        # Unrealized gains
-        unrealized_gains = current_value - total_cost if total_shares > 0 else 0
+            # Unrealized gains
+            unrealized_gains = current_value - total_cost if total_shares > 0 else 0
         
-        # Average cost per share
-        avg_cost_per_share = total_cost / total_shares if total_shares > 0 else 0
+            # Average cost per share
+            avg_cost_per_share = total_cost / total_shares if total_shares > 0 else 0
         
-        # Total return %
-        total_invested = sum(t['total_amount'] + t['fees'] for t in transactions if t['transaction_type'] == 'buy')
-        total_return_pct = ((current_value + total_dividends + realized_gains) / total_invested - 1) * 100 if total_invested > 0 else 0
+            # Total return %
+            total_invested = sum(t['total_amount'] + t['fees'] for t in transactions if t['transaction_type'] == 'buy')
+            total_return_pct = ((current_value + total_dividends + realized_gains) / total_invested - 1) * 100 if total_invested > 0 else 0
         
-        # Daily change
-        daily_change = 0  # Would need historical data for this
-        daily_change_pct = 0
+            # Daily change
+            daily_change = 0  # Would need historical data for this
+            daily_change_pct = 0
         
-        # Dividend yield (annual)
-        # Calculate dividends in last 12 months
-        one_year_ago = (datetime.now().date().replace(year=datetime.now().year - 1)).isoformat()
-        recent_dividends = sum(t['total_amount'] for t in transactions 
-                              if t['transaction_type'] == 'dividend' and t['transaction_date'] >= one_year_ago)
-        dividend_yield = (recent_dividends / current_value * 100) if current_value > 0 else 0
+            # Dividend yield (annual)
+            # Calculate dividends in last 12 months
+            # timedelta rather than replace(year=...): the latter raises on
+            # 29 February, so the yield would crash one day every four years.
+            one_year_ago = (datetime.now().date() - timedelta(days=365)).isoformat()
+            recent_dividends = sum(t['total_amount'] for t in transactions 
+                                  if t['transaction_type'] == 'dividend' and t['transaction_date'] >= one_year_ago)
+            dividend_yield = (recent_dividends / current_value * 100) if current_value > 0 else 0
         
-        return {
-            'holding_id': holding_id,
-            'symbol': holding['symbol'],
-            'name': holding['name'],
-            'isin': holding.get('isin'),
-            'investment_type': holding['investment_type'],
-            'currency': holding['currency'],
-            'total_shares': total_shares,
-            'avg_cost_per_share': avg_cost_per_share,
-            'current_price': current_price,
-            'current_value': current_value,
-            'total_cost': total_cost,
-            'unrealized_gains': unrealized_gains,
-            'realized_gains': realized_gains,
-            'total_dividends': total_dividends,
-            'total_return': unrealized_gains + realized_gains + total_dividends,
-            'total_return_pct': total_return_pct,
-            'daily_change': daily_change,
-            'daily_change_pct': daily_change_pct,
-            'dividend_yield': dividend_yield,
-            'last_price_update': holding.get('last_price_update')
-        }
+            return {
+                'holding_id': holding_id,
+                'symbol': holding['symbol'],
+                'name': holding['name'],
+                'isin': holding.get('isin'),
+                'investment_type': holding['investment_type'],
+                'currency': holding['currency'],
+                'total_shares': total_shares,
+                'avg_cost_per_share': avg_cost_per_share,
+                'current_price': current_price,
+                'current_value': current_value,
+                'total_cost': total_cost,
+                'unrealized_gains': unrealized_gains,
+                'realized_gains': realized_gains,
+                'total_dividends': total_dividends,
+                'total_return': unrealized_gains + realized_gains + total_dividends,
+                'total_return_pct': total_return_pct,
+                'daily_change': daily_change,
+                'daily_change_pct': daily_change_pct,
+                'dividend_yield': dividend_yield,
+                'last_price_update': holding.get('last_price_update')
+            }
 
     def get_portfolio_summary(self, account_id: int = None) -> Dict[str, Any]:
         """Get overall portfolio summary."""
@@ -5557,26 +6370,25 @@ class FinanceDatabase:
     # ==================== Machine Learning====================
     def get_training_data(self, min_transactions: int = 100) -> List[Dict]:
         #"""Get transactions for ML training."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT
-                t.description,
-                t.type_id,
-                t.subtype_id,
-                tt.category,
-                COUNT(*) as frequency
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            WHERE t.description IS NOT NULL AND t.description != ''
-            GROUP BY t.description, t.type_id, t.subtype_id
-            HAVING frequency >= 1
-            ORDER BY frequency DESC
-            LIMIT ?
-        """, (min_transactions * 10,))
-        data = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return data
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    t.description,
+                    t.type_id,
+                    t.subtype_id,
+                    tt.category,
+                    COUNT(*) as frequency
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                WHERE t.description IS NOT NULL AND t.description != ''
+                GROUP BY t.description, t.type_id, t.subtype_id
+                HAVING frequency >= 1
+                ORDER BY frequency DESC
+                LIMIT ?
+            """, (min_transactions * 10,))
+            data = [dict(row) for row in cursor.fetchall()]
+            return data
     # ==================== Machine Learning====================
     def get_transactions_for_prediction(self, months: int = 24, display_currency: str = None) -> List[Dict]:
         """Get transactions for prediction, with amounts converted to the display currency.
@@ -5593,49 +6405,48 @@ class FinanceDatabase:
             display_currency = self.get_preference('display_currency', 'EUR')
         exchange_rates = self.get_exchange_rates_map()
 
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        query = """
-            SELECT
-                t.transaction_date as date,
-                t.amount,
-                t.description,
-                t.destinataire,
-                t.created_at,
-                t.type_id,
-                t.subtype_id,
-                tt.name as type_name,
-                tt.category,
-                ts.name as subtype_name,
-                a.currency as account_currency
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
-            JOIN accounts a ON t.account_id = a.id
-            WHERE 1=1
-        """
+            query = """
+                SELECT
+                    t.transaction_date as date,
+                    t.amount,
+                    t.description,
+                    t.destinataire,
+                    t.created_at,
+                    t.type_id,
+                    t.subtype_id,
+                    tt.name as type_name,
+                    tt.category,
+                    ts.name as subtype_name,
+                    a.currency as account_currency
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+                JOIN accounts a ON t.account_id = a.id
+                WHERE 1=1
+            """
 
-        params = []
-        if months:
-            query += " AND t.transaction_date >= date('now', ?)"
-            params.append(f'-{months} months')
+            params = []
+            if months:
+                query += " AND t.transaction_date >= date('now', ?)"
+                params.append(f'-{months} months')
 
-        query += " ORDER BY t.transaction_date DESC"
+            query += " ORDER BY t.transaction_date DESC"
 
-        cursor.execute(query, params)
-        rows = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+            cursor.execute(query, params)
+            rows = [dict(row) for row in cursor.fetchall()]
 
-        # Convert each amount to the display currency
-        for row in rows:
-            acct_currency = row.pop('account_currency', 'EUR') or 'EUR'
-            if acct_currency != display_currency:
-                row['amount'] = self.convert_with_rates(
-                    row['amount'], acct_currency, display_currency, exchange_rates
-                )
+            # Convert each amount to the display currency
+            for row in rows:
+                acct_currency = row.pop('account_currency', 'EUR') or 'EUR'
+                if acct_currency != display_currency:
+                    row['amount'] = self.convert_with_rates(
+                        row['amount'], acct_currency, display_currency, exchange_rates
+                    )
 
-        return rows
+            return rows
 
     def get_category_suggestion_by_recipient(self, recipient: str) -> List[Dict[str, Any]]:
         """
@@ -5660,64 +6471,62 @@ class FinanceDatabase:
         if not recipient or not recipient.strip():
             return []
 
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT
-                t.type_id,
-                tt.name  AS type_name,
-                t.subtype_id,
-                ts.name  AS subtype_name,
-                COUNT(*) AS cnt
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
-            WHERE LOWER(t.destinataire) = LOWER(?)
-              AND t.type_id IS NOT NULL
-            GROUP BY t.type_id, t.subtype_id
-            ORDER BY cnt DESC
-        """, (recipient.strip(),))
+            cursor.execute("""
+                SELECT
+                    t.type_id,
+                    tt.name  AS type_name,
+                    t.subtype_id,
+                    ts.name  AS subtype_name,
+                    COUNT(*) AS cnt
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
+                WHERE LOWER(t.destinataire) = LOWER(?)
+                  AND t.type_id IS NOT NULL
+                GROUP BY t.type_id, t.subtype_id
+                ORDER BY cnt DESC
+            """, (recipient.strip(),))
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
 
-        if not rows:
-            return []
+            if not rows:
+                return []
 
-        total = sum(r['cnt'] for r in rows)
-        return [
-            {
-                'type_id':      row['type_id'],
-                'type_name':    row['type_name'],
-                'subtype_id':   row['subtype_id'],
-                'subtype_name': row['subtype_name'],
-                'count':        row['cnt'],
-                'percentage':   round(row['cnt'] / total * 100, 1),
-            }
-            for row in rows
-        ]
+            total = sum(r['cnt'] for r in rows)
+            return [
+                {
+                    'type_id':      row['type_id'],
+                    'type_name':    row['type_name'],
+                    'subtype_id':   row['subtype_id'],
+                    'subtype_name': row['subtype_name'],
+                    'count':        row['cnt'],
+                    'percentage':   round(row['cnt'] / total * 100, 1),
+                }
+                for row in rows
+            ]
 
     def get_today_spending(self) -> float:
         """Get total spending for today converted to the user's display currency."""
         display_currency = self.get_preference('display_currency', 'EUR')
         exchange_rates = self.get_exchange_rates_map()
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT ABS(t.amount) as amount, a.currency as account_currency
-            FROM transactions t
-            JOIN transaction_types tt ON t.type_id = tt.id
-            JOIN accounts a ON t.account_id = a.id
-            WHERE t.transaction_date = date('now')
-            AND tt.category = 'expense'
-        """)
-        rows = cursor.fetchall()
-        conn.close()
-        total = sum(
-            self.convert_with_rates(row['amount'], row['account_currency'] or 'EUR', display_currency, exchange_rates)
-            for row in rows
-        )
-        return float(total)
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT ABS(t.amount) as amount, a.currency as account_currency
+                FROM transactions t
+                JOIN transaction_types tt ON t.type_id = tt.id
+                JOIN accounts a ON t.account_id = a.id
+                WHERE t.transaction_date = date('now')
+                AND tt.category = 'expense'
+            """)
+            rows = cursor.fetchall()
+            total = sum(
+                self.convert_with_rates(row['amount'], row['account_currency'] or 'EUR', display_currency, exchange_rates)
+                for row in rows
+            )
+            return float(total)
     
     

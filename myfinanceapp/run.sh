@@ -23,7 +23,9 @@ else
     bashio::log.info "Initializing data directory for first time"
 
     mkdir -p /data/myfinanceapp/data
-    chmod 777 -R /data/myfinanceapp
+    # 750 is enough: the add-on runs as a single user inside its own
+    # container, and this directory holds the household's finances.
+    chmod 750 -R /data/myfinanceapp
 
     # If /app/data exists from the build, move it to persistent storage
     if [ -d /app/data ]; then
@@ -46,14 +48,29 @@ export PYTHONPATH="/app"
 export DATA_DIR="/app/data"
 export DATABASE_PATH="/app/data/finance.db"
 
-# Get JWT secret from options or use default (not recommended for production)
-if bashio::config.has_value 'jwt_secret'; then
-    export JWT_SECRET_KEY=$(bashio::config 'jwt_secret')
+# JWT secret: use the configured one, otherwise generate and persist a random
+# secret. The add-on used to fall back to a fixed string published in this
+# repository, which anyone could use to forge an admin token.
+JWT_SECRET_FILE="/data/myfinanceapp/jwt_secret"
+CONFIGURED_SECRET=$(bashio::config 'jwt_secret')
+
+if [ -n "$CONFIGURED_SECRET" ] && [ "$CONFIGURED_SECRET" != "change-this-secret-key-in-production" ]; then
+    export JWT_SECRET_KEY="$CONFIGURED_SECRET"
     bashio::log.info "Using JWT secret from configuration"
 else
-    export JWT_SECRET_KEY="change-this-secret-key-in-production"
-    bashio::log.warning "Using default JWT secret - please set 'jwt_secret' in addon configuration!"
+    if [ ! -s "$JWT_SECRET_FILE" ]; then
+        head -c 48 /dev/urandom | base64 | tr -d '\n' > "$JWT_SECRET_FILE"
+        chmod 600 "$JWT_SECRET_FILE"
+        bashio::log.info "Generated a new JWT secret (stored in /data, survives restarts)"
+    fi
+    export JWT_SECRET_KEY=$(cat "$JWT_SECRET_FILE")
+    bashio::log.info "Using the generated JWT secret; set 'jwt_secret' to override"
 fi
+
+# Credentials for email alerts and WebDAV backups. Empty is fine — the features
+# stay disabled rather than failing at use time.
+export SMTP_PASSWORD=$(bashio::config 'smtp_password')
+export WEBDAV_PASSWORD=$(bashio::config 'webdav_password')
 
 # Optional: Get API URL configuration
 if bashio::config.has_value 'api_url'; then

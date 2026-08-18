@@ -9,16 +9,16 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from database import FinanceDatabase
+from deps import lazy_db
 from api.auth import get_current_user, User
 
 router = APIRouter()
 
-# Get database path from environment or use default
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(PROJECT_ROOT, "data", "finance.db")
-DB_PATH = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-db = FinanceDatabase(db_path=DB_PATH)
+# Resolved centrally so every module reads and writes the same database.
+# These used to recompute it from __file__ + DATABASE_PATH, which ignored
+# DATA_DIR and could point auth at a different file from everything else.
+from deps import DB_PATH
+db = lazy_db   # built on first use; see backend/deps.py
 
 # Pydantic models
 class TypeCreate(BaseModel):
@@ -42,13 +42,13 @@ class SubtypeUpdate(BaseModel):
     name: Optional[str] = None
 
 @router.get("/types")
-async def get_types(current_user: User = Depends(get_current_user)):
+def get_types(current_user: User = Depends(get_current_user)):
     """Get all transaction types"""
     types = db.get_types()
     return {"types": types}
 
 @router.get("/types/{type_id}")
-async def get_type(type_id: int, current_user: User = Depends(get_current_user)):
+def get_type(type_id: int, current_user: User = Depends(get_current_user)):
     """Get specific transaction type by ID"""
     types = db.get_types()
     type_obj = next((t for t in types if t['id'] == type_id), None)
@@ -60,7 +60,7 @@ async def get_type(type_id: int, current_user: User = Depends(get_current_user))
     return type_obj
 
 @router.post("/types")
-async def create_type(
+def create_type(
     type_data: TypeCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -81,7 +81,7 @@ async def create_type(
     return {"message": "Transaction type created successfully", "type_id": type_id}
 
 @router.put("/types/{type_id}")
-async def update_type(
+def update_type(
     type_id: int,
     type_data: TypeUpdate,
     current_user: User = Depends(get_current_user)
@@ -104,7 +104,7 @@ async def update_type(
     return {"message": "Transaction type updated successfully"}
 
 @router.delete("/types/{type_id}")
-async def delete_type(
+def delete_type(
     type_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -120,7 +120,7 @@ async def delete_type(
 
 # Subtypes endpoints
 @router.get("/subtypes")
-async def get_subtypes(
+def get_subtypes(
     type_id: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
@@ -129,7 +129,7 @@ async def get_subtypes(
     return {"subtypes": subtypes}
 
 @router.get("/subtypes/{subtype_id}")
-async def get_subtype(
+def get_subtype(
     subtype_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -144,7 +144,7 @@ async def get_subtype(
     return subtype
 
 @router.post("/subtypes")
-async def create_subtype(
+def create_subtype(
     subtype_data: SubtypeCreate,
     current_user: User = Depends(get_current_user)
 ):
@@ -160,7 +160,7 @@ async def create_subtype(
     return {"message": "Transaction subtype created successfully", "subtype_id": subtype_id}
 
 @router.put("/subtypes/{subtype_id}")
-async def update_subtype(
+def update_subtype(
     subtype_id: int,
     subtype_data: SubtypeUpdate,
     current_user: User = Depends(get_current_user)
@@ -183,7 +183,7 @@ async def update_subtype(
     return {"message": "Transaction subtype updated successfully"}
 
 @router.delete("/subtypes/{subtype_id}")
-async def delete_subtype(
+def delete_subtype(
     subtype_id: int,
     current_user: User = Depends(get_current_user)
 ):
@@ -198,7 +198,7 @@ async def delete_subtype(
     return {"message": "Transaction subtype deleted successfully"}
 
 @router.get("/hierarchy")
-async def get_category_hierarchy(current_user: User = Depends(get_current_user)):
+def get_category_hierarchy(current_user: User = Depends(get_current_user)):
     """Get full category hierarchy (types with their subtypes)"""
     types = db.get_types()
     subtypes = db.get_subtypes()

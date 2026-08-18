@@ -299,11 +299,14 @@ export default function ReportsPage() {
         setStartDate(format(startOfMonth(now), "yyyy-MM-dd"));
         setEndDate(format(endOfMonth(now), "yyyy-MM-dd"));
         break;
-      case "last_month":
+      case "last_month": {
+        // Braces scope the declaration to this case: without them the binding
+        // leaks into every other branch of the switch.
         const lastMonth = subMonths(now, 1);
         setStartDate(format(startOfMonth(lastMonth), "yyyy-MM-dd"));
         setEndDate(format(endOfMonth(lastMonth), "yyyy-MM-dd"));
         break;
+      }
       case "last_3_months":
         setStartDate(format(subMonths(now, 3), "yyyy-MM-dd"));
         setEndDate(format(now, "yyyy-MM-dd"));

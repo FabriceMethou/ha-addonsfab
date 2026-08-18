@@ -9,7 +9,6 @@ Run:
   PYTHONPATH=. /home/fab/Documents/Dev/myfinanceapp/backend/venv/bin/python3 \
     -m pytest tests/test_report_subcategories.py -v --tb=short
 """
-import asyncio
 import os
 import sys
 import tempfile
@@ -168,8 +167,8 @@ class TestSpendingByCategory:
         add_txn(db, acc, -60.0, "2025-03-05", type_id, subs[0])
         add_txn(db, acc, -40.0, "2025-03-06", type_id, subs[1])
 
-        result = asyncio.run(reports_api.spending_by_category(
-            start_date="2025-03-01", end_date="2025-03-31", current_user=None))
+        result = reports_api.spending_by_category(
+            start_date="2025-03-01", end_date="2025-03-31", current_user=None)
 
         assert len(result["categories"]) == 1
         category = result["categories"][0]
@@ -193,8 +192,8 @@ class TestMonthlySummary:
         add_txn(db, acc, -25.0, "2025-04-10", type_id, subs[0])
         add_txn(db, acc, -75.0, "2025-04-11", type_id, subs[1])
 
-        result = asyncio.run(reports_api.monthly_summary(
-            year=2025, month=4, current_user=None))
+        result = reports_api.monthly_summary(
+            year=2025, month=4, current_user=None)
 
         category = result["spending_by_category"][0]
         assert category["amount"] == 100.0
@@ -217,8 +216,8 @@ class TestSpendingTrends:
         add_txn(db, acc, -30.0, today, type_id, subs[0])
         add_txn(db, acc, -20.0, today, type_id, subs[1])
 
-        result = asyncio.run(reports_api.spending_trends(
-            months=1, current_user=None))
+        result = reports_api.spending_trends(
+            months=1, current_user=None)
 
         current_month = result["trends"][-1]
         assert current_month["categories"][type_name] == 50.0
@@ -236,8 +235,8 @@ class TestIncomeVsExpenses:
 
         add_txn(db, acc, 1500.0, "2025-05-01", type_id, subs[0])
 
-        result = asyncio.run(reports_api.income_vs_expenses(
-            start_date="2025-05-01", end_date="2025-05-31", current_user=None))
+        result = reports_api.income_vs_expenses(
+            start_date="2025-05-01", end_date="2025-05-31", current_user=None)
 
         category = result["income_categories"][0]
         assert category["category"] == type_name
@@ -261,8 +260,8 @@ class TestCategoryBreakdown:
         add_txn(db, acc, -30.0, today, type_id, subs[0])
         add_txn(db, acc, -10.0, today, type_id, subs[1])
 
-        result = asyncio.run(reports_api.category_breakdown(
-            type_id=type_id, months=3, current_user=None))
+        result = reports_api.category_breakdown(
+            type_id=type_id, months=3, current_user=None)
 
         assert result["category"]["name"] == type_name
         assert result["summary"]["total"] == 100.0
@@ -288,8 +287,8 @@ class TestCategoryBreakdown:
         add_txn(db, acc, -40.0, today, expense_type, expense_subs[0])
         add_txn(db, acc, 900.0, today, income_type, income_subs[0])
 
-        result = asyncio.run(reports_api.category_breakdown(
-            type_id=expense_type, months=3, current_user=None))
+        result = reports_api.category_breakdown(
+            type_id=expense_type, months=3, current_user=None)
 
         assert result["summary"]["total"] == 40.0
         assert result["summary"]["transaction_count"] == 1
@@ -299,8 +298,8 @@ class TestCategoryBreakdown:
         use_test_db(db)
         type_id, _ = subtype_ids(db)
 
-        result = asyncio.run(reports_api.category_breakdown(
-            type_id=type_id, months=6, current_user=None))
+        result = reports_api.category_breakdown(
+            type_id=type_id, months=6, current_user=None)
 
         assert len(result["monthly_trend"]) == 6
         # Oldest first, ending with the current month
@@ -316,8 +315,8 @@ class TestCategoryBreakdown:
         use_test_db(db)
 
         with pytest.raises(HTTPException) as excinfo:
-            asyncio.run(reports_api.category_breakdown(
-                type_id=999999, months=6, current_user=None))
+            reports_api.category_breakdown(
+                type_id=999999, months=6, current_user=None)
 
         assert excinfo.value.status_code == 404
 

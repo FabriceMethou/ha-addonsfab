@@ -1,7 +1,7 @@
 
 name: "Finance Tracker"
 description: "Personal finance management with transaction tracking and reporting (React + FastAPI)"
-version: "2.0.61"
+version: "2.1.0"
 slug: "myfinanceapp"
 init: false
 arch:
@@ -17,7 +17,17 @@ ports:
 webui: "http://[HOST]:[PORT:8501]"
 
 options:
-  jwt_secret: "change-this-secret-key-in-production"
+  jwt_secret: ""
+  smtp_password: ""
+  webdav_password: ""
 
 schema:
-  jwt_secret: str
+  # Optional so an empty value is legal: run.sh then generates a secret and
+  # persists it, instead of silently signing tokens with a published default.
+  jwt_secret: password?
+  # Email alerts and WebDAV backups read these. Everything else about them is
+  # configured in the UI, but the passwords were only ever read from the
+  # environment — which the add-on had no way to set, so both features were
+  # configurable and inoperative.
+  smtp_password: password?
+  webdav_password: password?
