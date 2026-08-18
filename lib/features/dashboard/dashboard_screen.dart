@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format/money.dart';
+import '../../core/cache/cached.dart';
 import '../../core/net/api_exception.dart';
 import '../../core/providers.dart';
 import '../../domain/models/account.dart';
@@ -20,25 +21,40 @@ typedef DashboardData = ({
   BalancesSummary balances,
 });
 
-final dashboardProvider = FutureProvider<DashboardData>((ref) async {
+final dashboardProvider = FutureProvider<Cached<DashboardData>>((ref) async {
   final api = ref.watch(financeApiProvider);
   if (api == null) {
     throw const ApiException(ApiFailure.unknown, 'No server configured.');
   }
   final now = DateTime.now();
 
-  // Issued together: they are independent reads, and running them in sequence
-  // would make the screen three round trips slow for no reason.
-  final results = await Future.wait([
-    api.netWorth(),
-    api.monthlySummary(now.year, now.month),
-    api.balances(),
-  ]);
-
-  return (
-    netWorth: results[0] as NetWorth,
-    month: results[1] as MonthlySummary,
-    balances: results[2] as BalancesSummary,
+  return withCache<DashboardData>(
+    store: ref.watch(snapshotStoreProvider),
+    key: 'dashboard',
+    fetch: () async {
+      // Issued together: they are independent reads, and running them in
+      // sequence would make the screen three round trips slow for no reason.
+      final results = await Future.wait([
+        api.netWorth(),
+        api.monthlySummary(now.year, now.month),
+        api.balances(),
+      ]);
+      return (
+        netWorth: results[0] as NetWorth,
+        month: results[1] as MonthlySummary,
+        balances: results[2] as BalancesSummary,
+      );
+    },
+    encode: (d) => {
+      'netWorth': d.netWorth.toJson(),
+      'month': d.month.toJson(),
+      'balances': d.balances.toJson(),
+    },
+    decode: (j) => (
+      netWorth: NetWorth.fromJson(j['netWorth'] as Map<String, dynamic>),
+      month: MonthlySummary.fromJson(j['month'] as Map<String, dynamic>),
+      balances: BalancesSummary.fromJson(j['balances'] as Map<String, dynamic>),
+    ),
   );
 });
 
@@ -64,7 +80,11 @@ class DashboardScreen extends ConsumerWidget {
             error: e,
             onRetry: () => ref.invalidate(dashboardProvider),
           ),
-          data: (d) => _Dashboard(data: d),
+          data: (cached) => _Dashboard(
+            data: cached.value,
+            cached: cached,
+            onRetry: () => ref.invalidate(dashboardProvider),
+          ),
         ),
       ),
     );
@@ -72,8 +92,14 @@ class DashboardScreen extends ConsumerWidget {
 }
 
 class _Dashboard extends StatelessWidget {
-  const _Dashboard({required this.data});
+  const _Dashboard({
+    required this.data,
+    required this.cached,
+    required this.onRetry,
+  });
   final DashboardData data;
+  final Cached<DashboardData> cached;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -85,6 +111,8 @@ class _Dashboard extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
+        if (cached.isStale)
+          StaleBanner(fetchedAt: cached.fetchedAt, onRetry: onRetry),
         _SectionLabel('Net worth'),
         Text(
           formatMoney(worth.netWorth, worth.currency),

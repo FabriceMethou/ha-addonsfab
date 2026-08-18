@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/cache/cached.dart';
 import '../../core/net/api_exception.dart';
 import '../../core/providers.dart';
 import '../../domain/models/category.dart';
@@ -31,6 +32,8 @@ class TransactionListState {
     this.rows = const [],
     this.total = 0,
     this.loadingMore = false,
+    this.stale = false,
+    this.fetchedAt,
   });
 
   final List<Transaction> rows;
@@ -39,6 +42,12 @@ class TransactionListState {
   final int total;
 
   final bool loadingMore;
+
+  /// The first page came off disk because the server was unreachable.
+  final bool stale;
+
+  /// When the first page was fetched. Null when it came fresh just now.
+  final DateTime? fetchedAt;
 
   bool get hasMore => rows.length < total;
 
@@ -51,6 +60,8 @@ class TransactionListState {
         rows: rows ?? this.rows,
         total: total ?? this.total,
         loadingMore: loadingMore ?? this.loadingMore,
+        stale: stale,
+        fetchedAt: fetchedAt,
       );
 }
 
@@ -69,8 +80,24 @@ class TransactionListController extends AsyncNotifier<TransactionListState> {
     }
     final filter = ref.watch(transactionFilterProvider);
 
-    final page = await api.transactions(filter: filter, limit: _pageSize);
-    return TransactionListState(rows: page.transactions, total: page.total);
+    // Only the first page is cached. Paging deeper offline would need every
+    // page stored, and a list you can scroll for ever with no network is not
+    // what someone reaching for this screen actually needs — the recent rows
+    // are.
+    final cached = await withCache<TransactionPage>(
+      store: ref.watch(snapshotStoreProvider),
+      key: 'transactions-${filter.hashCode}',
+      fetch: () => api.transactions(filter: filter, limit: _pageSize),
+      encode: (p) => p.toJson(),
+      decode: TransactionPage.fromJson,
+    );
+
+    return TransactionListState(
+      rows: cached.value.transactions,
+      total: cached.value.total,
+      stale: cached.isStale,
+      fetchedAt: cached.fetchedAt,
+    );
   }
 
   /// Appends the next page.

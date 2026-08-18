@@ -81,7 +81,11 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
                       ? 'They are entered on the website.'
                       : 'Try widening or clearing them.',
                 )
-              : _TransactionList(state: state, scroll: _scroll),
+              : _TransactionList(
+                  state: state,
+                  scroll: _scroll,
+                  onRetry: () => ref.invalidate(transactionListProvider),
+                ),
         ),
       ),
     );
@@ -95,9 +99,14 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
 }
 
 class _TransactionList extends StatelessWidget {
-  const _TransactionList({required this.state, required this.scroll});
+  const _TransactionList({
+    required this.state,
+    required this.scroll,
+    required this.onRetry,
+  });
   final TransactionListState state;
   final ScrollController scroll;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -108,8 +117,19 @@ class _TransactionList extends StatelessWidget {
     return ListView.builder(
       controller: scroll,
       padding: const EdgeInsets.only(bottom: 24),
-      itemCount: state.rows.length + 1,
-      itemBuilder: (context, i) {
+      // One extra slot at each end: the stale banner on top, the count below.
+      itemCount: state.rows.length + 2,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          final at = state.fetchedAt;
+          return state.stale && at != null
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: StaleBanner(fetchedAt: at, onRetry: onRetry),
+                )
+              : const SizedBox.shrink();
+        }
+        final i = index - 1;
         if (i == state.rows.length) {
           return _Footer(state: state);
         }
@@ -278,7 +298,9 @@ class _FilterSheetState extends ConsumerState<_FilterSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final categories = ref.watch(categoriesProvider).value ?? const [];
-    final accountsData = ref.watch(accountsProvider).value;
+    // The accounts screen caches its payload, so the filter pickers stay
+    // populated offline instead of silently losing their options.
+    final accountsData = ref.watch(accountsProvider).value?.value;
     final accounts = accountsData?.accounts ?? const <Account>[];
     final owners = accountsData?.balances.owners ?? const <OwnerBalance>[];
 

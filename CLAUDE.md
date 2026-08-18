@@ -40,6 +40,13 @@ server already aggregated into one currency.
 conversion. Recomputing it from the rounded, converted `actual` and `budget`
 drifts, and the app would colour a category differently from the website.
 
+**Offline reads come from the cache, and say so.** Every screen goes through
+`withCache`: a successful fetch is stored, and a network failure falls back to
+what was stored, marked stale and banner-ed with its age. Never present cached
+figures as current — on a finance app that is the one unforgivable bug. A
+failure with nothing cached throws, because an error page is honest where an
+empty state would read as "you have no data".
+
 **Stay consistent with the website.** Colour thresholds (≥100 % over, ≥80 %
 close), category colours from the API, `display_currency` from
 `/api/settings/`, two-decimal currency formatting. If the two clients disagree

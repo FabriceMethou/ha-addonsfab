@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format/money.dart';
+import '../../core/cache/cached.dart';
 import '../../core/net/api_exception.dart';
 import '../../core/providers.dart';
 import '../../domain/models/account.dart';
@@ -14,15 +15,33 @@ import '../../ui/views.dart';
 /// the former can be added up.
 typedef AccountsData = ({BalancesSummary balances, List<Account> accounts});
 
-final accountsProvider = FutureProvider<AccountsData>((ref) async {
+final accountsProvider = FutureProvider<Cached<AccountsData>>((ref) async {
   final api = ref.watch(financeApiProvider);
   if (api == null) {
     throw const ApiException(ApiFailure.unknown, 'No server configured.');
   }
-  final results = await Future.wait([api.balances(), api.accounts()]);
-  return (
-    balances: results[0] as BalancesSummary,
-    accounts: results[1] as List<Account>,
+
+  return withCache<AccountsData>(
+    store: ref.watch(snapshotStoreProvider),
+    key: 'accounts',
+    fetch: () async {
+      final results = await Future.wait([api.balances(), api.accounts()]);
+      return (
+        balances: results[0] as BalancesSummary,
+        accounts: results[1] as List<Account>,
+      );
+    },
+    encode: (d) => {
+      'balances': d.balances.toJson(),
+      'accounts': [for (final a in d.accounts) a.toJson()],
+    },
+    decode: (j) => (
+      balances: BalancesSummary.fromJson(j['balances'] as Map<String, dynamic>),
+      accounts: [
+        for (final a in (j['accounts'] as List? ?? const []))
+          Account.fromJson(a as Map<String, dynamic>),
+      ],
+    ),
   );
 });
 
@@ -46,7 +65,11 @@ class AccountsScreen extends ConsumerWidget {
             error: e,
             onRetry: () => ref.invalidate(accountsProvider),
           ),
-          data: (d) => _AccountsList(data: d),
+          data: (cached) => _AccountsList(
+            data: cached.value,
+            cached: cached,
+            onRetry: () => ref.invalidate(accountsProvider),
+          ),
         ),
       ),
     );
@@ -54,8 +77,14 @@ class AccountsScreen extends ConsumerWidget {
 }
 
 class _AccountsList extends StatelessWidget {
-  const _AccountsList({required this.data});
+  const _AccountsList({
+    required this.data,
+    required this.cached,
+    required this.onRetry,
+  });
   final AccountsData data;
+  final Cached<AccountsData> cached;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -80,6 +109,8 @@ class _AccountsList extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
+        if (cached.isStale)
+          StaleBanner(fetchedAt: cached.fetchedAt, onRetry: onRetry),
         _HouseholdTotal(summary: data.balances),
         const Divider(height: 32),
         for (final owner in owners) ...[

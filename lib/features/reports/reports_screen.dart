@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format/money.dart';
+import '../../core/cache/cached.dart';
 import '../../core/net/api_exception.dart';
 import '../../core/providers.dart';
 import '../../domain/models/reports.dart';
@@ -36,7 +37,7 @@ typedef ReportsData = ({
   IncomeVsExpenses flow,
 });
 
-final reportsProvider = FutureProvider<ReportsData>((ref) async {
+final reportsProvider = FutureProvider<Cached<ReportsData>>((ref) async {
   final api = ref.watch(financeApiProvider);
   if (api == null) {
     throw const ApiException(ApiFailure.unknown, 'No server configured.');
@@ -53,16 +54,33 @@ final reportsProvider = FutureProvider<ReportsData>((ref) async {
   final start = iso(from);
   final end = iso(now);
 
-  final results = await Future.wait([
-    api.netWorthTrend(months: range.months),
-    api.spendingByCategory(startDate: start, endDate: end),
-    api.incomeVsExpenses(startDate: start, endDate: end),
-  ]);
-
-  return (
-    trend: results[0] as NetWorthTrend,
-    spending: results[1] as SpendingByCategory,
-    flow: results[2] as IncomeVsExpenses,
+  return withCache<ReportsData>(
+    store: ref.watch(snapshotStoreProvider),
+    // Keyed by range, so switching to 12 months offline shows the 12-month
+    // figures if they were ever loaded rather than the 3-month ones relabelled.
+    key: 'reports-${range.months}',
+    fetch: () async {
+      final results = await Future.wait([
+        api.netWorthTrend(months: range.months),
+        api.spendingByCategory(startDate: start, endDate: end),
+        api.incomeVsExpenses(startDate: start, endDate: end),
+      ]);
+      return (
+        trend: results[0] as NetWorthTrend,
+        spending: results[1] as SpendingByCategory,
+        flow: results[2] as IncomeVsExpenses,
+      );
+    },
+    encode: (d) => {
+      'trend': d.trend.toJson(),
+      'spending': d.spending.toJson(),
+      'flow': d.flow.toJson(),
+    },
+    decode: (j) => (
+      trend: NetWorthTrend.fromJson(j['trend'] as Map<String, dynamic>),
+      spending: SpendingByCategory.fromJson(j['spending'] as Map<String, dynamic>),
+      flow: IncomeVsExpenses.fromJson(j['flow'] as Map<String, dynamic>),
+    ),
   );
 });
 
@@ -103,7 +121,11 @@ class ReportsScreen extends ConsumerWidget {
                   error: e,
                   onRetry: () => ref.invalidate(reportsProvider),
                 ),
-                data: (d) => _Reports(data: d),
+                data: (cached) => _Reports(
+                  data: cached.value,
+                  cached: cached,
+                  onRetry: () => ref.invalidate(reportsProvider),
+                ),
               ),
             ),
           ),
@@ -114,14 +136,22 @@ class ReportsScreen extends ConsumerWidget {
 }
 
 class _Reports extends StatelessWidget {
-  const _Reports({required this.data});
+  const _Reports({
+    required this.data,
+    required this.cached,
+    required this.onRetry,
+  });
   final ReportsData data;
+  final Cached<ReportsData> cached;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
+        if (cached.isStale)
+          StaleBanner(fetchedAt: cached.fetchedAt, onRetry: onRetry),
         _NetWorthChart(trend: data.trend),
         const Divider(height: 36),
         _FlowSummary(flow: data.flow),

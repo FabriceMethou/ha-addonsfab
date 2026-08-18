@@ -112,3 +112,67 @@ class OpenOnWebsiteButton extends ConsumerWidget {
     );
   }
 }
+
+/// Says that what is on screen came off disk because the server was
+/// unreachable, and how old it is.
+///
+/// Shown rather than hidden, and above the figures rather than below: someone
+/// glancing at a balance has to know it might have moved. The alternative —
+/// presenting yesterday's number as today's — is the one thing a finance app
+/// must not do.
+class StaleBanner extends StatelessWidget {
+  const StaleBanner({super.key, required this.fetchedAt, this.onRetry});
+
+  final DateTime fetchedAt;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.cloud_off, size: 16, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Offline — showing figures from ${_ago(fetchedAt)}.',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+          if (onRetry != null)
+            TextButton(
+              onPressed: onRetry,
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+              ),
+              child: const Text('Retry'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Rough is the point: "3 hours ago" answers the question people actually
+  /// have, where a timestamp makes them do the subtraction themselves.
+  static String _ago(DateTime then) {
+    final d = DateTime.now().difference(then);
+    if (d.inMinutes < 1) return 'a moment ago';
+    if (d.inMinutes < 60) return '${d.inMinutes} min ago';
+    if (d.inHours < 24) {
+      return '${d.inHours} ${d.inHours == 1 ? 'hour' : 'hours'} ago';
+    }
+    if (d.inDays < 30) {
+      return '${d.inDays} ${d.inDays == 1 ? 'day' : 'days'} ago';
+    }
+    return 'over a month ago';
+  }
+}

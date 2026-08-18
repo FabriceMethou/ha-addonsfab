@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../bridge/widget_payload.dart';
 import '../../bridge/widget_sync.dart';
 import '../../core/format/money.dart';
+import '../../core/cache/cached.dart';
 import '../../core/net/api_exception.dart';
 import '../../core/providers.dart';
 import '../../domain/budget_pace.dart';
@@ -35,23 +36,31 @@ final visibleMonthProvider =
     NotifierProvider<VisibleMonth, ({int year, int month})>(VisibleMonth.new);
 
 final budgetsProvider =
-    FutureProvider.family<BudgetVsActual, ({int year, int month})>(
+    FutureProvider.family<Cached<BudgetVsActual>, ({int year, int month})>(
         (ref, month) async {
   final api = ref.watch(financeApiProvider);
   if (api == null) {
     throw const ApiException(ApiFailure.unknown, 'No server configured.');
   }
-  final data = await api.budgetVsActual(month.year, month.month);
+
+  final cached = await withCache(
+    store: ref.watch(snapshotStoreProvider),
+    key: 'budgets-${month.year}-${month.month}',
+    fetch: () => api.budgetVsActual(month.year, month.month),
+    encode: (d) => d.toJson(),
+    decode: BudgetVsActual.fromJson,
+  );
 
   // Whenever the app has just fetched the month the widget shows, hand it the
   // same figures. Waiting for the widget's own cycle would leave the home
-  // screen contradicting the app someone just closed.
+  // screen contradicting the app someone just closed. Skipped on stale data:
+  // republishing what the widget already has, with an older timestamp, would
+  // make it look like it had just refreshed.
   final now = DateTime.now();
-  if (month.year == now.year && month.month == now.month) {
-    await const WidgetSync()
-        .publish(WidgetPayload.from(data, now: now));
+  if (!cached.isStale && month.year == now.year && month.month == now.month) {
+    await const WidgetSync().publish(WidgetPayload.from(cached.value, now: now));
   }
-  return data;
+  return cached;
 });
 
 class BudgetsScreen extends ConsumerWidget {
@@ -86,7 +95,11 @@ class BudgetsScreen extends ConsumerWidget {
                   error: e,
                   onRetry: () => ref.invalidate(budgetsProvider(month)),
                 ),
-                data: (data) => _BudgetList(data: data),
+                data: (cached) => _BudgetList(
+                  data: cached.value,
+                  cached: cached,
+                  onRetry: () => ref.invalidate(budgetsProvider(month)),
+                ),
               ),
             ),
           ),
@@ -141,8 +154,14 @@ class _MonthBar extends ConsumerWidget {
 }
 
 class _BudgetList extends StatelessWidget {
-  const _BudgetList({required this.data});
+  const _BudgetList({
+    required this.data,
+    required this.cached,
+    required this.onRetry,
+  });
   final BudgetVsActual data;
+  final Cached<BudgetVsActual> cached;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -179,6 +198,8 @@ class _BudgetList extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
+        if (cached.isStale)
+          StaleBanner(fetchedAt: cached.fetchedAt, onRetry: onRetry),
         _Summary(data: data, overview: overview),
         const SizedBox(height: 8),
         const Divider(height: 32),

@@ -4,12 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/finance_api.dart';
 import '../domain/models/auth.dart';
 import 'auth/session_store.dart';
+import 'cache/snapshot_store.dart';
 import 'net/api_exception.dart';
 import 'net/dio_client.dart';
 
 /// Persistent session storage. Plain object, no widget dependency, so the same
 /// instance construction works inside the widget's background isolate.
 final sessionStoreProvider = Provider<SessionStore>((ref) => SessionStore());
+
+/// Cached screen payloads, so the app opens on its last figures when offline.
+final snapshotStoreProvider =
+    Provider<SnapshotStore>((ref) => const SnapshotStore());
 
 /// The current session. Async because the first read comes off encrypted disk.
 final sessionProvider =
@@ -133,6 +138,9 @@ class SessionController extends AsyncNotifier<Session> {
   Future<void> signOut() async {
     _pendingMfaToken = null;
     await _store.clearTokens();
+    // Cached figures go with the session: the next person to sign in must not
+    // find the previous account's balances waiting behind the lock screen.
+    await ref.read(snapshotStoreProvider).clear();
     final baseUrl = await _store.readBaseUrl();
     state = AsyncData(
       baseUrl == null
@@ -145,6 +153,7 @@ class SessionController extends AsyncNotifier<Session> {
   Future<void> forgetServer() async {
     _pendingMfaToken = null;
     await _store.clearAll();
+    await ref.read(snapshotStoreProvider).clear();
     state = AsyncData(Session.empty());
   }
 
