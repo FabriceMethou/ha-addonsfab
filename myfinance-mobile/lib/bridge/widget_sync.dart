@@ -18,8 +18,15 @@ import 'widget_payload.dart';
 class WidgetSync {
   const WidgetSync();
 
-  /// Android widget class name, matched to the Kotlin receiver.
-  static const _androidProvider = 'BudgetWidgetReceiver';
+  /// Android widget class, matched to the Kotlin receiver.
+  ///
+  /// Fully qualified, and passed as `qualifiedAndroidName`. The plugin's
+  /// `androidName` builds `<applicationId>.<name>`, which lands on
+  /// `com.methou.myfinance.BudgetWidgetReceiver` — the receiver lives one
+  /// package deeper, under `.widget`, so that lookup throws
+  /// ClassNotFoundException the first time anything publishes.
+  static const _androidProvider =
+      'com.methou.myfinance.widget.BudgetWidgetReceiver';
   static const _iOSWidget = 'BudgetWidget';
 
   static const _sentAlertsKey = 'sent_threshold_alerts';
@@ -68,7 +75,18 @@ class WidgetSync {
   ///
   /// Used when a screen has just fetched the same month, so the widget follows
   /// the app immediately instead of waiting for its own cycle.
-  Future<void> publish(WidgetPayload payload) => _write(payload);
+  ///
+  /// Never throws, like [refresh]. Screens call this after their own data has
+  /// arrived, and a home-screen widget that could not be updated is no reason
+  /// to replace budgets already fetched with an error page. Whatever went wrong
+  /// belongs to the widget, and the widget's own cycle will try again.
+  Future<void> publish(WidgetPayload payload) async {
+    try {
+      await _write(payload);
+    } catch (_) {
+      // Deliberately swallowed: see above.
+    }
+  }
 
   /// Reads the snapshot currently on the widget.
   Future<WidgetPayload?> readSnapshot() async {
@@ -82,7 +100,7 @@ class WidgetSync {
       payload.encode(),
     );
     await HomeWidget.updateWidget(
-      androidName: _androidProvider,
+      qualifiedAndroidName: _androidProvider,
       iOSName: _iOSWidget,
     );
   }
