@@ -103,6 +103,12 @@ dependencies {
 
     implementation("androidx.glance:glance-appwidget:1.1.1")
     implementation("androidx.glance:glance-material3:1.1.1")
+
+    // Already on the runtime classpath through home_widget and workmanager;
+    // declared here because the ↻ button has to reach WorkManager directly to
+    // clear a poisoned work chain. Pinned to the version those plugins resolve
+    // to, so this declaration never decides the version for anyone else.
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
 }
 
 flutter {
