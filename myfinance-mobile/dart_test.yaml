@@ -1,5 +1,0 @@
-tags:
-  # Declared so the runner does not warn about an unknown tag. These tests
-  # gate themselves on MYFINANCE_LIVE being set, so a plain `flutter test`
-  # stays hermetic and skips them without any extra flag.
-  live:

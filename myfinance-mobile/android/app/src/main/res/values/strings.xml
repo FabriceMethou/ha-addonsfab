@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="budget_widget_label">MyFinance budget</string>
-    <string name="budget_widget_description">Where this month\'s budget stands, against how much of the month has gone.</string>
-</resources>
