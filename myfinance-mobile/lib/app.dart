@@ -9,13 +9,33 @@ import 'features/shell/home_shell.dart';
 import 'features/setup/setup_screen.dart';
 import 'ui/theme.dart';
 
-/// The router, rebuilt whenever the session stage changes.
+/// Turns a change of session stage into something GoRouter will listen to.
+///
+/// GoRouter re-runs its redirect when a [Listenable] fires, not when the widget
+/// around it rebuilds, and it holds one router for the life of the app. Without
+/// this bridge the redirect below runs once at startup and never again: signing
+/// in leaves the setup screen on display, already signed in, with no way out.
+///
+/// Only the stage is worth a refresh. Tokens rotate underneath an unchanged
+/// stage, and re-running every redirect for that would be churn.
+class _SessionStageRefresh extends ChangeNotifier {
+  void ping() => notifyListeners();
+}
+
+/// The router, re-evaluated whenever the session stage changes.
 ///
 /// Access is gated in one place rather than screen by screen, so a session that
 /// lapses while a screen is open cannot leave that screen reachable.
 final routerProvider = Provider<GoRouter>((ref) {
+  final refresh = _SessionStageRefresh();
+  ref.onDispose(refresh.dispose);
+  ref.listen<AsyncValue<Session>>(sessionProvider, (previous, next) {
+    if (previous?.value?.stage != next.value?.stage) refresh.ping();
+  });
+
   return GoRouter(
     initialLocation: '/',
+    refreshListenable: refresh,
     redirect: (context, state) {
       final session = ref.read(sessionProvider).value;
       // Still reading encrypted storage: hold position rather than bouncing
@@ -41,10 +61,6 @@ class MyFinanceApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Watched rather than read so a change of stage rebuilds the router and the
-    // redirect above runs again.
-    ref.watch(sessionProvider);
-
     return MaterialApp.router(
       title: 'MyFinance',
       debugShowCheckedModeBanner: false,
