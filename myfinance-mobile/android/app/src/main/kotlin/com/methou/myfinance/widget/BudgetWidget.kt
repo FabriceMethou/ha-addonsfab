@@ -110,6 +110,17 @@ private val SMALL = DpSize(120.dp, 120.dp)
 private val WIDE = DpSize(250.dp, 120.dp)
 private val TALL = DpSize(250.dp, 250.dp)
 
+/**
+ * How many children a Glance container can hold.
+ *
+ * Glance draws into RemoteViews, whose containers are prebuilt layouts with a
+ * fixed number of slots. Past the tenth child it drops the rest and only logs
+ * it — the widget still draws, missing content, which on a budget screen reads
+ * as "you have no other categories" rather than as a fault. Every container
+ * built from a list has to count its children against this.
+ */
+private const val MAX_CONTAINER_CHILDREN = 10
+
 class BudgetWidget : GlanceAppWidget() {
 
     override val stateDefinition = HomeWidgetGlanceStateDefinition()
@@ -234,35 +245,45 @@ private fun TallLayout(payload: BudgetPayload) {
     WideLayout(payload)
     Spacer(GlanceModifier.height(10.dp))
     val barWidth = LocalSize.current.width.value - 24f
-    for (category in payload.categories) {
-        Row(
-            modifier = GlanceModifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                category.name,
-                style = TextStyle(color = WidgetColors.onBackground, fontSize = 12.sp),
-                maxLines = 1,
-                modifier = GlanceModifier.defaultWeight(),
-            )
-            Text(
-                category.pctLabel,
-                style = TextStyle(
+
+    // Each category gets a container of its own. Emitted straight into the
+    // enclosing column, its four parts would be counted individually against
+    // MAX_CONTAINER_CHILDREN: with the header and the ring row already taking
+    // four slots, the fifth category's rows fell off the end and the launcher
+    // drew a month that looked like it had two categories.
+    Column(modifier = GlanceModifier.fillMaxWidth()) {
+        for (category in payload.categories.take(MAX_CONTAINER_CHILDREN)) {
+            Column(modifier = GlanceModifier.fillMaxWidth()) {
+                Row(
+                    modifier = GlanceModifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        category.name,
+                        style = TextStyle(color = WidgetColors.onBackground, fontSize = 12.sp),
+                        maxLines = 1,
+                        modifier = GlanceModifier.defaultWeight(),
+                    )
+                    Text(
+                        category.pctLabel,
+                        style = TextStyle(
+                            color = WidgetColors.forLevel(category.level),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        maxLines = 1,
+                    )
+                }
+                Spacer(GlanceModifier.height(3.dp))
+                PacedBar(
+                    fraction = category.fraction,
+                    pace = payload.paceFraction,
                     color = WidgetColors.forLevel(category.level),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                ),
-                maxLines = 1,
-            )
+                    availableWidth = barWidth,
+                )
+                Spacer(GlanceModifier.height(7.dp))
+            }
         }
-        Spacer(GlanceModifier.height(3.dp))
-        PacedBar(
-            fraction = category.fraction,
-            pace = payload.paceFraction,
-            color = WidgetColors.forLevel(category.level),
-            availableWidth = barWidth,
-        )
-        Spacer(GlanceModifier.height(7.dp))
     }
 }
 
