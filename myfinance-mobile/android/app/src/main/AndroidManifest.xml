@@ -57,6 +57,13 @@
             android:value="2" />
     </application>
 
+    <!-- The whole app is a client for a server, so this belongs here rather
+         than only in the debug and profile manifests where Flutter's template
+         puts it. Declared there alone, debug builds reach the network and
+         release builds cannot open a socket at all — every call fails as if
+         the phone were offline, which is exactly how it reads on screen. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Notifications for a budget crossing 80% or 100%. Raised locally by the
          sync that already fetches the figures: no push server, no third party,
          and no financial data leaving the device. -->
