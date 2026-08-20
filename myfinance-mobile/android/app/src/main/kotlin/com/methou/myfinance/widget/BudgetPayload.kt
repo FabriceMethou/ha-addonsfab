@@ -13,7 +13,16 @@ import org.json.JSONObject
  * formats anything: it lays out text and draws two fractions.
  */
 data class BudgetPayload(
-    val stale: Boolean,
+    /**
+     * When the server produced these figures, ISO-8601, local time.
+     *
+     * Carried as the raw string rather than a parsed instant: the widget turns
+     * it into words at draw time, and parsing on every redraw is cheaper than
+     * carrying a type through a data class that only ever formats it.
+     */
+    val syncedAtIso: String?,
+    /** Null when current; otherwise [SIGNED_OUT] or [UNREACHABLE]. */
+    val staleReason: String?,
     val hasData: Boolean,
     val monthLabel: String,
     val daysLeftLabel: String,
@@ -29,9 +38,19 @@ data class BudgetPayload(
     val month: Int,
     val categories: List<BudgetCategory>,
 ) {
+    val isStale: Boolean get() = staleReason != null
+    val isSignedOut: Boolean get() = staleReason == SIGNED_OUT
+
     companion object {
         /** Must match WidgetPayload.version on the Dart side. */
-        const val SUPPORTED_VERSION = 1
+        const val SUPPORTED_VERSION = 2
+
+        /** The session lapsed. Worth telling someone to sign in. */
+        const val SIGNED_OUT = "signedOut"
+
+        /** The fetch did not get through. Retrying is what might work, so the
+         *  refresh button stays alive and no sign-in is suggested. */
+        const val UNREACHABLE = "unreachable" 
 
         /** Must match WidgetPayload.storageKey. */
         const val STORAGE_KEY = "budget_payload"
@@ -68,7 +87,9 @@ data class BudgetPayload(
                 }
 
                 BudgetPayload(
-                    stale = json.optBoolean("stale", false),
+                    // optString returns "" for a missing key, not null.
+                    syncedAtIso = json.optString("syncedAt").ifEmpty { null },
+                    staleReason = json.optString("staleReason").ifEmpty { null },
                     hasData = json.optBoolean("hasData", false),
                     monthLabel = json.optString("monthLabel"),
                     daysLeftLabel = json.optString("daysLeftLabel"),

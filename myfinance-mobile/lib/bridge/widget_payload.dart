@@ -19,7 +19,7 @@ import '../domain/models/budget.dart';
 class WidgetPayload {
   const WidgetPayload({
     required this.syncedAt,
-    required this.stale,
+    required this.staleReason,
     required this.hasData,
     required this.monthLabel,
     required this.daysLeftLabel,
@@ -36,24 +36,37 @@ class WidgetPayload {
     required this.month,
   });
 
+  /// Why the figures on screen are not current.
+  ///
+  /// The two cases call for different actions from whoever is reading, so they
+  /// cannot collapse into one flag. Only [signedOut] is worth "Tap to sign in";
+  /// [unreachable] wants the refresh button left alive, because retrying is
+  /// exactly what might work.
+  static const String signedOut = 'signedOut';
+  static const String unreachable = 'unreachable';
+
   /// Bumped whenever the shape below changes.
   ///
   /// Versioned from the first release because an app update cannot update the
   /// widgets already sitting on someone's home screen: the old Kotlin keeps
   /// reading whatever the new Dart wrote. On an unknown version the widget says
   /// so instead of drawing nonsense or crashing the launcher.
-  static const int version = 1;
+  static const int version = 2;
 
   /// Key the snapshot is stored under, shared with the Kotlin side.
   static const String storageKey = 'budget_payload';
 
   final DateTime syncedAt;
 
-  /// The session lapsed, so these figures could not be refreshed.
+  /// Null when these figures came fresh from the server.
   ///
-  /// The numbers stay on display — someone glancing at a widget deserves the
-  /// last known state, not a blank — but they are labelled as old.
-  final bool stale;
+  /// Otherwise [signedOut] or [unreachable]. The numbers stay on display either
+  /// way — someone glancing at a widget deserves the last known state, not a
+  /// blank — but they are labelled, and labelled with the right cause.
+  final String? staleReason;
+
+  bool get isStale => staleReason != null;
+  bool get isSignedOut => staleReason == signedOut;
 
   /// Whether any budget was measured at all. A ring at 0 % and a month with no
   /// budgets must not look the same.
@@ -86,7 +99,7 @@ class WidgetPayload {
   Map<String, dynamic> toJson() => {
         'v': version,
         'syncedAt': syncedAt.toIso8601String(),
-        'stale': stale,
+        'staleReason': ?staleReason,
         'hasData': hasData,
         'monthLabel': monthLabel,
         'daysLeftLabel': daysLeftLabel,
@@ -122,7 +135,7 @@ class WidgetPayload {
     return WidgetPayload(
       syncedAt: DateTime.tryParse(decoded['syncedAt'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
-      stale: decoded['stale'] as bool? ?? false,
+      staleReason: decoded['staleReason'] as String?,
       hasData: decoded['hasData'] as bool? ?? false,
       monthLabel: decoded['monthLabel'] as String? ?? '',
       daysLeftLabel: decoded['daysLeftLabel'] as String? ?? '',
@@ -150,7 +163,7 @@ class WidgetPayload {
   factory WidgetPayload.from(
     BudgetVsActual data, {
     required DateTime now,
-    bool stale = false,
+    String? staleReason,
     int take = 5,
     String? locale,
   }) {
@@ -160,7 +173,7 @@ class WidgetPayload {
 
     return WidgetPayload(
       syncedAt: now,
-      stale: stale,
+      staleReason: staleReason,
       hasData: overview.hasData,
       year: data.year,
       month: data.month,
@@ -197,7 +210,7 @@ class WidgetPayload {
   factory WidgetPayload.empty({required DateTime now, String? locale}) =>
       WidgetPayload(
         syncedAt: now,
-        stale: false,
+        staleReason: null,
         hasData: false,
         year: now.year,
         month: now.month,
@@ -214,10 +227,13 @@ class WidgetPayload {
         categories: const [],
       );
 
-  /// The same snapshot, marked as no longer refreshable.
-  WidgetPayload asStale() => WidgetPayload(
+  /// The same snapshot, marked as no longer current, with the cause.
+  ///
+  /// [syncedAt] deliberately does not move: it records when the figures were
+  /// produced, and a failed refresh produced nothing.
+  WidgetPayload asStale(String reason) => WidgetPayload(
         syncedAt: syncedAt,
-        stale: true,
+        staleReason: reason,
         hasData: hasData,
         monthLabel: monthLabel,
         daysLeftLabel: daysLeftLabel,

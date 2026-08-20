@@ -84,7 +84,15 @@ class BudgetPayloadTest {
         // Updating the app cannot update a widget already sitting on a home
         // screen, so old Kotlin will eventually be handed newer JSON. It has
         // to decline rather than draw a half-understood snapshot.
-        val bumped = golden().replace("\"v\":1", "\"v\":2")
+        // Derived from the constant rather than written out, so bumping the
+        // contract does not silently turn this test into a no-op that passes
+        // because it is comparing two unsupported versions.
+        val supported = "\"v\":${BudgetPayload.SUPPORTED_VERSION}"
+        val bumped = golden().replace(
+            supported,
+            "\"v\":${BudgetPayload.SUPPORTED_VERSION + 1}",
+        )
+        assert(bumped != golden()) { "the golden must carry the supported version" }
         assertNull(BudgetPayload.parse(bumped))
     }
 
@@ -100,7 +108,8 @@ class BudgetPayloadTest {
 
     @Test
     fun `tolerates a snapshot missing optional fields`() {
-        val minimal = """{"v":1,"hasData":true,"year":2026,"month":8}"""
+        val minimal =
+            """{"v":${BudgetPayload.SUPPORTED_VERSION},"hasData":true,"year":2026,"month":8}"""
         val payload = BudgetPayload.parse(minimal)
 
         assertNotNull(payload)

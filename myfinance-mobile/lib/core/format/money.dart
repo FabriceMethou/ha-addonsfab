@@ -72,3 +72,27 @@ DateTime? parseApiDate(String? value) {
   if (value == null || value.isEmpty) return null;
   return DateTime.tryParse(value);
 }
+
+/// How long ago something happened, in words.
+///
+/// Deliberately rough: "3 hours ago" answers the question people actually have,
+/// where a timestamp makes them do the subtraction themselves.
+///
+/// Lives here, and is mirrored in Kotlin for the home-screen widget, because
+/// the widget cannot use a string formatted at sync time — that would freeze on
+/// "a moment ago" and never move again. The age has to be computed when the
+/// thing is drawn, so both sides own the same thresholds. They are pinned to
+/// the same table of cases in `relative_age_test.dart` and `RelativeAgeTest.kt`.
+String formatRelativeAge(DateTime then, {DateTime? now}) {
+  final d = (now ?? DateTime.now()).difference(then);
+  if (d.isNegative) return 'just now';
+  if (d.inMinutes < 1) return 'just now';
+  if (d.inMinutes < 60) return '${d.inMinutes} min ago';
+  if (d.inHours < 24) {
+    return '${d.inHours} ${d.inHours == 1 ? 'hour' : 'hours'} ago';
+  }
+  if (d.inDays < 30) {
+    return '${d.inDays} ${d.inDays == 1 ? 'day' : 'days'} ago';
+  }
+  return 'over a month ago';
+}

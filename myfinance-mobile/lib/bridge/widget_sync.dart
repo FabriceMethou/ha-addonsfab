@@ -58,17 +58,38 @@ class WidgetSync {
       if (notify) await _raiseAlerts(previous: previous, current: payload);
       return true;
     } on ApiException catch (e) {
-      // The session has lapsed and cannot be renewed. Keep the figures, say
-      // they are old. Blanking them would be worse than showing yesterday's.
-      if (e.needsSignIn && previous != null) {
-        await _write(previous.asStale());
-      }
+      // Any failure marks the widget, not just a lapsed session. Returning
+      // quietly on a network error — as this did — left the figures ageing on
+      // the home screen with nothing to say so, which is the one thing
+      // CLAUDE.md calls unforgivable here. The app has said "3 hours ago" since
+      // the offline cache landed; the widget was still silent.
+      await _markStale(
+        previous,
+        e.needsSignIn ? WidgetPayload.signedOut : WidgetPayload.unreachable,
+      );
       return false;
     } catch (_) {
+      // Anything else — a decode that failed, a platform channel that was not
+      // ready — is still a refresh that did not happen.
+      await _markStale(previous, WidgetPayload.unreachable);
       return false;
     } finally {
       dio.close();
     }
+  }
+
+  /// Re-publishes the previous snapshot with the reason it could not be
+  /// refreshed.
+  ///
+  /// Does nothing when there is no previous snapshot: there are no figures to
+  /// label, and the widget is already showing its placeholder.
+  Future<void> _markStale(WidgetPayload? previous, String reason) async {
+    if (previous == null) return;
+    // Skipped when the reason has not changed, because every write costs a
+    // redraw from a background isolate and repainting an unchanged widget
+    // every three hours is pure battery.
+    if (previous.staleReason == reason) return;
+    await publish(previous.asStale(reason));
   }
 
   /// Republishes a snapshot the app already has, without a network call.

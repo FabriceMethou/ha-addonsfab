@@ -10,7 +10,7 @@ WidgetPayload payloadWith(
 }) =>
     WidgetPayload(
       syncedAt: DateTime(year, month, 16),
-      stale: false,
+      staleReason: null,
       hasData: hasData,
       monthLabel: 'August 2026',
       daysLeftLabel: '15 days left',

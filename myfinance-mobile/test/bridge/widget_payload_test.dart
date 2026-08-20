@@ -148,12 +148,14 @@ void main() {
   });
 
   group('degraded states', () {
-    test('a stale snapshot keeps its figures and only flips the flag', () {
+    test('a stale snapshot keeps its figures and only records the cause', () {
       final fresh =
           WidgetPayload.from(loadBudget('budgets_vs_actual'), now: august);
-      final stale = fresh.asStale();
+      final stale = fresh.asStale(WidgetPayload.unreachable);
 
-      expect(stale.stale, isTrue);
+      expect(stale.isStale, isTrue);
+      expect(stale.isSignedOut, isFalse,
+          reason: 'a network failure is not a lapsed session');
       expect(stale.amountLabel, fresh.amountLabel,
           reason: 'blanking the figures would be worse than showing old ones');
       expect(stale.categories.length, fresh.categories.length);

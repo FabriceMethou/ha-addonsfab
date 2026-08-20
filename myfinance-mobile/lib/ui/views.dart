@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/format/money.dart';
 import '../core/net/api_exception.dart';
 import '../core/providers.dart';
 
@@ -142,7 +143,7 @@ class StaleBanner extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Offline — showing figures from ${_ago(fetchedAt)}.',
+              'Offline — showing figures from ${formatRelativeAge(fetchedAt)}.',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -161,18 +162,4 @@ class StaleBanner extends StatelessWidget {
     );
   }
 
-  /// Rough is the point: "3 hours ago" answers the question people actually
-  /// have, where a timestamp makes them do the subtraction themselves.
-  static String _ago(DateTime then) {
-    final d = DateTime.now().difference(then);
-    if (d.inMinutes < 1) return 'a moment ago';
-    if (d.inMinutes < 60) return '${d.inMinutes} min ago';
-    if (d.inHours < 24) {
-      return '${d.inHours} ${d.inHours == 1 ? 'hour' : 'hours'} ago';
-    }
-    if (d.inDays < 30) {
-      return '${d.inDays} ${d.inDays == 1 ? 'day' : 'days'} ago';
-    }
-    return 'over a month ago';
-  }
 }

@@ -289,6 +289,10 @@ private fun TallLayout(payload: BudgetPayload) {
 
 @Composable
 private fun Header(payload: BudgetPayload, compact: Boolean) {
+    // Computed here rather than read from the payload: an age written at sync
+    // time would say "just now" for ever. See RelativeAge.
+    val age = RelativeAge.format(payload.syncedAtIso)
+
     Row(
         modifier = GlanceModifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -303,21 +307,47 @@ private fun Header(payload: BudgetPayload, compact: Boolean) {
             maxLines = 1,
             modifier = GlanceModifier.defaultWeight(),
         )
-        // Stale figures are labelled rather than hidden: a person glancing at a
-        // widget deserves the last known state, marked as old.
-        Text(
-            if (payload.stale) "Tap to sign in" else "↻",
-            style = TextStyle(
-                color = if (payload.stale) WidgetColors.forLevel("close") else WidgetColors.muted,
-                fontSize = if (payload.stale) 10.sp else 13.sp,
-            ),
-            maxLines = 1,
-            modifier = if (payload.stale) {
-                GlanceModifier
-            } else {
-                GlanceModifier.clickable(actionRunCallback<RefreshAction>())
-            },
-        )
+
+        when {
+            // A lapsed session is the one case worth asking for an action: no
+            // amount of retrying will fix it, and refreshing cannot help.
+            payload.isSignedOut -> Text(
+                "Tap to sign in",
+                style = TextStyle(
+                    color = WidgetColors.forLevel("close"),
+                    fontSize = 10.sp,
+                ),
+                maxLines = 1,
+            )
+
+            else -> {
+                // Age first, then the button. Shown whether or not the last
+                // fetch got through: figures that are three hours old are three
+                // hours old either way, and only saying so when something broke
+                // would make silence mean "current" — which it does not.
+                if (age != null) {
+                    Text(
+                        age,
+                        style = TextStyle(
+                            color = if (payload.isStale) {
+                                WidgetColors.forLevel("close")
+                            } else {
+                                WidgetColors.muted
+                            },
+                            fontSize = 10.sp,
+                        ),
+                        maxLines = 1,
+                    )
+                    Spacer(GlanceModifier.width(6.dp))
+                }
+                Text(
+                    "↻",
+                    style = TextStyle(color = WidgetColors.muted, fontSize = 13.sp),
+                    maxLines = 1,
+                    modifier = GlanceModifier.clickable(actionRunCallback<RefreshAction>()),
+                )
+            }
+        }
     }
 }
 
