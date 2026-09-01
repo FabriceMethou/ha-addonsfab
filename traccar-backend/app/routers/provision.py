@@ -1,8 +1,9 @@
 import logging
+import secrets
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.config import settings
@@ -18,6 +19,26 @@ router = APIRouter()
 class ProvisionRequest(BaseModel):
     display_name: str
     device_unique_id: str
+    enrolment_code: str = ""
+
+
+def _check_enrolment_code(supplied: str) -> None:
+    """Refuse enrolment unless the caller knows the configured code.
+
+    Fails closed: an unconfigured backend enrols nobody, because an open
+    /provision hands out a token that can read every family's location.
+    """
+    expected = settings.enrolment_code
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Enrolment is not configured on this server",
+        )
+    if not secrets.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid enrolment code",
+        )
 
 
 class ProvisionResponse(BaseModel):
@@ -28,6 +49,7 @@ class ProvisionResponse(BaseModel):
 @router.post("/provision", response_model=ProvisionResponse, status_code=201, dependencies=[Depends(provision_limiter)])
 async def provision(req: ProvisionRequest, request: Request) -> ProvisionResponse:
     client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
+    _check_enrolment_code(req.enrolment_code)
     logger.info(
         "PROVISION REQUEST — name=%r  device_id=%r  ip=%s",
         req.display_name,
@@ -37,11 +59,11 @@ async def provision(req: ProvisionRequest, request: Request) -> ProvisionRespons
     try:
         response = await _provision(req.display_name, req.device_unique_id)
         logger.info(
-            "PROVISION OK — name=%r  device_id=%r  ip=%s  token=%s",
+            "PROVISION OK — name=%r  device_id=%r  ip=%s  token=%s…",
             req.display_name,
             req.device_unique_id,
             client_ip,
-            response.device_token,
+            response.device_token[:6],
         )
         return response
     except TraccarError as exc:

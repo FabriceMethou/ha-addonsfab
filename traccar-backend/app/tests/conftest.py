@@ -7,6 +7,7 @@ os.environ.setdefault("DB_PATH", "file:testdb?mode=memory&cache=shared")
 os.environ.setdefault("TRACCAR_URL", "http://traccar.test")
 os.environ.setdefault("TRACCAR_ADMIN_TOKEN", "admintoken")
 os.environ.setdefault("TRACCAR_ADMIN_USER_ID", "1")
+os.environ.setdefault("ENROLMENT_CODE", "test-enrolment-code")
 
 import aiosqlite
 import pytest
@@ -73,3 +74,4 @@ async def seed_session(
 
 
 TRACCAR = "http://traccar.test"
+PROVISION_CODE = "test-enrolment-code"

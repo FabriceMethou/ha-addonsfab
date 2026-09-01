@@ -7,6 +7,9 @@ class Settings:
     traccar_admin_token: str = os.environ.get("TRACCAR_ADMIN_TOKEN", "")
     traccar_admin_user_id: int = int(os.environ.get("TRACCAR_ADMIN_USER_ID", "1"))
     db_path: str = os.environ.get("DB_PATH", "/data/mylife360.db")
+    # Shared secret a device must present to enrol. Empty means "not configured",
+    # and enrolment is refused outright rather than left open.
+    enrolment_code: str = os.environ.get("ENROLMENT_CODE", "")
     log_level: str = os.environ.get("LOG_LEVEL", "INFO").lower()
 
 

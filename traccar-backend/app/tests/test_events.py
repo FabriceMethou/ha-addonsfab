@@ -77,4 +77,4 @@ async def test_get_events_invalid_hours(client):
 
 async def test_get_events_requires_auth(client):
     resp = await client.get("/events")
-    assert resp.status_code == 403
+    assert resp.status_code == 401

@@ -86,7 +86,7 @@ async def test_route_no_downsample_under_500(client):
 
 async def test_route_requires_auth(client):
     resp = await client.get("/route?device_id=7&from=a&to=b")
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 async def test_route_requires_params(client):

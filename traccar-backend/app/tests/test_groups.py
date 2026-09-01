@@ -145,4 +145,4 @@ async def test_add_member_to_nonexistent_group(client):
 
 async def test_groups_require_auth(client):
     resp = await client.get("/groups")
-    assert resp.status_code == 403
+    assert resp.status_code == 401

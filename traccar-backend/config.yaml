@@ -1,6 +1,6 @@
 name: "MyLife360 Backend"
 description: "Mobile API backend for MyLife360 family tracking app"
-version: "1.0.11"
+version: "1.1.0"
 slug: "mylife360_backend"
 init: false
 arch:
@@ -9,6 +9,9 @@ arch:
 startup: services
 ingress: true
 ingress_port: 8765
+# The port stays published: the mobile app reaches this API directly with a
+# bearer token, which HA ingress cannot carry. The API defends itself instead —
+# enrolment code on /provision, and circle-scoped authorisation on every read.
 ports:
   8765/tcp: 8765
 ports_description:
@@ -16,14 +19,16 @@ ports_description:
 panel_icon: mdi:map-marker-account
 panel_title: "MyLife360"
 options:
-  traccar_url: "http://192.168.2.243:30206"
-  traccar_osmand_url: "https://mm3fr1f5g4jsm9ha7f679da9g1osmand.holostorage.net"
+  traccar_url: ""
+  traccar_osmand_url: ""
   traccar_admin_token: ""
   traccar_admin_user_id: 1
+  enrolment_code: ""
   log_level: "info"
 schema:
   traccar_url: str
   traccar_osmand_url: str
-  traccar_admin_token: str
+  traccar_admin_token: password
   traccar_admin_user_id: int
+  enrolment_code: password
   log_level: "list(debug|info|warning|error)"

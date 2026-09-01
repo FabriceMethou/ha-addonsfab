@@ -35,10 +35,14 @@ CREATE TABLE IF NOT EXISTS device_groups (
 );
 """
 
+# group_id 0 means "legacy, unscoped": rows that predate circle scoping.
+# They stay visible to everyone rather than vanishing on upgrade.
 CREATE_WIFI_MAPPINGS = """
 CREATE TABLE IF NOT EXISTS wifi_mappings (
-    ssid     TEXT PRIMARY KEY,
-    place_id INTEGER NOT NULL
+    ssid     TEXT NOT NULL,
+    group_id INTEGER NOT NULL DEFAULT 0,
+    place_id INTEGER NOT NULL,
+    PRIMARY KEY (ssid, group_id)
 );
 """
 
@@ -81,6 +85,27 @@ async def init_db() -> None:
         await db.execute(CREATE_GROUPS)
         await db.execute(CREATE_DEVICE_GROUPS)
         await db.execute(CREATE_WIFI_MAPPINGS)
+
+        # Migration: wifi_mappings gained a group_id (finding C-08). Rebuild
+        # rather than ALTER, so the composite primary key is right.
+        async with db.execute("PRAGMA table_info(wifi_mappings)") as cur:
+            wifi_columns = {row[1] async for row in cur}
+        if wifi_columns and "group_id" not in wifi_columns:
+            await db.execute("""
+                CREATE TABLE wifi_mappings_new (
+                    ssid     TEXT NOT NULL,
+                    group_id INTEGER NOT NULL DEFAULT 0,
+                    place_id INTEGER NOT NULL,
+                    PRIMARY KEY (ssid, group_id)
+                )
+            """)
+            await db.execute(
+                "INSERT OR IGNORE INTO wifi_mappings_new (ssid, group_id, place_id)"
+                " SELECT ssid, 0, place_id FROM wifi_mappings"
+            )
+            await db.execute("DROP TABLE wifi_mappings")
+            await db.execute("ALTER TABLE wifi_mappings_new RENAME TO wifi_mappings")
+
         await db.commit()
 
 
@@ -238,29 +263,40 @@ async def get_traccar_ids_for_unique_ids(unique_ids: list[str]) -> list[int]:
 # WiFi-to-place mapping helpers
 # ------------------------------------------------------------------
 
-async def list_wifi_mappings() -> list[dict]:
+async def list_wifi_mappings_for_groups(group_ids: list[int]) -> list[dict]:
+    """Mappings the caller may see: their circles', plus legacy unscoped ones."""
+    scopes = [0, *group_ids]
+    placeholders = ",".join("?" for _ in scopes)
     async with _connect() as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT ssid, place_id FROM wifi_mappings") as cur:
+        async with db.execute(
+            f"SELECT ssid, group_id, place_id FROM wifi_mappings"
+            f" WHERE group_id IN ({placeholders}) ORDER BY ssid",
+            scopes,
+        ) as cur:
             return [dict(row) async for row in cur]
 
 
-async def upsert_wifi_mapping(ssid: str, place_id: int) -> None:
+async def upsert_wifi_mapping(ssid: str, place_id: int, group_id: int = 0) -> None:
     async with _connect() as db:
         await db.execute(
             """
-            INSERT INTO wifi_mappings (ssid, place_id) VALUES (?, ?)
-            ON CONFLICT(ssid) DO UPDATE SET place_id = excluded.place_id
+            INSERT INTO wifi_mappings (ssid, group_id, place_id) VALUES (?, ?, ?)
+            ON CONFLICT(ssid, group_id) DO UPDATE SET place_id = excluded.place_id
             """,
-            (ssid, place_id),
+            (ssid, group_id, place_id),
         )
         await db.commit()
 
 
-async def delete_wifi_mapping(ssid: str) -> bool:
+async def delete_wifi_mapping_for_groups(ssid: str, group_ids: list[int]) -> bool:
+    """Delete only within the caller's reach — never across circles."""
+    scopes = [0, *group_ids]
+    placeholders = ",".join("?" for _ in scopes)
     async with _connect() as db:
         cur = await db.execute(
-            "DELETE FROM wifi_mappings WHERE ssid = ?", (ssid,)
+            f"DELETE FROM wifi_mappings WHERE ssid = ? AND group_id IN ({placeholders})",
+            (ssid, *scopes),
         )
         await db.commit()
         return cur.rowcount > 0
