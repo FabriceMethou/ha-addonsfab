@@ -3,7 +3,7 @@ import pytest
 import respx
 import httpx
 
-from app.tests.conftest import TRACCAR
+from app.tests.conftest import TRACCAR, PROVISION_CODE
 
 pytestmark = pytest.mark.asyncio
 
@@ -52,7 +52,7 @@ async def test_provision_new_device_and_user(client):
 
     resp = await client.post(
         "/provision",
-        json={"display_name": "Alice", "device_unique_id": unique_id},
+        json={"display_name": "Alice", "device_unique_id": unique_id, "enrolment_code": PROVISION_CODE},
     )
     assert resp.status_code == 201
     body = resp.json()
@@ -79,7 +79,7 @@ async def test_provision_existing_device_same_uuid(client):
 
     resp = await client.post(
         "/provision",
-        json={"display_name": "Bob", "device_unique_id": unique_id},
+        json={"display_name": "Bob", "device_unique_id": unique_id, "enrolment_code": PROVISION_CODE},
     )
     assert resp.status_code == 201
     assert "device_token" in resp.json()
@@ -108,7 +108,7 @@ async def test_provision_reinstall_device_found_by_name(client):
 
     resp = await client.post(
         "/provision",
-        json={"display_name": "Carol", "device_unique_id": new_uid},
+        json={"display_name": "Carol", "device_unique_id": new_uid, "enrolment_code": PROVISION_CODE},
     )
     assert resp.status_code == 201
 
@@ -141,7 +141,7 @@ async def test_provision_reinstall_user_found_by_old_email(client):
 
     resp = await client.post(
         "/provision",
-        json={"display_name": "Dave", "device_unique_id": new_uid},
+        json={"display_name": "Dave", "device_unique_id": new_uid, "enrolment_code": PROVISION_CODE},
     )
     assert resp.status_code == 201
 
@@ -172,7 +172,7 @@ async def test_provision_multiple_devices_same_name_picks_most_recent(client):
 
     resp = await client.post(
         "/provision",
-        json={"display_name": "Eve", "device_unique_id": new_uid},
+        json={"display_name": "Eve", "device_unique_id": new_uid, "enrolment_code": PROVISION_CODE},
     )
     assert resp.status_code == 201
     # Verify the PUT on device 11 was called (not 10 or 12)
@@ -188,6 +188,6 @@ async def test_provision_traccar_5xx_returns_503(client):
 
     resp = await client.post(
         "/provision",
-        json={"display_name": "Frank", "device_unique_id": "ml360-fail"},
+        json={"display_name": "Frank", "device_unique_id": "ml360-fail", "enrolment_code": PROVISION_CODE},
     )
     assert resp.status_code == 503

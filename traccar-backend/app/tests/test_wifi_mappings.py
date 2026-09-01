@@ -100,4 +100,4 @@ async def test_delete_nonexistent_wifi_mapping(client):
 
 async def test_wifi_mappings_require_auth(client):
     resp = await client.get("/wifi-mappings")
-    assert resp.status_code == 403
+    assert resp.status_code == 401

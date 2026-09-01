@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from app.auth import require_session
+from app.authz import visible_device_ids
 from app.errors import http_error_from_traccar
 from app.traccar import TraccarError, traccar
 
@@ -23,11 +24,14 @@ async def get_family(session: dict = Depends(require_session)) -> list[dict[str,
     except TraccarError as exc:
         http_error_from_traccar(exc)
 
+    allowed = await visible_device_ids(session)
     pos_by_device: dict[int, dict] = {p["deviceId"]: p for p in positions}
 
     result = []
     for device in devices:
         did = device["id"]
+        if did not in allowed:
+            continue
         pos = pos_by_device.get(did)
         entry: dict[str, Any] = {
             "device_id": did,

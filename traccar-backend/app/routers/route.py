@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from app.auth import require_session
+from app.authz import require_visible_device
 from app.errors import http_error_from_traccar
 from app.traccar import TraccarError, traccar
 
@@ -18,6 +19,7 @@ async def get_route(
     to_dt: str = Query(..., alias="to"),
     session: dict = Depends(require_session),
 ) -> list[dict[str, Any]]:
+    await require_visible_device(session, device_id)
     try:
         client = await traccar.admin_session()
         try:

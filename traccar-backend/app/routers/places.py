@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.auth import require_session
+from app.authz import visible_device_ids
 from app.errors import http_error_from_traccar
 from app.traccar import TraccarError, traccar
 
@@ -44,6 +45,9 @@ async def create_place(
         client = await traccar.admin_session()
         try:
             geofence = await traccar.create_geofence(client, body.name, area)
+            # A geofence with no device linked to it fires for nobody.
+            for device_id in sorted(await visible_device_ids(session)):
+                await traccar.link_geofence_to_device(client, device_id, geofence["id"])
         finally:
             await client.aclose()
     except TraccarError as exc:

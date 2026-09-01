@@ -5,7 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.auth import require_session
-from app.database import delete_wifi_mapping, list_wifi_mappings, upsert_wifi_mapping
+from app.database import (
+    delete_wifi_mapping_for_groups,
+    get_groups_for_device,
+    list_wifi_mappings_for_groups,
+    upsert_wifi_mapping,
+)
 from app.broadcast import bus
 from app.traccar import TraccarError, traccar
 
@@ -26,7 +31,8 @@ class CreateWifiMappingRequest(BaseModel):
 
 @router.get("/wifi-mappings", response_model=list[WifiMappingResponse])
 async def get_wifi_mappings(session: dict = Depends(require_session)) -> list[WifiMappingResponse]:
-    rows = await list_wifi_mappings()
+    my_groups = await get_groups_for_device(session["device_unique_id"])
+    rows = await list_wifi_mappings_for_groups(my_groups)
     if not rows:
         return []
 
@@ -57,8 +63,15 @@ async def create_wifi_mapping(
     body: CreateWifiMappingRequest,
     session: dict = Depends(require_session),
 ) -> WifiMappingResponse:
-    await upsert_wifi_mapping(body.ssid, body.place_id)
-    logger.info("WiFi mapping saved: ssid=%r → place_id=%d", body.ssid, body.place_id)
+    # Write one row per circle the caller belongs to. A device in no circle
+    # falls back to the legacy unscoped bucket, which only it can see.
+    my_groups = await get_groups_for_device(session["device_unique_id"])
+    for group_id in (my_groups or [0]):
+        await upsert_wifi_mapping(body.ssid, body.place_id, group_id)
+    logger.info(
+        "WiFi mapping saved: ssid=%r → place_id=%d for circles %s",
+        body.ssid, body.place_id, my_groups or ["unscoped"],
+    )
     await bus.publish(json.dumps({"type": "wifi_mapping_changed"}))
 
     place_name = ""
@@ -81,7 +94,8 @@ async def remove_wifi_mapping(
     ssid: str = Query(...),
     session: dict = Depends(require_session),
 ) -> None:
-    deleted = await delete_wifi_mapping(ssid)
+    my_groups = await get_groups_for_device(session["device_unique_id"])
+    deleted = await delete_wifi_mapping_for_groups(ssid, my_groups)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WiFi mapping not found")
     logger.info("WiFi mapping deleted: ssid=%r", ssid)

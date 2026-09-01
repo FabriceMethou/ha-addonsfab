@@ -189,10 +189,22 @@ class TraccarClient:
     ) -> None:
         """Link user to device. 400/409 are silently ignored (already linked).
         Any other error is raised so callers can retry."""
-        resp = await client.post(
-            "/api/permissions",
-            json={"userId": user_id, "deviceId": device_id},
-        )
+        await self._link(client, {"userId": user_id, "deviceId": device_id})
+
+    async def link_geofence_to_device(
+        self,
+        client: httpx.AsyncClient,
+        device_id: int,
+        geofence_id: int,
+    ) -> None:
+        """Link geofence to device so Traccar raises enter/exit events for it.
+
+        Without this link a geofence exists but fires for nobody (finding D-04).
+        """
+        await self._link(client, {"deviceId": device_id, "geofenceId": geofence_id})
+
+    async def _link(self, client: httpx.AsyncClient, payload: dict) -> None:
+        resp = await client.post("/api/permissions", json=payload)
         if resp.status_code in (400, 409):
             return  # already linked — fine
         _raise_for_traccar(resp)

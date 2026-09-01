@@ -40,7 +40,7 @@ async def test_get_places_returns_list(client):
 @respx.mock
 async def test_get_places_requires_auth(client):
     resp = await client.get("/places")
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +51,7 @@ async def test_get_places_requires_auth(client):
 async def test_create_place(client):
     token = await seed_session()
     respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION)
+    respx.post(f"{TRACCAR}/api/permissions").mock(return_value=httpx.Response(204))
     respx.post(f"{TRACCAR}/api/geofences").mock(
         return_value=httpx.Response(201, json=_geofence(3, "Gym", "CIRCLE(50.2 8.3, 150)"))
     )

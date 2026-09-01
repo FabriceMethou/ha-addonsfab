@@ -23,10 +23,10 @@ async def test_valid_token_passes(client):
     assert resp.status_code == 200
 
 
-async def test_missing_token_returns_403(client):
+async def test_missing_token_returns_401(client):
     resp = await client.get("/family")
-    # HTTPBearer returns 403 when the header is absent entirely
-    assert resp.status_code == 403
+    # HTTPBearer returns 401 when the header is absent entirely
+    assert resp.status_code == 401
 
 
 async def test_unknown_token_returns_401(client):

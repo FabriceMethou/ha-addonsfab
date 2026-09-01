@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from app.auth import require_session
+from app.authz import visible_device_ids
 from app.errors import http_error_from_traccar
 from app.traccar import TraccarError, traccar
 
@@ -20,6 +21,8 @@ async def get_events(
         client = await traccar.admin_session()
         try:
             devices = await traccar.get_devices(client)
+            allowed = await visible_device_ids(session)
+            devices = [d for d in devices if d["id"] in allowed]
             device_ids = [d["id"] for d in devices]
             device_name_map = {d["id"]: d.get("name") for d in devices}
 

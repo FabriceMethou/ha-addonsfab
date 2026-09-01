@@ -3,7 +3,7 @@ import pytest
 import respx
 import httpx
 
-from app.tests.conftest import TRACCAR
+from app.tests.conftest import TRACCAR, PROVISION_CODE
 
 pytestmark = pytest.mark.asyncio
 
@@ -22,14 +22,14 @@ async def test_provision_rate_limit_enforced(client):
     for i in range(5):
         resp = await client.post(
             "/provision",
-            json={"display_name": f"User{i}", "device_unique_id": f"ml360-rl-{i}"},
+            json={"display_name": f"User{i}", "device_unique_id": f"ml360-rl-{i}", "enrolment_code": PROVISION_CODE},
         )
         assert resp.status_code == 201, f"Request {i+1} should succeed"
 
     # 6th request should be rate limited
     resp = await client.post(
         "/provision",
-        json={"display_name": "Blocked", "device_unique_id": "ml360-rl-blocked"},
+        json={"display_name": "Blocked", "device_unique_id": "ml360-rl-blocked", "enrolment_code": PROVISION_CODE},
     )
     assert resp.status_code == 429
 

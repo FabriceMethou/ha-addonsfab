@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
 
 from app.auth import require_session
+from app.authz import visible_device_ids
 from app.broadcast import bus
 from app.traccar import TraccarError, traccar
 
@@ -57,14 +58,15 @@ async def stream(
     request: Request,
     session: dict = Depends(require_session),
 ) -> EventSourceResponse:
+    allowed = await visible_device_ids(session)
     return EventSourceResponse(
-        _client_generator(request),
+        _client_generator(request, allowed),
         headers={"X-Accel-Buffering": "no"},
     )
 
 
-async def _client_generator(request: Request) -> AsyncIterator[dict]:
-    q = await bus.subscribe()
+async def _client_generator(request: Request, allowed: set[int]) -> AsyncIterator[dict]:
+    q = await bus.subscribe(visible_ids=allowed)
     try:
         while True:
             if await request.is_disconnected():
