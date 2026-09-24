@@ -16,6 +16,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const TransactionsPage = lazy(() => import('./pages/TransactionsPage'));
 const AccountsPage = lazy(() => import('./pages/AccountsPage'));
 const CategoriesPage = lazy(() => import('./pages/CategoriesPage'));
+const RecipientsPage = lazy(() => import('./pages/RecipientsPage'));
 const EnvelopesPage = lazy(() => import('./pages/EnvelopesPage'));
 const DebtsPage = lazy(() => import('./pages/DebtsPage'));
 const InvestmentsPage = lazy(() => import('./pages/InvestmentsPage'));
@@ -88,6 +89,7 @@ function AppRoutes() {
           <Route path="transactions" element={<TransactionsPage />} />
           <Route path="accounts" element={<AccountsPage />} />
           <Route path="categories" element={<CategoriesPage />} />
+          <Route path="recipients" element={<RecipientsPage />} />
           <Route path="envelopes" element={<EnvelopesPage />} />
           <Route path="debts" element={<DebtsPage />} />
           <Route path="investments" element={<InvestmentsPage />} />

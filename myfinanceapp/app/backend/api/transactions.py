@@ -248,6 +248,8 @@ def create_transaction(
             'confirmed': not transaction.is_pending,  # Inverted: pending=True means confirmed=False
             'tags': transaction.tags,
             'owner_id': transaction.owner_id,  # None = inherit from account
+            # A debt payment is left out of recipient management, spelling included.
+            'keep_recipient_spelling': bool(transaction.debt_id),
         }
         transaction_id = db.add_transaction(transaction_data)
 
@@ -889,18 +891,10 @@ def get_all_recipients(
     limit: int = Query(500, le=1000),
     current_user: User = Depends(get_current_user)
 ):
-    """Get all distinct recipients/payers from transactions"""
-    # Use a direct query with LEFT JOIN so transactions without a subtype
-    # are included — db.get_transactions() uses INNER JOIN and misses them.
-    with db.db_connection(commit=False) as conn:
-        recipients = [row['recipient'] for row in conn.execute("""
-            SELECT DISTINCT TRIM(destinataire) AS recipient
-            FROM transactions
-            WHERE destinataire IS NOT NULL AND TRIM(destinataire) != ''
-            ORDER BY recipient
-            LIMIT ?
-        """, (limit,)).fetchall()]
-
+    """Names for the recipient field: the recipient catalogue, one entry per
+    name whatever its case, plus the account, holding and creditor names that
+    transfers, investments and debt payments carry. Managed at /api/recipients."""
+    recipients = db.get_recipient_names(limit)
     return {"recipients": recipients, "count": len(recipients)}
 
 
@@ -967,59 +961,3 @@ def export_transactions_csv(
         },
     )
 
-
-class RecipientRename(BaseModel):
-    old_name: str
-    new_name: str
-    # Defaults to a dry run: the caller has to ask for the change explicitly,
-    # because a rename can silently merge two payees and cannot be undone.
-    confirm: bool = False
-
-
-@router.get("/recipients/manage")
-def list_recipients_for_management(
-    limit: int = Query(500, le=2000),
-    current_user: User = Depends(get_current_user),
-):
-    """Every payee as stored, with its transaction count and date range.
-
-    Case variants appear separately — that is the point: they are separate
-    values on disk, and this is how you find the ones worth merging.
-    """
-    return {"recipients": db.get_recipients_with_counts(limit)}
-
-
-@router.post("/recipients/rename")
-def rename_recipient(
-    rename: RecipientRename,
-    current_user: User = Depends(get_current_user),
-):
-    """Rename a payee across every transaction using it.
-
-    Without `confirm` this only reports what would happen — how many
-    transactions are affected, and whether the new name already exists, in which
-    case the two merge. The UI is expected to show that before asking again.
-    """
-    try:
-        result = db.rename_recipient(
-            rename.old_name, rename.new_name, apply_changes=rename.confirm)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if result["affected"] == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No transaction uses '{rename.old_name}'")
-
-    if not result["applied"]:
-        result["message"] = (
-            f"{result['affected']} transaction(s) would be renamed to "
-            f"'{result['new_name']}'")
-        if result["merges_into_existing"]:
-            result["message"] += (
-                f", merging with {result['existing_count']} already under that name")
-        result["message"] += ". This cannot be undone."
-    else:
-        result["message"] = f"Renamed {result['affected']} transaction(s)"
-
-    return result

@@ -88,6 +88,7 @@ Each module follows the pattern: router definition, Pydantic models, dependency 
 - `accounts.py` - Accounts, banks, owners, account validations, balance summaries
 - `transactions.py` - Transaction CRUD, bulk operations, auto-categorization
 - `categories.py` - Transaction types and subtypes (category hierarchy)
+- `recipients.py` - Recipient catalogue: add, rename/merge (preview first), delete when unused, unify spellings
 - `envelopes.py` - Savings goals (envelope budgeting system)
 - `debts.py` - Debt/loan tracking with payment schedules
 - `investments.py` - Investment holdings and transactions
@@ -144,6 +145,7 @@ Each page is self-contained with its own data fetching (TanStack Query) and loca
 - `TransactionsPage.tsx` - Transaction list, filters, create/edit forms
 - `AccountsPage.tsx` - Account management, banks, owners
 - `CategoriesPage.tsx` - Category hierarchy management
+- `RecipientsPage.tsx` - Recipient management (add, rename, merge, delete, unify spellings)
 - `EnvelopesPage.tsx` - Savings goals (envelope system)
 - `DebtsPage.tsx` - Debt tracking and payment schedules
 - `InvestmentsPage.tsx` - Investment portfolio
@@ -169,6 +171,12 @@ Each page is self-contained with its own data fetching (TanStack Query) and loca
 **ML Categorization**: `categorizer.py` trains on historical transactions to auto-suggest categories for new transactions.
 
 **Account Validations**: Periodic balance validations to track discrepancies between expected and actual balances.
+
+**Recipients**: Still stored as text on each transaction (`destinataire`). The
+`recipients` table is a catalogue on top, unique case-insensitively ("Lidl" =
+"LIDL"); a typed payee is saved with the catalogue's spelling. Rows written by
+transfers, investment trades and debt payments are not recipients (`_PAYEE_ROW`
+in `database.py`) and recipient management never changes them.
 
 ## Environment Variables
 

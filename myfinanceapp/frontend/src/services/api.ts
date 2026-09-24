@@ -308,20 +308,22 @@ export const transactionsAPI = {
     api.post("/api/transactions/auto-categorize", { recipient, description }),
   getAllTags: () => api.get("/api/transactions/tags/all"),
   getAllRecipients: () => api.get("/api/transactions/recipients/all"),
-  /** Every payee as stored, with counts — case variants listed separately. */
-  getRecipientsForManagement: (limit = 500) =>
-    api.get("/api/transactions/recipients/manage", { params: { limit } }),
-  /** Without confirm this only reports what would change. */
-  renameRecipient: (oldName: string, newName: string, confirm = false) =>
-    api.post("/api/transactions/recipients/rename", {
-      old_name: oldName,
-      new_name: newName,
-      confirm,
-    }),
   getCategorizerStatus: () => api.get("/api/transactions/categorizer/status"),
   exportCsv: (params?: Record<string, unknown>) =>
     api.get("/api/transactions/export/csv", { params, responseType: "blob" }),
   trainCategorizer: () => api.post("/api/transactions/train-categorizer"),
+};
+
+// Recipients API
+export const recipientsAPI = {
+  getAll: () => api.get("/api/recipients/"),
+  create: (name: string) => api.post("/api/recipients/", { name }),
+  /** Without confirm this only reports what would change. */
+  rename: (id: number, newName: string, confirm = false) =>
+    api.post(`/api/recipients/${id}/rename`, { new_name: newName, confirm }),
+  delete: (id: number) => api.delete(`/api/recipients/${id}`),
+  getDuplicates: () => api.get("/api/recipients/duplicates"),
+  unifyDuplicates: () => api.post("/api/recipients/duplicates/unify"),
 };
 
 // Categories API

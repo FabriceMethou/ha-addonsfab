@@ -20,7 +20,27 @@ logger = logging.getLogger(__name__)
 
 #: Schema revision, written to PRAGMA user_version after _init_database() runs.
 #: Bump it when adding a migration so a database can report what it has applied.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+#: Ledger rows whose payee the app writes rather than a person: the cash legs of
+#: investment trades and both legs of a debt payment. Their "payee" is a holding
+#: or creditor name, and recipient management leaves them alone.
+_APP_WRITTEN_ROW_IDS = """
+    SELECT linked_transaction_id FROM investment_transactions WHERE linked_transaction_id IS NOT NULL
+    UNION SELECT gain_transaction_id FROM investment_transactions WHERE gain_transaction_id IS NOT NULL
+    UNION SELECT transaction_id FROM debt_payments WHERE transaction_id IS NOT NULL
+    UNION SELECT principal_transaction_id FROM debt_payments WHERE principal_transaction_id IS NOT NULL
+"""
+
+#: A transaction `t` whose payee is a recipient someone typed. Transfers are out
+#: too: their payee is one of your own account names.
+_PAYEE_ROW = f"""(
+    TRIM(COALESCE(t.destinataire, '')) != ''
+    AND COALESCE(t.is_transfer, 0) = 0
+    AND t.transfer_account_id IS NULL
+    AND t.linked_transfer_id IS NULL
+    AND t.id NOT IN ({_APP_WRITTEN_ROW_IDS})
+)"""
 
 # Suppress yfinance error logging for 404s (symbol not found).
 # These are expected errors when symbols don't exist and are handled gracefully.
@@ -42,6 +62,11 @@ class DatabaseConnectionError(DatabaseError):
 
 class DatabaseIntegrityError(DatabaseError):
     """Database integrity constraint violated."""
+    pass
+
+
+class RecordInUseError(DatabaseError):
+    """A record cannot be deleted while other rows still refer to it."""
     pass
 
 
@@ -991,6 +1016,10 @@ class FinanceDatabase:
                 INSERT OR IGNORE INTO exchange_rate_history (code, rate_to_eur, effective_date)
                 SELECT code, exchange_rate_to_eur, DATE('now') FROM currencies
             """)
+
+            # Recipient catalogue (schema 2), filled from the payees already in
+            # the ledger. Placed last: it reads the link columns added above.
+            self._sync_recipients(cursor)
 
             cursor.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -2214,81 +2243,327 @@ class FinanceDatabase:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
-    def get_recipients_with_counts(self, limit: int = 500) -> List[Dict[str, Any]]:
-        """Every payee as stored, with how many transactions carry it.
+    # ==================== RECIPIENTS ====================
+    #
+    # A recipient is still stored on each transaction as text (destinataire);
+    # the mobile app, the categoriser and the CSV import all read it there. The
+    # `recipients` table is the catalogue on top: it lets a recipient exist
+    # before any transaction uses it, so it can be added and deleted, and it
+    # holds the one spelling of a name. Names are unique regardless of case,
+    # so "Lidl" and "LIDL" are the same recipient.
+    #
+    # Only rows matching _PAYEE_ROW are recipients. Transfers, investment trades
+    # and debt payments carry an account, holding or creditor name; nothing
+    # here lists, renames or rewrites them.
 
-        Case variants are listed separately on purpose: "Rewe" and "ReWe" are
-        different values on disk, and hiding that would leave no way to spot
-        what needs fixing.
+    def _sync_recipients(self, cursor) -> None:
+        """Create the catalogue if missing and add every payee not yet in it.
+
+        Runs at startup and before each read, because restoring a backup swaps
+        the database file without running _init_database again: the catalogue
+        may be missing, or older than the ledger it describes.
+
+        When a name is stored with several spellings, the most used one is
+        inserted first and becomes the recipient's name; on a tie, the one
+        used first.
         """
-        with self.db_connection(commit=False) as conn:
-            rows = conn.execute("""
-                SELECT TRIM(destinataire) AS recipient,
-                       COUNT(*) AS transaction_count,
-                       MIN(transaction_date) AS first_seen,
-                       MAX(transaction_date) AS last_seen
-                  FROM transactions
-                 WHERE destinataire IS NOT NULL AND TRIM(destinataire) != ''
-                 GROUP BY TRIM(destinataire)
-                 ORDER BY transaction_count DESC, recipient
-                 LIMIT ?
-            """, (limit,)).fetchall()
+        self._ensure_recipients_table(cursor)
+        # NOT EXISTS keeps this a no-op when nothing is missing: an ignored
+        # insert still consumes an AUTOINCREMENT id and writes to disk, and this
+        # runs on every read. OR IGNORE only catches two new spellings of one
+        # name arriving together.
+        cursor.execute(f"""
+            INSERT OR IGNORE INTO recipients (name)
+            SELECT TRIM(t.destinataire)
+              FROM transactions t
+             WHERE {_PAYEE_ROW}
+               AND NOT EXISTS (SELECT 1 FROM recipients r
+                                WHERE r.name = TRIM(t.destinataire))
+             GROUP BY TRIM(t.destinataire)
+             ORDER BY COUNT(*) DESC, MIN(t.id)
+        """)
+
+    def _recipient_spelling(self, cursor, name: str) -> str:
+        """The spelling to store for a payee someone typed.
+
+        Reuses the catalogue's spelling when the name is already known in any
+        case, so typing "LIDL" files the transaction under "Lidl". A new name
+        is tidied and added to the catalogue.
+        """
+        tidy = normalise_recipient(name)
+        if not tidy:
+            return tidy
+        self._ensure_recipients_table(cursor)
+        known = cursor.execute(
+            "SELECT name FROM recipients WHERE name = ?", (tidy,)).fetchone()
+        if known:
+            return known['name']
+        cursor.execute("INSERT INTO recipients (name) VALUES (?)", (tidy,))
+        return tidy
+
+    def _ensure_recipients_table(self, cursor) -> None:
+        """The catalogue table, created if missing. Cheap enough for every write."""
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS recipients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+    def _is_app_written_row(self, cursor, transaction_id: int) -> bool:
+        """Whether an investment trade or a debt payment wrote this row."""
+        return cursor.execute(
+            f"SELECT 1 WHERE ? IN ({_APP_WRITTEN_ROW_IDS})",
+            (transaction_id,)).fetchone() is not None
+
+    def _recipient_usage(self, cursor, name: str) -> int:
+        """How many typed-payee transactions use this name, in any case."""
+        return cursor.execute(
+            f"SELECT COUNT(*) FROM transactions t "
+            f"WHERE {_PAYEE_ROW} AND LOWER(TRIM(t.destinataire)) = LOWER(?)",
+            (name,)).fetchone()[0]
+
+    #: Each stored spelling of a typed payee, with its use count and date range.
+    _SPELLINGS_CTE = f"""
+        WITH spellings AS (
+            SELECT t.destinataire AS spelled,
+                   COUNT(*) AS uses,
+                   MIN(t.transaction_date) AS first_used,
+                   MAX(t.transaction_date) AS last_used
+              FROM transactions t
+             WHERE {_PAYEE_ROW}
+             GROUP BY t.destinataire
+        )
+    """
+
+    def get_recipients(self) -> List[Dict[str, Any]]:
+        """Every recipient with its usage.
+
+        transaction_count covers every spelling of the name. variant_count is
+        how many of those transactions are not spelled like the recipient —
+        what "unify duplicates" would rewrite.
+        """
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            self._sync_recipients(cursor)
+            rows = cursor.execute(self._SPELLINGS_CTE + """
+                SELECT r.id, r.name, r.created_at,
+                       COALESCE(SUM(s.uses), 0) AS transaction_count,
+                       MIN(s.first_used) AS first_used,
+                       MAX(s.last_used) AS last_used,
+                       COALESCE(SUM(CASE WHEN s.spelled != r.name COLLATE BINARY
+                                         THEN s.uses END), 0) AS variant_count
+                  FROM recipients r
+                  LEFT JOIN spellings s ON LOWER(TRIM(s.spelled)) = LOWER(r.name)
+                 GROUP BY r.id
+                 ORDER BY r.name COLLATE NOCASE
+            """).fetchall()
         return [dict(row) for row in rows]
 
-    def rename_recipient(self, old_name: str, new_name: str,
-                         apply_changes: bool = False) -> Dict[str, Any]:
-        """Rename a payee across every transaction that uses it.
+    def get_recipient_names(self, limit: int = 500) -> List[str]:
+        """Names offered by the recipient field of the transaction form.
 
-        Normalisation on write only fixes the first letter, so a typo further
-        along — "ReWe" — stays until someone corrects it. This corrects all of
-        them at once.
-
-        When the new name already exists the two collapse into one. That is
-        usually the point, but it is not obvious from a rename dialog, so the
-        result says so and callers are expected to preview first
-        (apply_changes=False) and confirm.
-
-        Nothing but the label changes: no amount, account or balance is touched.
+        The catalogue, plus the account, holding and creditor names the app
+        writes itself, which the field has always offered.
         """
-        old_name = (old_name or "").strip()
-        target = normalise_recipient(new_name)
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            self._sync_recipients(cursor)
+            rows = cursor.execute(f"""
+                SELECT name FROM recipients
+                UNION
+                SELECT TRIM(t.destinataire)
+                  FROM transactions t
+                 WHERE NOT {_PAYEE_ROW}
+                   AND TRIM(COALESCE(t.destinataire, '')) != ''
+                   AND LOWER(TRIM(t.destinataire)) NOT IN (SELECT LOWER(name) FROM recipients)
+                 ORDER BY 1 COLLATE NOCASE
+                 LIMIT ?
+            """, (limit,)).fetchall()
+        return [row[0] for row in rows]
 
-        if not old_name:
-            raise ValueError("No payee given to rename")
+    def add_recipient(self, name: str) -> Dict[str, Any]:
+        """Create a recipient no transaction uses yet.
+
+        Raises ValueError for an empty name, DatabaseIntegrityError when the
+        name exists already in any case.
+        """
+        target = normalise_recipient(name)
         if not target:
-            raise ValueError("The new name cannot be empty")
-        if target == old_name:
-            raise ValueError(f"'{old_name}' is already spelled that way")
-
-        with self.db_connection(commit=False) as conn:
-            affected = conn.execute(
-                "SELECT COUNT(*) FROM transactions WHERE TRIM(destinataire) = ?",
-                (old_name,)).fetchone()[0]
-            existing = conn.execute(
-                "SELECT COUNT(*) FROM transactions WHERE TRIM(destinataire) = ?",
-                (target,)).fetchone()[0]
-
-        result = {
-            'old_name': old_name,
-            'new_name': target,
-            'affected': affected,
-            'existing_count': existing,
-            'merges_into_existing': existing > 0,
-            'applied': False,
-        }
-
-        if not apply_changes or affected == 0:
-            return result
+            raise ValueError("A recipient needs a name")
 
         with self.db_connection(commit=True) as conn:
-            conn.execute(
-                "UPDATE transactions SET destinataire = ? WHERE TRIM(destinataire) = ?",
-                (target, old_name))
+            cursor = conn.cursor()
+            self._sync_recipients(cursor)
+            existing = cursor.execute(
+                "SELECT name FROM recipients WHERE name = ?", (target,)).fetchone()
+            if existing:
+                raise DatabaseIntegrityError(
+                    f"'{existing['name']}' already exists")
+            cursor.execute("INSERT INTO recipients (name) VALUES (?)", (target,))
+            recipient_id = cursor.lastrowid
+
+        logger.info(f"Added recipient '{target}' (ID: {recipient_id})")
+        return {'id': recipient_id, 'name': target}
+
+    def rename_recipient(self, recipient_id: int, new_name: str,
+                         apply_changes: bool = False) -> Optional[Dict[str, Any]]:
+        """Rename a recipient and every transaction filed under it.
+
+        When another recipient already has the new name (in any case), the two
+        merge: both sets of transactions end up under the new name and the
+        other recipient disappears. That is usually the point, but it is not
+        obvious from a rename dialog, so callers preview first
+        (apply_changes=False) and confirm.
+
+        Changing only the case ("LIDL" to "Lidl") is a rename like any other.
+        Nothing but the label changes: no amount, account or balance is touched,
+        and neither is any transfer, investment or debt row.
+
+        Returns None when the recipient does not exist.
+        """
+        target = normalise_recipient(new_name)
+        if not target:
+            raise ValueError("The new name cannot be empty")
+
+        with self.db_connection(commit=apply_changes) as conn:
+            cursor = conn.cursor()
+            self._sync_recipients(cursor)
+            recipient = cursor.execute(
+                "SELECT id, name FROM recipients WHERE id = ?", (recipient_id,)).fetchone()
+            if not recipient:
+                return None
+            old_name = recipient['name']
+            if target == old_name:
+                raise ValueError(f"'{old_name}' is already spelled that way")
+
+            other = cursor.execute(
+                "SELECT id, name FROM recipients WHERE name = ? AND id != ?",
+                (target, recipient_id)).fetchone()
+
+            result = {
+                'id': recipient_id,
+                'old_name': old_name,
+                'new_name': target,
+                'affected': self._recipient_usage(cursor, old_name),
+                'existing_count': self._recipient_usage(cursor, other['name']) if other else 0,
+                'merges_into_existing': other is not None,
+                'applied': False,
+            }
+            if not apply_changes:
+                return result
+
+            if other:
+                cursor.execute("DELETE FROM recipients WHERE id = ?", (other['id'],))
+            cursor.execute("UPDATE recipients SET name = ? WHERE id = ?",
+                           (target, recipient_id))
+            cursor.execute(f"""
+                UPDATE transactions SET destinataire = ?
+                 WHERE id IN (SELECT t.id FROM transactions t
+                               WHERE {_PAYEE_ROW}
+                                 AND LOWER(TRIM(t.destinataire)) IN (LOWER(?), LOWER(?)))
+            """, (target, old_name, target))
 
         result['applied'] = True
-        logger.info(f"Renamed payee '{old_name}' to '{target}' on {affected} transaction(s)"
-                    + (f", merged with {existing} existing" if existing else ""))
+        logger.info(f"Renamed recipient '{old_name}' to '{target}' on {result['affected']} transaction(s)"
+                    + (f", merged with {result['existing_count']} existing" if other else ""))
         return result
+
+    def delete_recipient(self, recipient_id: int) -> bool:
+        """Delete a recipient no transaction uses.
+
+        Raises RecordInUseError while any transaction still carries the name:
+        rename or merge it first. Returns False when it does not exist.
+        """
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            recipient = cursor.execute(
+                "SELECT id, name FROM recipients WHERE id = ?", (recipient_id,)).fetchone()
+            if not recipient:
+                return False
+            used = self._recipient_usage(cursor, recipient['name'])
+            if used:
+                raise RecordInUseError(
+                    f"'{recipient['name']}' is used by {used} transaction"
+                    f"{'s' if used != 1 else ''}. Merge it into another recipient first.")
+            cursor.execute("DELETE FROM recipients WHERE id = ?", (recipient_id,))
+
+        logger.info(f"Deleted recipient '{recipient['name']}' (ID: {recipient_id})")
+        return True
+
+    def _recipient_duplicates(self, cursor) -> List[Dict[str, Any]]:
+        """Recipients whose transactions are stored under several spellings.
+
+        The spelling kept is the most used one; on a tie, the recipient's
+        current name.
+        """
+        rows = cursor.execute(self._SPELLINGS_CTE + """
+            SELECT r.id, r.name, s.spelled, s.uses
+              FROM recipients r
+              JOIN spellings s ON LOWER(TRIM(s.spelled)) = LOWER(r.name)
+             ORDER BY r.name COLLATE NOCASE, s.uses DESC
+        """).fetchall()
+
+        by_recipient: Dict[int, Dict[str, Any]] = {}
+        for row in rows:
+            group = by_recipient.setdefault(
+                row['id'], {'id': row['id'], 'name': row['name'], 'stored': {}})
+            group['stored'][row['spelled']] = row['uses']
+
+        duplicates = []
+        for group in by_recipient.values():
+            # Spellings as shown: surrounding spaces are not worth listing apart.
+            shown: Dict[str, int] = {}
+            for spelled, uses in group['stored'].items():
+                shown[spelled.strip()] = shown.get(spelled.strip(), 0) + uses
+            keep = max(shown, key=lambda s: (shown[s], s == group['name']))
+            affected = sum(uses for spelled, uses in group['stored'].items()
+                           if spelled != keep)
+            if affected == 0 and keep == group['name']:
+                continue
+            duplicates.append({
+                'id': group['id'],
+                'name': group['name'],
+                'keep': keep,
+                'spellings': [{'name': s, 'transaction_count': n}
+                              for s, n in sorted(shown.items(), key=lambda i: -i[1])],
+                'affected': affected,
+            })
+        return duplicates
+
+    def get_recipient_duplicates(self) -> List[Dict[str, Any]]:
+        """Preview of unify_recipient_duplicates: what would change, and how."""
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            self._sync_recipients(cursor)
+            return self._recipient_duplicates(cursor)
+
+    def unify_recipient_duplicates(self) -> Dict[str, int]:
+        """Store every recipient's transactions under one spelling.
+
+        "LIDL" and "Lidl" are one recipient already; this rewrites the older
+        transactions saved before that was the case, keeping the spelling each
+        recipient uses most. Nothing but the label changes.
+        """
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            self._sync_recipients(cursor)
+            duplicates = self._recipient_duplicates(cursor)
+            for group in duplicates:
+                cursor.execute("UPDATE recipients SET name = ? WHERE id = ?",
+                               (group['keep'], group['id']))
+                cursor.execute(f"""
+                    UPDATE transactions SET destinataire = ?
+                     WHERE id IN (SELECT t.id FROM transactions t
+                                   WHERE {_PAYEE_ROW}
+                                     AND LOWER(TRIM(t.destinataire)) = LOWER(?)
+                                     AND t.destinataire != ?)
+                """, (group['keep'], group['keep'], group['keep']))
+
+        rewritten = sum(g['affected'] for g in duplicates)
+        logger.info(f"Unified {len(duplicates)} recipient(s), rewrote {rewritten} transaction(s)")
+        return {'recipients': len(duplicates), 'transactions': rewritten}
 
     def get_distinct_recipients(self, limit: int = 100) -> List[str]:
         """Get distinct recipients from transactions, ordered by most recent usage."""
@@ -2914,6 +3189,16 @@ class FinanceDatabase:
             if is_historical:
                 logger.info(f"Transaction dated {transaction_date} is before account opening {opening_date} - marking as historical")
 
+        # A typed payee takes the spelling the recipient catalogue already has,
+        # so "LIDL" is filed under "Lidl". Transfers and debt payments carry an
+        # account or creditor name and keep theirs.
+        if (transaction_data.get('is_transfer') or transaction_data.get('transfer_account_id')
+                or transaction_data.get('linked_transfer_id')
+                or transaction_data.get('keep_recipient_spelling')):
+            destinataire = normalise_recipient(transaction_data['destinataire'])
+        else:
+            destinataire = self._recipient_spelling(cursor, transaction_data['destinataire'])
+
         # Check for potential duplicates
         cursor.execute("""
             SELECT id FROM transactions
@@ -2923,7 +3208,7 @@ class FinanceDatabase:
             transaction_data['account_id'],
             transaction_data['transaction_date'],
             transaction_data['amount'],
-            normalise_recipient(transaction_data['destinataire'])
+            destinataire
         ))
 
         duplicate = cursor.fetchone()
@@ -2942,7 +3227,7 @@ class FinanceDatabase:
             transaction_data['amount'],
             transaction_data['currency'],
             transaction_data.get('description', ''),
-            normalise_recipient(transaction_data['destinataire']),
+            destinataire,
             transaction_data['type_id'],
             transaction_data['subtype_id'],
             transaction_data.get('tags', ''),
@@ -3237,7 +3522,13 @@ class FinanceDatabase:
         # Same tidy-up as on insert, so editing a payee cannot reintroduce the
         # stray casing and whitespace that fragment the recipient list.
         if 'destinataire' in updates:
-            updates['destinataire'] = normalise_recipient(updates['destinataire'])
+            final = {**old_transaction, **updates}
+            if (final.get('is_transfer') or final.get('transfer_account_id')
+                    or final.get('linked_transfer_id')
+                    or self._is_app_written_row(cursor, transaction_id)):
+                updates['destinataire'] = normalise_recipient(updates['destinataire'])
+            else:
+                updates['destinataire'] = self._recipient_spelling(cursor, updates['destinataire'])
 
         linked_transfer_id = old_transaction.get('linked_transfer_id')
 

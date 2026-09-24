@@ -248,6 +248,8 @@ def add_debt_payment(payment: DebtPayment, current_user: User = Depends(get_curr
             'subtype_id': subtype_id,
             'description': f"{label} ({part}): {debt_name}",
             'destinataire': debt_name,
+            # The creditor's name, not a recipient: keep it exactly as the debt has it.
+            'keep_recipient_spelling': True,
             'currency': debt.get('currency', 'EUR'),
             'transfer_account_id': None,
             'confirmed': True,

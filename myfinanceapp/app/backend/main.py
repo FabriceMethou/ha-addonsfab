@@ -25,7 +25,7 @@ from predictions import SpendingPredictor
 logger = logging.getLogger(__name__)
 
 # Import API routers
-from api import auth, accounts, transactions, categories, envelopes, debts, investments, reports, backups, settings, currencies, work_profiles, budgets, alerts, reconciliation
+from api import auth, accounts, transactions, categories, envelopes, debts, investments, reports, backups, settings, currencies, work_profiles, budgets, alerts, reconciliation, recipients
 
 # Configuration
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
@@ -45,7 +45,7 @@ _redoc_url = "/redoc" if os.getenv("ENVIRONMENT", "production") != "production" 
 app = FastAPI(
     title="Finance Tracker API",
     description="Personal finance management API with transaction tracking and reporting",
-    version="2.1.0",
+    version="2.2.0",
     docs_url=_docs_url,
     redoc_url=_redoc_url,
 )
@@ -78,6 +78,7 @@ app.include_router(currencies.router, prefix="/api/currencies", tags=["Currencie
 app.include_router(accounts.router, prefix="/api/accounts", tags=["Accounts"])
 app.include_router(transactions.router, prefix="/api/transactions", tags=["Transactions"])
 app.include_router(categories.router, prefix="/api/categories", tags=["Categories"])
+app.include_router(recipients.router, prefix="/api/recipients", tags=["Recipients"])
 app.include_router(envelopes.router, prefix="/api/envelopes", tags=["Envelopes"])
 app.include_router(debts.router, prefix="/api/debts", tags=["Debts"])
 app.include_router(investments.router, prefix="/api/investments", tags=["Investments"])

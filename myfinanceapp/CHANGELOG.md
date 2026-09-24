@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.2.0
+
+**Recipients page**
+- A new **Recipients** page in the sidebar (under Core) replaces the Payees section at the bottom of Categories. It lists every recipient with its number of transactions and when it was last used
+- Recipients can be **added** before any transaction uses them, and they are offered in the transaction form straight away
+- **Rename** a recipient across all its transactions, or **merge** it into another one. Both show a preview of what will change and wait for confirmation
+- **Delete** a recipient that no transaction uses. A recipient still in use cannot be deleted: merge it into another one first
+- **View transactions** opens the Transactions page filtered on that recipient
+
+**"Lidl" and "LIDL" are the same recipient**
+- Recipients no longer depend on capitalisation. Typing "LIDL" or "lidl" in a new or edited transaction files it under the existing "Lidl"
+- Transactions saved before this update may still use several spellings. The Recipients page flags them; **Review and unify** shows each group and the spelling it will keep (the most used), then rewrites them once you confirm. Only the label changes: amounts, accounts and balances are not affected
+
+**Left untouched**
+- Transfers, investment trades and debt payments use an account, holding or creditor name as their recipient. They are not listed on the Recipients page, and no rename, merge or unify ever changes them. The transaction form still offers those names as before
+
 ## 2.1.0
 
 **Fixes that affect your data**

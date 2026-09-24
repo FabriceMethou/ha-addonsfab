@@ -6,6 +6,7 @@ import {
   Receipt,
   Building2,
   FolderTree,
+  Contact,
   PiggyBank,
   CreditCard,
   TrendingUp,
@@ -70,6 +71,7 @@ const NAV_GROUPS = [
       { text: "Accounts", icon: Building2, path: "/accounts" },
       { text: "Transactions", icon: Receipt, path: "/transactions" },
       { text: "Categories", icon: FolderTree, path: "/categories" },
+      { text: "Recipients", icon: Contact, path: "/recipients" },
     ],
   },
   {

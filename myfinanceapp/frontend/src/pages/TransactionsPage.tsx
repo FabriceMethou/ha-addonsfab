@@ -216,13 +216,14 @@ export default function TransactionsPage() {
         subcategory_id: "",
         start_date: preset.start_date || "",
         end_date: preset.end_date || "",
-        recipient: "",
+        recipient: preset.recipient || "",
         tags: "",
       };
       setPendingFilters(newFilters);
       setAppliedFilters(newFilters);
       setShowFilters(true);
-      setFromReports(true);
+      // The Recipients page presets only a recipient, shown in the filter panel.
+      setFromReports(!preset.recipient);
       if (preset.category_name) {
         setPendingCategoryName({
           category: preset.category_name,
