@@ -9,8 +9,8 @@ salary, groceries, a refund, a transfer between own accounts, an investment
 buy, money sent to the broker, money sent to a gold account (an investment
 account with no holdings), and a row filed under Investments by hand.
 
-Investing is never an expense, and savings are what is left once both are
-taken out: income - (expenses + invested).
+Investing is never an expense, and savings are income - expenses: investing
+is one use of what was saved, not something taken out of it.
 
 Run:
   cd app && JWT_SECRET_KEY=test PYTHONPATH=$PWD \
@@ -128,19 +128,15 @@ def test_investing_is_never_an_expense(db, month):
     assert invested and not invested & set(listed(db, "expense"))
 
 
-def test_savings_list_income_expenses_and_what_was_invested(db, month):
-    assert listed(db, "savings") == [
-        ("Acme Corp", -101.0), ("Employer", 2000.0), ("Lidl", -50.0),
-        ("Lidl refund", 10.0), ("Main Gold", -250.0)]
+def test_savings_list_income_and_expenses_only(db, month):
+    assert listed(db, "savings") == [("Employer", 2000.0), ("Lidl", -50.0), ("Lidl refund", 10.0)]
 
 
 def test_the_lists_add_up_to_the_cards(api, db, month):
     card = summary(api)
-    invested = api[1].get_monthly_summary(**MONTH, current_user=None)["total_invested"]
     assert summary(api, flow="income")["total_amount"] == card["total_income"]
     assert -summary(api, flow="expense")["total_amount"] == card["total_expense"]
-    assert summary(api, flow="savings")["total_amount"] == \
-        card["total_income"] - (card["total_expense"] + invested) == 1609.0
+    assert summary(api, flow="savings")["total_amount"] == card["net_change"] == 1960.0
 
 
 def test_invested_lists_each_buy_and_each_transfer_into_gold(db, month):

@@ -68,9 +68,10 @@ _INVESTED = f"({_INVESTED_BUY}) OR {_INVESTED_TRANSFER}"
 FLOW_CLAUSES = {
     'income': f"t.amount > 0 AND {_CATEGORY_OF_T} != 'transfer'",
     'expense': f"t.amount < 0 AND {_CATEGORY_OF_T} != 'transfer'",
+    # Savings are income minus expenses. Investing is one use of what was
+    # saved, not something taken out of it: it leaves net worth unchanged.
+    'savings': f"{_CATEGORY_OF_T} != 'transfer'",
     'invested': _INVESTED,
-    # Savings are what is left once spending and investing are taken out.
-    'savings': f"{_CATEGORY_OF_T} != 'transfer' OR ({_INVESTED})",
     # Money sent towards investments that Monthly Invested does not count:
     # transfers into an investment account with holdings or its cash account,
     # and anything filed under the Investments category by hand. Trade legs are

@@ -110,7 +110,7 @@ function KPICard({ title, value, icon, iconColor, loading }: KPICardProps) {
 const FLOW_TITLES: Record<string, string> = {
   income: "Counted as income in Monthly Income",
   expense: "Counted as expenses in Monthly Expenses",
-  savings: "Behind Monthly Savings: income − (expenses + invested)",
+  savings: "Behind Monthly Savings: income − expenses",
   invested: "Counted in Monthly Invested",
   investment_transfers: "Sent towards investments, not counted in Monthly Invested",
 };
@@ -165,10 +165,7 @@ function FlowBanner({
   } else if (totalAmount === undefined) {
     detail = transactions;
   } else if (flow === "savings" && totalIncome !== undefined && totalExpense !== undefined) {
-    // Income and expense totals leave transfers out, so the rest of the
-    // listed amount is what was invested.
-    const invested = totalIncome - totalExpense - totalAmount;
-    detail = `${transactions} · ${money(totalIncome)} − (${money(totalExpense)} + ${money(invested)}) = ${money(totalAmount)}`;
+    detail = `${transactions} · ${money(totalIncome)} − ${money(totalExpense)} = ${money(totalAmount)}`;
   } else if (flow === "income") {
     detail = `${transactions} · ${money(totalAmount)}`;
   } else {

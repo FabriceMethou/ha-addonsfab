@@ -396,24 +396,18 @@ export default function DashboardPage() {
   const netWorth = netWorthData?.net_worth ?? 0;
   const monthlyIncome = transactionsSummary?.total_income ?? 0;
   const monthlyExpenses = absMoney(transactionsSummary?.total_expense ?? 0);
+  // Savings are income minus expenses. Investing is one use of what was saved
+  // (it leaves net worth unchanged), shown as a breakdown, not taken out.
+  const monthlySavings = subtractMoney(monthlyIncome, monthlyExpenses);
   const monthlyInvested = monthlyInvestments?.total_invested ?? 0;
-  // What is left once spending and investing are both taken out.
-  const monthlySavings = subtractMoney(
-    monthlyIncome,
-    monthlyExpenses,
-    monthlyInvested,
-  );
+  const monthlyKeptInCash = subtractMoney(monthlySavings, monthlyInvested);
 
   const previousIncome = previousTransactionsSummary?.total_income ?? 0;
   const previousExpenses = absMoney(
     previousTransactionsSummary?.total_expense ?? 0,
   );
+  const previousSavings = subtractMoney(previousIncome, previousExpenses);
   const previousInvested = previousMonthlyInvestments?.total_invested ?? 0;
-  const previousSavings = subtractMoney(
-    previousIncome,
-    previousExpenses,
-    previousInvested,
-  );
 
   // Calculate deltas with safe percentage calculation
   const netWorthChange =
@@ -518,10 +512,10 @@ export default function DashboardPage() {
           changeLabel="vs prev month"
           icon={<PiggyBank size={24} className="text-violet-500" />}
           iconColor="bg-violet-500"
-          loading={transactionsLoading || investmentsLoading}
+          loading={transactionsLoading}
           primary
           onClick={() => showTransactions("savings")}
-          actionLabel="Show the income, expenses and investments behind this figure"
+          actionLabel="Show the income and expenses behind this figure"
         />
 
         <KPICard
@@ -543,7 +537,7 @@ export default function DashboardPage() {
         <h2 className="text-lg font-semibold text-foreground mb-4">
           Monthly Summary — {format(viewDate, "MMMM yyyy")}
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
           <div className="text-center p-4 rounded-lg bg-success/10 border border-success/20">
             <p className="text-sm text-foreground-muted mb-2">Income</p>
             <p className="text-3xl font-bold text-success">
@@ -556,12 +550,6 @@ export default function DashboardPage() {
               {formatCurrency(monthlyExpenses)}
             </p>
           </div>
-          <div className="text-center p-4 rounded-lg bg-amber-500/10 border border-amber-500/20">
-            <p className="text-sm text-foreground-muted mb-2">Invested</p>
-            <p className="text-3xl font-bold text-amber-500">
-              {formatCurrency(monthlyInvested)}
-            </p>
-          </div>
           <div
             className={`text-center p-4 rounded-lg ${monthlySavings >= 0 ? "bg-primary/10 border border-primary/20" : "bg-warning/10 border border-warning/20"}`}
           >
@@ -570,6 +558,17 @@ export default function DashboardPage() {
               className={`text-3xl font-bold ${monthlySavings >= 0 ? "text-primary" : "text-warning"}`}
             >
               {formatCurrency(monthlySavings)}
+            </p>
+            {/* Where the savings went: invested, or still in cash. */}
+            <p className="text-xs text-foreground-muted mt-2">
+              of which invested{" "}
+              <span className="text-amber-500 font-medium">
+                {formatCurrency(monthlyInvested)}
+              </span>
+              {" · "}kept in cash{" "}
+              <span className="text-foreground font-medium">
+                {formatCurrency(monthlyKeptInCash)}
+              </span>
             </p>
           </div>
         </div>

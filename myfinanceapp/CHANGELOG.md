@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.1
+- **Monthly Savings** is back to income − expenses. Investing is one use of what you saved, not something taken out of it: moving money into an investment leaves your net worth unchanged, so it should not make a month look less thrifty. (2.4.0 briefly subtracted investments too)
+- The dashboard's Monthly Summary shows where the savings went: *of which invested* and *kept in cash*
+- Clicking **Monthly Savings** lists the income and expenses behind it, with the calculation in the banner
+
 ## 2.4.0
 
 **Fixes that affect your data**
