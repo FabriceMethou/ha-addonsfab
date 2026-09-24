@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.2.2
+- Reports › Tag Reports: the transactions table now shows each transaction's **recipient**, its **category and subcategory** (e.g. "Transport › Fuel") instead of only "expense" or "income", and its **account**, which was always empty
+
 ## 2.2.1
 - Sidebar: the section headings (Core, Planning, Assets, Analysis, System) now fold and unfold with a click. Folded sections are remembered in your browser across visits
 - When the page you are on sits in a folded section, that section's heading is highlighted so you can still see where you are

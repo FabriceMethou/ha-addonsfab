@@ -3170,6 +3170,7 @@ export default function ReportsPage() {
                           <TableHeader>
                             <TableRow>
                               <TableHead>Date</TableHead>
+                              <TableHead>Recipient</TableHead>
                               <TableHead>Description</TableHead>
                               <TableHead>Category</TableHead>
                               <TableHead>Account</TableHead>
@@ -3189,14 +3190,23 @@ export default function ReportsPage() {
                                     )}
                                   </TableCell>
                                   <TableCell>
+                                    {transaction.destinataire || "-"}
+                                  </TableCell>
+                                  <TableCell>
                                     {transaction.description}
                                   </TableCell>
                                   <TableCell>
+                                    {/* The category name; `category` is only its
+                                        classification (expense, income, transfer). */}
                                     <Badge variant="outline" size="sm">
-                                      {transaction.category}
+                                      {transaction.subtype_name
+                                        ? `${transaction.type_name} › ${transaction.subtype_name}`
+                                        : transaction.type_name}
                                     </Badge>
                                   </TableCell>
-                                  <TableCell>{transaction.account}</TableCell>
+                                  <TableCell>
+                                    {transaction.account_name}
+                                  </TableCell>
                                   <TableCell
                                     className={`text-right font-bold ${transaction.amount >= 0 ? "text-success" : "text-error"}`}
                                   >
