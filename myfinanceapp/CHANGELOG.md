@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.0
+
+**Dashboard cards open what they add up**
+- Click **Monthly Income**, **Monthly Expenses** or **Monthly Savings** to open the Transactions page for that month, filtered to exactly the transactions the card counts. A banner above the list names the card and repeats its total, so you can check one against the other
+- Click **Monthly Invested** to see the investment buys it counts (the cash side of each buy recorded on the Investments page, fees and tax included). A second view, **Transfers not counted**, lists money you sent towards investments that the card ignores: transfers into an investment account or its cash account, and transactions filed under the Investments category by hand. If a buy has no cash transaction to show, the banner says how many
+- Click **Net Worth** to open the Accounts page
+- Cards can also be opened from the keyboard
+
 ## 2.2.2
 - Reports › Tag Reports: the transactions table now shows each transaction's **recipient**, its **category and subcategory** (e.g. "Transport › Fuel") instead of only "expense" or "income", and its **account**, which was always empty
 

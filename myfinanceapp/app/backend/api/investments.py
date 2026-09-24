@@ -632,6 +632,7 @@ def get_monthly_summary(
     total_sold = 0.0       # sum of sell proceeds (net of fees + tax)
     total_dividends = 0.0  # sum of dividend amounts
     buy_count = 0
+    unlinked_buy_count = 0  # buys with no cash transaction to list on the Transactions page
     sell_count = 0
     dividend_count = 0
 
@@ -651,6 +652,8 @@ def get_monthly_summary(
         if t_type == 'buy':
             total_invested += amount + fees + tax
             buy_count += 1
+            if not t.get('linked_transaction_id'):
+                unlinked_buy_count += 1
         elif t_type == 'sell':
             total_sold += amount - fees - tax
             sell_count += 1
@@ -664,6 +667,7 @@ def get_monthly_summary(
         "total_dividends": total_dividends,
         "net_cash_flow": total_sold + total_dividends - total_invested,
         "buy_count": buy_count,
+        "unlinked_buy_count": unlinked_buy_count,
         "sell_count": sell_count,
         "dividend_count": dividend_count,
         "start_date": start_date,

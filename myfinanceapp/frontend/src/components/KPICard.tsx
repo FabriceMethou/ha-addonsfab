@@ -15,6 +15,10 @@ interface KPICardProps {
   primary?: boolean;
   /** Extra tailwind classes */
   className?: string;
+  /** Makes the whole card a button, e.g. to open what the figure is made of */
+  onClick?: () => void;
+  /** What the click does, shown on hover and read by screen readers */
+  actionLabel?: string;
 }
 
 export default function KPICard({
@@ -27,15 +31,17 @@ export default function KPICard({
   loading,
   primary = false,
   className = "",
+  onClick,
+  actionLabel,
 }: KPICardProps) {
   const isPositive = change !== undefined && change > 0;
   const isNegative = change !== undefined && change < 0;
 
-  return (
+  const card = (
     <Card
       className={`relative overflow-hidden p-4 sm:p-6 rounded-xl border bg-card/70 backdrop-blur-sm ${
         primary ? "border-t-2 border-border shadow-md" : "border-border"
-      } ${className}`}
+      } ${onClick ? "h-full hover:border-primary/40" : ""} ${className}`}
     >
       {/* Background glow circle */}
       <div
@@ -92,5 +98,19 @@ export default function KPICard({
         </div>
       </div>
     </Card>
+  );
+
+  if (!onClick) return card;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={actionLabel}
+      className="block w-full h-full text-left rounded-xl cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+    >
+      {card}
+      {actionLabel && <span className="sr-only">{actionLabel}</span>}
+    </button>
   );
 }

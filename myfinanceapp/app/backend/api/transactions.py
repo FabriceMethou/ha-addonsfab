@@ -11,6 +11,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from deps import lazy_db
+from database import FLOW_CLAUSES
 from api.auth import get_current_user, User
 from categorizer import TransactionCategorizer
 
@@ -100,6 +101,15 @@ class AutoCategorizeRequest(BaseModel):
     recipient: Optional[str] = None   # destinataire — primary signal
     description: Optional[str] = None  # fallback text context (not used for lookup currently)
 
+
+def _check_flow(flow: str) -> str:
+    """The flow filter, refused unless it names one of the dashboard cards."""
+    if flow not in FLOW_CLAUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown flow '{flow}'. Expected one of: {', '.join(FLOW_CLAUSES)}")
+    return flow
+
 @router.get("/")
 def get_transactions(
     account_id: Optional[int] = None,
@@ -110,13 +120,21 @@ def get_transactions(
     subtype_id: Optional[int] = None,
     recipient: Optional[str] = None,
     tags: Optional[str] = None,
+    flow: Optional[str] = None,
     limit: int = Query(100, le=1000),
     offset: int = 0,
     current_user: User = Depends(get_current_user)
 ):
-    """Get transactions with optional filters"""
+    """Get transactions with optional filters.
+
+    `flow` restricts to what one dashboard card counts: income, expense,
+    savings, investment_buys, or investment_transfers (sent towards
+    investments but not counted by Monthly Invested).
+    """
     # Build filters dictionary
     filters = {}
+    if flow:
+        filters['flow'] = _check_flow(flow)
     if account_id:
         filters['account_id'] = account_id
     if owner_id:
@@ -599,6 +617,7 @@ def get_transaction_summary(
     subtype_id: Optional[int] = None,
     recipient: Optional[str] = None,
     tags: Optional[str] = None,
+    flow: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
     """Get transaction statistics summary in user's preferred currency.
@@ -627,6 +646,8 @@ def get_transaction_summary(
         filters['destinataire'] = recipient
     if tags:
         filters['tags'] = tags
+    if flow:
+        filters['flow'] = _check_flow(flow)
 
     # No limit/offset: the summary always covers every matching transaction
     transactions = db.get_transactions(filters=filters if filters else None)
@@ -646,12 +667,20 @@ def get_transaction_summary(
         for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
     )
     net_change = total_income - total_expense
+    # Every matching row, transfers included: the only total that means
+    # anything for a list of transfers such as the investment views.
+    total_amount = sum(
+        db.convert_with_rates(t['amount'], t.get('account_currency', 'EUR'),
+                              display_currency, rates)
+        for t in transactions
+    )
 
     return {
         "total_transactions": len(transactions),
         "total_income": total_income,
         "total_expense": total_expense,
         "net_change": net_change,
+        "total_amount": total_amount,
         "start_date": start_date,
         "end_date": end_date,
         "currency": display_currency

@@ -32,6 +32,36 @@ _APP_WRITTEN_ROW_IDS = """
     UNION SELECT principal_transaction_id FROM debt_payments WHERE principal_transaction_id IS NOT NULL
 """
 
+_CATEGORY_OF_T = "(SELECT category FROM transaction_types WHERE id = t.type_id)"
+
+#: Which transactions `t` each dashboard card counts, so a click on a card can
+#: list exactly them. Income and expenses go by sign and leave transfers out,
+#: as the dashboard summary does; savings is both.
+FLOW_CLAUSES = {
+    'income': f"t.amount > 0 AND {_CATEGORY_OF_T} != 'transfer'",
+    'expense': f"t.amount < 0 AND {_CATEGORY_OF_T} != 'transfer'",
+    'savings': f"{_CATEGORY_OF_T} != 'transfer'",
+    # The cash leg of each buy recorded on the Investments page: what the
+    # Monthly Invested card adds up.
+    'investment_buys': """t.id IN (SELECT linked_transaction_id FROM investment_transactions
+                                    WHERE transaction_type = 'buy'
+                                      AND linked_transaction_id IS NOT NULL)""",
+    # Money sent towards investments that the card does not count: transfers
+    # into an investment account or its cash account, and anything filed
+    # under the Investments category by hand. Trade legs are left out.
+    'investment_transfers': f"""t.amount < 0
+        AND {_CATEGORY_OF_T} = 'transfer'
+        AND t.id NOT IN (SELECT linked_transaction_id FROM investment_transactions
+                          WHERE linked_transaction_id IS NOT NULL
+                         UNION SELECT gain_transaction_id FROM investment_transactions
+                          WHERE gain_transaction_id IS NOT NULL)
+        AND (t.transfer_account_id IN (SELECT id FROM accounts WHERE account_type = 'investment')
+             OR t.transfer_account_id IN (SELECT linked_account_id FROM accounts
+                                           WHERE account_type = 'investment'
+                                             AND linked_account_id IS NOT NULL)
+             OR (SELECT name FROM transaction_types WHERE id = t.type_id) = 'Investments')""",
+}
+
 #: A transaction `t` whose payee is a recipient someone typed. Transfers are out
 #: too: their payee is one of your own account names.
 _PAYEE_ROW = f"""(
@@ -3385,6 +3415,8 @@ class FinanceDatabase:
                 if 'tags' in filters:
                     query += " AND t.tags LIKE ?"
                     params.append(f"%{filters['tags']}%")
+                if 'flow' in filters:
+                    query += f" AND {FLOW_CLAUSES[filters['flow']]}"
                 if 'owner_id' in filters:
                     query += " AND COALESCE(t.owner_id, a.owner_id) = ?"
                     params.append(filters['owner_id'])
@@ -3443,6 +3475,8 @@ class FinanceDatabase:
                 if 'tags' in filters:
                     query += " AND t.tags LIKE ?"
                     params.append(f"%{filters['tags']}%")
+                if 'flow' in filters:
+                    query += f" AND {FLOW_CLAUSES[filters['flow']]}"
 
             cursor.execute(query, params)
             count = cursor.fetchone()[0]

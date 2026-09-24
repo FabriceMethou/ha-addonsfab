@@ -42,7 +42,7 @@ import {
   RefreshCw,
   Shuffle,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 // Recharts
 import {
@@ -97,6 +97,19 @@ export default function DashboardPage() {
   const previousMonth = subMonths(viewDate, 1);
   const previousMonthStart = format(startOfMonth(previousMonth), "yyyy-MM-dd");
   const previousMonthEnd = format(endOfMonth(previousMonth), "yyyy-MM-dd");
+
+  // A click on a card opens the transactions it adds up, for the month shown.
+  const navigate = useNavigate();
+  const showTransactions = (flow: string) =>
+    navigate("/transactions", {
+      state: {
+        presetFilters: {
+          start_date: currentMonthStart,
+          end_date: currentMonthEnd,
+          flow,
+        },
+      },
+    });
 
   // Fetch user settings
   const { data: settings } = useQuery({
@@ -459,6 +472,8 @@ export default function DashboardPage() {
           iconColor="bg-blue-500"
           loading={netWorthLoading}
           primary
+          onClick={() => navigate("/accounts")}
+          actionLabel="Show accounts"
         />
 
         <KPICard
@@ -470,6 +485,8 @@ export default function DashboardPage() {
           iconColor="bg-emerald-500"
           loading={transactionsLoading}
           primary
+          onClick={() => showTransactions("income")}
+          actionLabel="Show the transactions counted as income"
         />
 
         <KPICard
@@ -481,6 +498,8 @@ export default function DashboardPage() {
           iconColor="bg-rose-500"
           loading={transactionsLoading}
           primary
+          onClick={() => showTransactions("expense")}
+          actionLabel="Show the transactions counted as expenses"
         />
 
         <KPICard
@@ -492,6 +511,8 @@ export default function DashboardPage() {
           iconColor="bg-violet-500"
           loading={transactionsLoading}
           primary
+          onClick={() => showTransactions("savings")}
+          actionLabel="Show the income and expenses behind this figure"
         />
 
         <KPICard
@@ -503,6 +524,8 @@ export default function DashboardPage() {
           iconColor="bg-amber-500"
           loading={investmentsLoading}
           primary
+          onClick={() => showTransactions("investment_buys")}
+          actionLabel="Show the investment buys counted"
         />
       </div>
 

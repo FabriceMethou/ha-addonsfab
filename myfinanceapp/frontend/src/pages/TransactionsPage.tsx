@@ -9,6 +9,7 @@ import {
   accountsAPI,
   categoriesAPI,
   debtsAPI,
+  investmentsAPI,
 } from "../services/api";
 import { format } from "date-fns";
 import { useToast } from "../contexts/ToastContext";
@@ -39,6 +40,9 @@ import {
   SelectValue,
   FormField,
   TransactionsSkeleton,
+  Tabs,
+  TabsList,
+  TabsTrigger,
 } from "../components/shadcn";
 import {
   Plus,
@@ -103,6 +107,84 @@ function KPICard({ title, value, icon, iconColor, loading }: KPICardProps) {
   );
 }
 
+const FLOW_TITLES: Record<string, string> = {
+  income: "Counted as income in Monthly Income",
+  expense: "Counted as expenses in Monthly Expenses",
+  savings: "Behind Monthly Savings (income − expenses)",
+  investment_buys: "Investment buys counted in Monthly Invested",
+  investment_transfers: "Sent towards investments, not counted in Monthly Invested",
+};
+
+function FlowBanner({
+  flow,
+  startDate,
+  endDate,
+  count,
+  totalAmount,
+  currency,
+  investedCard,
+  onFlowChange,
+  onClear,
+}: {
+  flow: string;
+  startDate: string;
+  endDate: string;
+  count?: number;
+  totalAmount?: number;
+  currency: string;
+  investedCard?: { total_invested: number; buy_count: number; unlinked_buy_count: number };
+  onFlowChange: (flow: string) => void;
+  onClear: () => void;
+}) {
+  const period =
+    startDate && endDate && startDate.slice(0, 7) === endDate.slice(0, 7)
+      ? format(new Date(`${startDate}T00:00:00`), "MMMM yyyy")
+      : [startDate, endDate].filter(Boolean).join(" – ");
+  const money = (amount: number) => formatCurrencyUtil(amount, currency);
+  const transactions = count === undefined ? "…" : `${count} transaction${count !== 1 ? "s" : ""}`;
+
+  let detail: string;
+  if (flow === "investment_buys") {
+    detail = investedCard
+      ? `${investedCard.buy_count} buy${investedCard.buy_count !== 1 ? "s" : ""} · ${money(investedCard.total_invested)}, fees and tax included` +
+        (investedCard.unlinked_buy_count
+          ? ` · ${investedCard.unlinked_buy_count} counted but not listed here (no cash transaction)`
+          : "")
+      : "…";
+  } else if (totalAmount === undefined) {
+    detail = transactions;
+  } else if (flow === "savings" || flow === "income") {
+    detail = `${transactions} · ${money(totalAmount)}`;
+  } else {
+    detail = `${transactions} · ${money(Math.abs(totalAmount))}`;
+  }
+
+  const investmentView = flow.startsWith("investment");
+
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg bg-primary/10 border border-primary/20">
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-foreground">
+          {FLOW_TITLES[flow] ?? flow}
+          {period && <span className="text-foreground-muted">, {period}</span>}
+        </p>
+        <p className="text-xs text-foreground-muted mt-0.5">{detail}</p>
+      </div>
+      {investmentView && (
+        <Tabs value={flow} onValueChange={(value) => onFlowChange(String(value))}>
+          <TabsList>
+            <TabsTrigger value="investment_buys">Counted buys</TabsTrigger>
+            <TabsTrigger value="investment_transfers">Transfers not counted</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
+      <Button variant="ghost" size="sm" onClick={onClear} aria-label="Clear this filter">
+        <X className="w-4 h-4" />
+      </Button>
+    </div>
+  );
+}
+
 export default function TransactionsPage() {
   const toast = useToast();
   const location = useLocation();
@@ -127,6 +209,7 @@ export default function TransactionsPage() {
     end_date: "",
     recipient: "",
     tags: "",
+    flow: "",
   });
 
   // Applied filters (what's actually used for the query)
@@ -139,6 +222,7 @@ export default function TransactionsPage() {
     end_date: "",
     recipient: "",
     tags: "",
+    flow: "",
   });
 
   const [fromReports, setFromReports] = useState(false);
@@ -218,12 +302,14 @@ export default function TransactionsPage() {
         end_date: preset.end_date || "",
         recipient: preset.recipient || "",
         tags: "",
+        flow: preset.flow || "",
       };
       setPendingFilters(newFilters);
       setAppliedFilters(newFilters);
-      setShowFilters(true);
-      // The Recipients page presets only a recipient, shown in the filter panel.
-      setFromReports(!preset.recipient);
+      // A dashboard card's banner explains the filter; keep the list in view.
+      setShowFilters(!preset.flow);
+      // The Recipients page and the dashboard cards explain their own preset.
+      setFromReports(!preset.recipient && !preset.flow);
       if (preset.category_name) {
         setPendingCategoryName({
           category: preset.category_name,
@@ -250,6 +336,7 @@ export default function TransactionsPage() {
     if (f.subcategory_id) params.subtype_id = f.subcategory_id;
     if (f.recipient) params.recipient = f.recipient;
     if (f.tags) params.tags = f.tags;
+    if (f.flow) params.flow = f.flow;
     return params;
   };
 
@@ -287,6 +374,29 @@ export default function TransactionsPage() {
   });
 
   const transactionsData = transactionsResponse?.transactions;
+
+  // Monthly Invested adds up investment buys, not ledger rows: its figure and
+  // the buys without a cash transaction come from the card's own endpoint.
+  const { data: investedCard } = useQuery({
+    queryKey: [
+      "investments-monthly-banner",
+      debouncedFilters.start_date,
+      debouncedFilters.end_date,
+    ],
+    queryFn: async () => {
+      const response = await investmentsAPI.getMonthly({
+        start_date: debouncedFilters.start_date || undefined,
+        end_date: debouncedFilters.end_date || undefined,
+      });
+      return response.data;
+    },
+    enabled: debouncedFilters.flow === "investment_buys",
+  });
+
+  const setFlow = (flow: string) => {
+    setPendingFilters((f) => ({ ...f, flow }));
+    setAppliedFilters((f) => ({ ...f, flow }));
+  };
 
   const { data: accountsData } = useQuery({
     queryKey: ["accounts"],
@@ -643,6 +753,7 @@ export default function TransactionsPage() {
       end_date: "",
       recipient: "",
       tags: "",
+      flow: "",
     };
     setPendingFilters(emptyFilters);
     setAppliedFilters(emptyFilters);
@@ -951,6 +1062,21 @@ export default function TransactionsPage() {
           Add Transaction
         </Button>
       </div>
+
+      {/* Opened from a dashboard card: say what the list is and what it adds up to */}
+      {appliedFilters.flow && (
+        <FlowBanner
+          flow={appliedFilters.flow}
+          startDate={appliedFilters.start_date}
+          endDate={appliedFilters.end_date}
+          count={transactionsResponse?.total}
+          totalAmount={summaryData?.total_amount}
+          currency={summaryData?.currency ?? "EUR"}
+          investedCard={investedCard}
+          onFlowChange={setFlow}
+          onClear={clearFilters}
+        />
+      )}
 
       {/* Filters Section */}
       {showFilters && (
