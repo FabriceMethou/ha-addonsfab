@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.1
+- Sidebar: the section headings (Core, Planning, Assets, Analysis, System) now fold and unfold with a click. Folded sections are remembered in your browser across visits
+- When the page you are on sits in a folded section, that section's heading is highlighted so you can still see where you are
+- The icons-only sidebar is unchanged and always shows every page
+
 ## 2.2.0
 
 **Recipients page**

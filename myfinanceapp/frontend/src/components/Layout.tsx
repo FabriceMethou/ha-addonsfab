@@ -23,6 +23,7 @@ import {
   Shield,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Plus,
   AlertTriangle,
 } from "lucide-react";
@@ -108,6 +109,18 @@ const NAV_GROUPS = [
 ];
 
 const ALL_MENU_ITEMS = NAV_GROUPS.flatMap((g) => g.items);
+
+// Labels of the sidebar sections the user folded, remembered across visits.
+const FOLDED_GROUPS_KEY = "sidebarFoldedGroups";
+
+function readFoldedGroups(): string[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FOLDED_GROUPS_KEY) || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
 
 // ── Quick-Add Transaction Dialog ──────────────────────────────────────────────
 
@@ -412,6 +425,22 @@ function NavContent({
   location: ReturnType<typeof useLocation>;
   onNavigate: (path: string) => void;
 }) {
+  const [foldedGroups, setFoldedGroups] = useState<string[]>(readFoldedGroups);
+
+  const toggleGroup = (label: string) => {
+    setFoldedGroups((prev) => {
+      const next = prev.includes(label)
+        ? prev.filter((l) => l !== label)
+        : [...prev, label];
+      try {
+        localStorage.setItem(FOLDED_GROUPS_KEY, JSON.stringify(next));
+      } catch {
+        // Not remembered, but folding still works for this visit.
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Logo */}
@@ -427,42 +456,64 @@ function NavContent({
 
       {/* Navigation */}
       <nav className="flex-1 py-4 px-2 overflow-y-auto">
-        {NAV_GROUPS.map((group, gi) => (
-          <div key={group.label} className={gi > 0 ? "mt-4" : ""}>
-            {!collapsed && (
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-foreground-subtle px-3 mb-1">
-                {group.label}
-              </p>
-            )}
-            {collapsed && gi > 0 && (
-              <div className="mx-3 my-2 border-t border-border/40" />
-            )}
-            {group.items.map((item) => {
-              const Icon = item.icon;
-              const isActive = location.pathname === item.path;
-              return (
+        {NAV_GROUPS.map((group, gi) => {
+          // Icons-only mode has no headings to unfold with, so it shows everything.
+          const folded = !collapsed && foldedGroups.includes(group.label);
+          // A folded section hiding the current page keeps its heading lit.
+          const holdsActive = group.items.some((item) => item.path === location.pathname);
+          const groupId = `nav-group-${group.label.toLowerCase()}`;
+          return (
+            <div key={group.label} className={gi > 0 ? "mt-4" : ""}>
+              {!collapsed && (
                 <button
-                  key={item.text}
-                  onClick={() => onNavigate(item.path)}
-                  title={collapsed ? item.text : undefined}
-                  aria-label={item.text}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all mb-0.5 ${
-                    collapsed ? "justify-center" : ""
-                  } ${
-                    isActive
-                      ? "bg-primary/10 text-primary border border-primary/20"
-                      : "text-foreground-muted hover:bg-surface-hover hover:text-foreground"
+                  type="button"
+                  onClick={() => toggleGroup(group.label)}
+                  aria-expanded={!folded}
+                  aria-controls={groupId}
+                  className={`w-full flex items-center justify-between px-3 py-0.5 mb-1 rounded text-[10px] font-semibold uppercase tracking-widest transition-colors ${
+                    folded && holdsActive
+                      ? "text-primary"
+                      : "text-foreground-subtle hover:text-foreground-muted"
                   }`}
                 >
-                  <Icon
-                    className={`w-5 h-5 flex-shrink-0 ${isActive ? "text-primary" : ""}`}
+                  <span>{group.label}</span>
+                  <ChevronDown
+                    className={`w-3 h-3 transition-transform ${folded ? "-rotate-90" : ""}`}
                   />
-                  {!collapsed && <span>{item.text}</span>}
                 </button>
-              );
-            })}
-          </div>
-        ))}
+              )}
+              {collapsed && gi > 0 && (
+                <div className="mx-3 my-2 border-t border-border/40" />
+              )}
+              <div id={groupId} hidden={folded}>
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = location.pathname === item.path;
+                  return (
+                    <button
+                      key={item.text}
+                      onClick={() => onNavigate(item.path)}
+                      title={collapsed ? item.text : undefined}
+                      aria-label={item.text}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all mb-0.5 ${
+                        collapsed ? "justify-center" : ""
+                      } ${
+                        isActive
+                          ? "bg-primary/10 text-primary border border-primary/20"
+                          : "text-foreground-muted hover:bg-surface-hover hover:text-foreground"
+                      }`}
+                    >
+                      <Icon
+                        className={`w-5 h-5 flex-shrink-0 ${isActive ? "text-primary" : ""}`}
+                      />
+                      {!collapsed && <span>{item.text}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </nav>
     </div>
   );
