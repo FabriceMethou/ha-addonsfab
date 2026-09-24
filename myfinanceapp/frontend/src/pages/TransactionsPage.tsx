@@ -110,8 +110,8 @@ function KPICard({ title, value, icon, iconColor, loading }: KPICardProps) {
 const FLOW_TITLES: Record<string, string> = {
   income: "Counted as income in Monthly Income",
   expense: "Counted as expenses in Monthly Expenses",
-  savings: "Behind Monthly Savings (income − expenses)",
-  investment_buys: "Investment buys counted in Monthly Invested",
+  savings: "Behind Monthly Savings: income − (expenses + invested)",
+  invested: "Counted in Monthly Invested",
   investment_transfers: "Sent towards investments, not counted in Monthly Invested",
 };
 
@@ -121,6 +121,8 @@ function FlowBanner({
   endDate,
   count,
   totalAmount,
+  totalIncome,
+  totalExpense,
   currency,
   investedCard,
   onFlowChange,
@@ -131,8 +133,15 @@ function FlowBanner({
   endDate: string;
   count?: number;
   totalAmount?: number;
+  totalIncome?: number;
+  totalExpense?: number;
   currency: string;
-  investedCard?: { total_invested: number; buy_count: number; unlinked_buy_count: number };
+  investedCard?: {
+    total_invested: number;
+    buy_count: number;
+    transfer_count: number;
+    unlinked_buy_count: number;
+  };
   onFlowChange: (flow: string) => void;
   onClear: () => void;
 }) {
@@ -144,22 +153,29 @@ function FlowBanner({
   const transactions = count === undefined ? "…" : `${count} transaction${count !== 1 ? "s" : ""}`;
 
   let detail: string;
-  if (flow === "investment_buys") {
+  if (flow === "invested") {
     detail = investedCard
-      ? `${investedCard.buy_count} buy${investedCard.buy_count !== 1 ? "s" : ""} · ${money(investedCard.total_invested)}, fees and tax included` +
+      ? `${investedCard.buy_count} buy${investedCard.buy_count !== 1 ? "s" : ""} (fees and tax included)` +
+        ` + ${investedCard.transfer_count} transfer${investedCard.transfer_count !== 1 ? "s" : ""} into accounts without holdings` +
+        ` · ${money(investedCard.total_invested)}` +
         (investedCard.unlinked_buy_count
           ? ` · ${investedCard.unlinked_buy_count} counted but not listed here (no cash transaction)`
           : "")
       : "…";
   } else if (totalAmount === undefined) {
     detail = transactions;
-  } else if (flow === "savings" || flow === "income") {
+  } else if (flow === "savings" && totalIncome !== undefined && totalExpense !== undefined) {
+    // Income and expense totals leave transfers out, so the rest of the
+    // listed amount is what was invested.
+    const invested = totalIncome - totalExpense - totalAmount;
+    detail = `${transactions} · ${money(totalIncome)} − (${money(totalExpense)} + ${money(invested)}) = ${money(totalAmount)}`;
+  } else if (flow === "income") {
     detail = `${transactions} · ${money(totalAmount)}`;
   } else {
     detail = `${transactions} · ${money(Math.abs(totalAmount))}`;
   }
 
-  const investmentView = flow.startsWith("investment");
+  const investmentView = flow === "invested" || flow === "investment_transfers";
 
   return (
     <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg bg-primary/10 border border-primary/20">
@@ -173,7 +189,7 @@ function FlowBanner({
       {investmentView && (
         <Tabs value={flow} onValueChange={(value) => onFlowChange(String(value))}>
           <TabsList>
-            <TabsTrigger value="investment_buys">Counted buys</TabsTrigger>
+            <TabsTrigger value="invested">Counted</TabsTrigger>
             <TabsTrigger value="investment_transfers">Transfers not counted</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -390,7 +406,7 @@ export default function TransactionsPage() {
       });
       return response.data;
     },
-    enabled: debouncedFilters.flow === "investment_buys",
+    enabled: debouncedFilters.flow === "invested",
   });
 
   const setFlow = (flow: string) => {
@@ -1071,6 +1087,8 @@ export default function TransactionsPage() {
           endDate={appliedFilters.end_date}
           count={transactionsResponse?.total}
           totalAmount={summaryData?.total_amount}
+          totalIncome={summaryData?.total_income}
+          totalExpense={summaryData?.total_expense}
           currency={summaryData?.currency ?? "EUR"}
           investedCard={investedCard}
           onFlowChange={setFlow}

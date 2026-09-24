@@ -34,23 +34,50 @@ _APP_WRITTEN_ROW_IDS = """
 
 _CATEGORY_OF_T = "(SELECT category FROM transaction_types WHERE id = t.type_id)"
 
+#: Investment accounts with no holdings, such as a gold account fed by
+#: transfers. There is no portfolio to price, so their balance is their ledger.
+_HOLDINGLESS_INVESTMENT_ACCOUNTS = """
+    SELECT a.id FROM accounts a
+     WHERE a.account_type = 'investment'
+       AND NOT EXISTS (SELECT 1 FROM investment_holdings h WHERE h.account_id = a.id)
+"""
+
+#: The cash leg of each buy recorded on the Investments page.
+_INVESTED_BUY = """t.id IN (SELECT linked_transaction_id FROM investment_transactions
+                             WHERE transaction_type = 'buy'
+                               AND linked_transaction_id IS NOT NULL)"""
+
+#: Money moved from outside into an investment account without holdings. Such
+#: an account records no buys, so the transfer is the investment. Accounts with
+#: holdings are left out: their buys are counted, and the transfer that funded
+#: them would count the same money twice.
+#: The IS NOT NULL keeps it false rather than NULL for a row with no transfer
+#: account, so that NOT (...) around it still holds.
+_INVESTED_TRANSFER = f"""(t.transfer_account_id IS NOT NULL
+    AND t.amount < 0
+    AND {_CATEGORY_OF_T} = 'transfer'
+    AND t.transfer_account_id IN ({_HOLDINGLESS_INVESTMENT_ACCOUNTS})
+    AND t.account_id NOT IN (SELECT id FROM accounts WHERE account_type = 'investment'))"""
+
+#: What Monthly Invested adds up.
+_INVESTED = f"({_INVESTED_BUY}) OR {_INVESTED_TRANSFER}"
+
 #: Which transactions `t` each dashboard card counts, so a click on a card can
 #: list exactly them. Income and expenses go by sign and leave transfers out,
-#: as the dashboard summary does; savings is both.
+#: as the dashboard summary does, so investing is never an expense.
 FLOW_CLAUSES = {
     'income': f"t.amount > 0 AND {_CATEGORY_OF_T} != 'transfer'",
     'expense': f"t.amount < 0 AND {_CATEGORY_OF_T} != 'transfer'",
-    'savings': f"{_CATEGORY_OF_T} != 'transfer'",
-    # The cash leg of each buy recorded on the Investments page: what the
-    # Monthly Invested card adds up.
-    'investment_buys': """t.id IN (SELECT linked_transaction_id FROM investment_transactions
-                                    WHERE transaction_type = 'buy'
-                                      AND linked_transaction_id IS NOT NULL)""",
-    # Money sent towards investments that the card does not count: transfers
-    # into an investment account or its cash account, and anything filed
-    # under the Investments category by hand. Trade legs are left out.
+    'invested': _INVESTED,
+    # Savings are what is left once spending and investing are taken out.
+    'savings': f"{_CATEGORY_OF_T} != 'transfer' OR ({_INVESTED})",
+    # Money sent towards investments that Monthly Invested does not count:
+    # transfers into an investment account with holdings or its cash account,
+    # and anything filed under the Investments category by hand. Trade legs are
+    # left out.
     'investment_transfers': f"""t.amount < 0
         AND {_CATEGORY_OF_T} = 'transfer'
+        AND NOT ({_INVESTED_TRANSFER})
         AND t.id NOT IN (SELECT linked_transaction_id FROM investment_transactions
                           WHERE linked_transaction_id IS NOT NULL
                          UNION SELECT gain_transaction_id FROM investment_transactions
@@ -61,6 +88,35 @@ FLOW_CLAUSES = {
                                              AND linked_account_id IS NOT NULL)
              OR (SELECT name FROM transaction_types WHERE id = t.type_id) = 'Investments')""",
 }
+
+#: Balance of account `a` from its own ledger, as recalculate_all_balances()
+#: would rebuild it: opening balance plus confirmed transactions since the
+#: opening date, plus legacy single-entry transfers into it.
+_LEDGER_BALANCE = """ROUND(COALESCE(a.opening_balance, 0)
+      + COALESCE((
+    SELECT SUM(t.amount)
+    FROM transactions t
+    WHERE t.account_id = a.id
+      AND t.confirmed = 1
+      AND (a.opening_date IS NULL
+           OR t.transaction_date >= a.opening_date)
+), 0)
+      + COALESCE((
+    -- Legacy single-entry transfers: one row debits the
+    -- source and is expected to credit the destination,
+    -- with no mirror row of its own. recalculate_all_balances()
+    -- applies that credit, so the check must too — otherwise
+    -- every pre-double-entry transfer looks like drift.
+    SELECT SUM(ABS(t.amount))
+    FROM transactions t
+    WHERE t.transfer_account_id = a.id
+      AND t.is_transfer = 1
+      AND t.confirmed = 1
+      AND t.linked_transfer_id IS NULL
+      AND COALESCE(t.is_historical, 0) = 0
+      AND (a.opening_date IS NULL
+           OR t.transaction_date >= a.opening_date)
+), 0), 2)"""
 
 #: A transaction `t` whose payee is a recipient someone typed. Transfers are out
 #: too: their payee is one of your own account names.
@@ -1024,15 +1080,17 @@ class FinanceDatabase:
             cursor.execute("DROP TABLE IF EXISTS pending_transactions")
             cursor.execute("DROP TABLE IF EXISTS recurring_templates")
 
-            # One-off re-pricing of investment accounts. Their balance used to be
-            # left at whatever it was created with — almost always zero — because
-            # trades move cash on the linked account. Existing databases would
-            # otherwise keep reporting a net worth blind to the portfolio until
-            # the next trade or price refresh happened to trigger a sync.
+            # Re-value investment accounts at every start. Their balance used to
+            # be left at whatever it was created with — almost always zero —
+            # because trades move cash on the linked account. Existing databases
+            # would otherwise keep reporting a net worth blind to the portfolio
+            # until the next trade or price refresh happened to trigger a sync.
+            # Accounts without holdings take their ledger balance, which also
+            # repairs the zero that versions 2.1.0 to 2.3.0 gave them.
             cursor.execute("SELECT COUNT(*) FROM accounts WHERE account_type = 'investment'")
             if cursor.fetchone()[0]:
                 repriced = self._sync_all_investment_account_balances(cursor)
-                logger.info(f"Valued {repriced} investment account(s) from their holdings")
+                logger.info(f"Valued {repriced} investment account(s)")
 
             # Stamp the schema revision. Every migration above is guarded by a
             # PRAGMA table_info check, so they are idempotent and safe to re-run
@@ -1823,13 +1881,14 @@ class FinanceDatabase:
 
                 transactions_processed += 1
 
-            # Investment accounts carry no transactions of their own — their
-            # balance is the portfolio, so replaying the ledger alone would leave
-            # them at their opening balance. Re-price them once the replay ends.
+            # Investment accounts with holdings carry no transactions of their
+            # own — their balance is the portfolio, so replaying the ledger alone
+            # would leave them at their opening balance. Re-price them once the
+            # replay ends (those without holdings keep their ledger balance).
             investment_accounts = self._sync_all_investment_account_balances(cursor)
 
             logger.info(f"Recalculated balances for {len(accounts)} accounts "
-                        f"({investment_accounts} re-priced from their holdings)")
+                        f"({investment_accounts} investment account(s) re-valued)")
             logger.info(f"Processed {transactions_processed} transactions, skipped {historical_skipped} historical transactions")
 
             return {
@@ -3059,6 +3118,16 @@ class FinanceDatabase:
         """, (account_id,))
         holdings = cursor.fetchall()
 
+        if not holdings:
+            # Nothing to price — a gold account fed by transfers, say. Its
+            # balance is what went in and out, which market value would zero.
+            balance = cursor.execute(
+                f"SELECT {_LEDGER_BALANCE} FROM accounts a WHERE a.id = ?",
+                (account_id,)).fetchone()[0]
+            cursor.execute("UPDATE accounts SET balance = ? WHERE id = ?", (balance, account_id))
+            logger.debug(f"Investment account {account_id} has no holdings; ledger balance {balance:.2f}")
+            return
+
         rates = self.get_exchange_rates_map()
         total = 0.0
         for holding in holdings:
@@ -3137,42 +3206,19 @@ class FinanceDatabase:
         Returns one entry per drifting account; an empty list means all agree.
         """
         with self.db_connection(commit=False) as conn:
-            rows = conn.execute("""
+            rows = conn.execute(f"""
                 SELECT
                     a.id,
                     a.name,
                     a.currency,
                     ROUND(COALESCE(a.balance, 0), 2) AS stored,
-                    ROUND(COALESCE(a.opening_balance, 0)
-                          + COALESCE((
-                        SELECT SUM(t.amount)
-                        FROM transactions t
-                        WHERE t.account_id = a.id
-                          AND t.confirmed = 1
-                          AND (a.opening_date IS NULL
-                               OR t.transaction_date >= a.opening_date)
-                    ), 0)
-                          + COALESCE((
-                        -- Legacy single-entry transfers: one row debits the
-                        -- source and is expected to credit the destination,
-                        -- with no mirror row of its own. recalculate_all_balances()
-                        -- applies that credit, so the check must too — otherwise
-                        -- every pre-double-entry transfer looks like drift.
-                        SELECT SUM(ABS(t.amount))
-                        FROM transactions t
-                        WHERE t.transfer_account_id = a.id
-                          AND t.is_transfer = 1
-                          AND t.confirmed = 1
-                          AND t.linked_transfer_id IS NULL
-                          AND COALESCE(t.is_historical, 0) = 0
-                          AND (a.opening_date IS NULL
-                               OR t.transaction_date >= a.opening_date)
-                    ), 0), 2) AS derived
+                    {_LEDGER_BALANCE} AS derived
                 FROM accounts a
-                -- Investment accounts are excluded: their balance is the market
-                -- value of what they hold, not a sum of transactions, so this
-                -- comparison would flag every one of them as drifting.
+                -- Investment accounts with holdings are excluded: their balance
+                -- is the market value of what they hold, not a sum of
+                -- transactions, so this comparison would flag every one of them.
                 WHERE a.account_type != 'investment'
+                   OR a.id IN ({_HOLDINGLESS_INVESTMENT_ACCOUNTS})
                 ORDER BY a.name
             """).fetchall()
 
@@ -3416,7 +3462,7 @@ class FinanceDatabase:
                     query += " AND t.tags LIKE ?"
                     params.append(f"%{filters['tags']}%")
                 if 'flow' in filters:
-                    query += f" AND {FLOW_CLAUSES[filters['flow']]}"
+                    query += f" AND ({FLOW_CLAUSES[filters['flow']]})"
                 if 'owner_id' in filters:
                     query += " AND COALESCE(t.owner_id, a.owner_id) = ?"
                     params.append(filters['owner_id'])
@@ -3476,7 +3522,7 @@ class FinanceDatabase:
                     query += " AND t.tags LIKE ?"
                     params.append(f"%{filters['tags']}%")
                 if 'flow' in filters:
-                    query += f" AND {FLOW_CLAUSES[filters['flow']]}"
+                    query += f" AND ({FLOW_CLAUSES[filters['flow']]})"
 
             cursor.execute(query, params)
             count = cursor.fetchone()[0]

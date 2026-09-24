@@ -6,7 +6,11 @@ page filtered on the card's own rule (`flow`). The list is only useful for
 checking the card if it holds exactly what the card adds up, so these tests
 pin each filter to the card's total on a month that mixes every kind of row:
 salary, groceries, a refund, a transfer between own accounts, an investment
-buy, money sent to the broker, and a row filed under Investments by hand.
+buy, money sent to the broker, money sent to a gold account (an investment
+account with no holdings), and a row filed under Investments by hand.
+
+Investing is never an expense, and savings are what is left once both are
+taken out: income - (expenses + invested).
 
 Run:
   cd app && JWT_SECRET_KEY=test PYTHONPATH=$PWD \
@@ -67,6 +71,7 @@ def month(db):
         "name": name, "owner_id": owner, "balance": 5000.0,
         "currency": "EUR", "account_type": kind})
     cash, savings, broker = new("Cash", "checking"), new("Savings", "savings"), new("Broker", "investment")
+    gold = new("Main Gold", "investment")
     with db.db_connection(commit=True) as conn:
         conn.execute("UPDATE accounts SET linked_account_id = ? WHERE id = ?", (cash, broker))
 
@@ -76,6 +81,7 @@ def month(db):
     add(db, cash, 10.0, expense_ids(db), "Lidl refund")
     add(db, cash, -300.0, transfer, "Savings", is_transfer=True, transfer_account_id=savings)
     add(db, cash, -500.0, transfer, "Broker", is_transfer=True, transfer_account_id=broker)
+    add(db, cash, -250.0, transfer, "Main Gold", is_transfer=True, transfer_account_id=gold)
     add(db, cash, -200.0, ids_of(db, "Investments", "Securities Purchase"), "ETF plan")
     add(db, cash, -99.0, expense_ids(db), "Lidl", date="2026-04-02")   # another month
 
@@ -86,7 +92,7 @@ def month(db):
         "holding_id": holding, "transaction_type": "buy", "transaction_date": "2026-03-15",
         "shares": 10, "price_per_share": 10.0, "total_amount": 100.0,
         "fees": 1.0, "tax": 0.0, "currency": "EUR"})
-    return {"cash": cash, "broker": broker, "holding": holding}
+    return {"cash": cash, "broker": broker, "gold": gold, "holding": holding}
 
 
 def listed(db, flow):
@@ -117,31 +123,57 @@ def test_expenses_list_the_negative_non_transfer_rows(db, month):
     assert listed(db, "expense") == [("Lidl", -50.0)]
 
 
-def test_savings_lists_both(db, month):
-    assert listed(db, "savings") == [("Employer", 2000.0), ("Lidl", -50.0), ("Lidl refund", 10.0)]
+def test_investing_is_never_an_expense(db, month):
+    invested = set(listed(db, "invested")) | set(listed(db, "investment_transfers"))
+    assert invested and not invested & set(listed(db, "expense"))
+
+
+def test_savings_list_income_expenses_and_what_was_invested(db, month):
+    assert listed(db, "savings") == [
+        ("Acme Corp", -101.0), ("Employer", 2000.0), ("Lidl", -50.0),
+        ("Lidl refund", 10.0), ("Main Gold", -250.0)]
 
 
 def test_the_lists_add_up_to_the_cards(api, db, month):
     card = summary(api)
+    invested = api[1].get_monthly_summary(**MONTH, current_user=None)["total_invested"]
     assert summary(api, flow="income")["total_amount"] == card["total_income"]
     assert -summary(api, flow="expense")["total_amount"] == card["total_expense"]
-    assert summary(api, flow="savings")["total_amount"] == card["net_change"]
+    assert summary(api, flow="savings")["total_amount"] == \
+        card["total_income"] - (card["total_expense"] + invested) == 1609.0
 
 
-def test_investment_buys_list_the_cash_leg_of_each_buy(db, month):
-    assert listed(db, "investment_buys") == [("Acme Corp", -101.0)]
+def test_invested_lists_each_buy_and_each_transfer_into_gold(db, month):
+    assert listed(db, "invested") == [("Acme Corp", -101.0), ("Main Gold", -250.0)]
 
 
-def test_investment_buys_add_up_to_monthly_invested(api, db, month):
+def test_invested_adds_up_to_monthly_invested(api, db, month):
     card = api[1].get_monthly_summary(**MONTH, current_user=None)
-    assert -summary(api, flow="investment_buys")["total_amount"] == card["total_invested"] == 101.0
+    assert -summary(api, flow="invested")["total_amount"] == card["total_invested"] == 351.0
+    assert (card["transfer_count"], card["total_transferred"]) == (1, 250.0)
     assert card["unlinked_buy_count"] == 0
 
 
 def test_money_sent_to_investments_but_not_counted_is_listed_apart(db, month):
     """Transfer to the broker and the by-hand Investments row; not the transfer
-    to savings, not the buy's own cash leg, not the broker's incoming mirror."""
+    to savings, not the gold transfer (counted), not the buy's own cash leg,
+    not the broker's incoming mirror."""
     assert listed(db, "investment_transfers") == [("Broker", -500.0), ("ETF plan", -200.0)]
+
+
+def test_money_taken_out_of_gold_is_not_invested(db, month):
+    add(db, month["gold"], -80.0, ids_of(db, "Transfer", "Between Accounts"), "Cash",
+        is_transfer=True, transfer_account_id=month["cash"])
+    assert ("Cash", -80.0) not in listed(db, "invested")
+
+
+def test_once_gold_has_holdings_its_buys_count_instead(db, month):
+    """Transfers into an account with holdings would double the buys they fund."""
+    db.add_investment_holding({
+        "account_id": month["gold"], "symbol": "XAU", "name": "Gold",
+        "investment_type": "etf", "currency": "EUR", "quantity": 0, "average_cost": 0})
+    assert ("Main Gold", -250.0) not in listed(db, "invested")
+    assert ("Main Gold", -250.0) in listed(db, "investment_transfers")
 
 
 def test_a_transfer_to_the_brokers_cash_account_counts_as_sent(db, month):
@@ -153,7 +185,7 @@ def test_a_transfer_to_the_brokers_cash_account_counts_as_sent(db, month):
 
 
 def test_counting_agrees_with_listing(db, month):
-    for flow in ("income", "expense", "savings", "investment_buys", "investment_transfers"):
+    for flow in ("income", "expense", "savings", "invested", "investment_transfers"):
         filters = {**MONTH, "flow": flow}
         assert db.count_transactions(filters) == len(db.get_transactions(filters)), flow
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.0
+
+**Fixes that affect your data**
+- An investment account with no holdings, such as a gold account you transfer money into, was reset to **0** at every start and every "Recalculate Balances", so net worth left out everything in it. Such an account now keeps the balance of what was transferred in and out. The first start after updating restores it automatically; nothing was lost, the transfers were all still there
+- The balance check (`scripts/check_integrity.py`) now covers those accounts too. Investment accounts with holdings are still valued at the market price of what they hold
+
+**Monthly Invested and Monthly Savings**
+- **Monthly Invested** now also counts transfers into an investment account without holdings (the gold account above), on top of the buys recorded on the Investments page. Transfers into an account with holdings are still left out, since the buys they fund are already counted
+- **Monthly Savings** is now what is left once spending *and* investing are taken out: income − (expenses + invested). It used to be income − expenses. The dashboard's Monthly Summary shows the four figures side by side
+- **Monthly Expenses** never includes investment money: buys, their fees and transfers towards investments are not expenses
+- Clicking **Monthly Invested** lists the counted buys and transfers; clicking **Monthly Savings** lists income, expenses and investments, with the calculation spelled out in the banner
+
 ## 2.3.0
 
 **Dashboard cards open what they add up**

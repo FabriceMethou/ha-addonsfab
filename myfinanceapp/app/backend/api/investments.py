@@ -621,8 +621,12 @@ def get_monthly_summary(
 ):
     """Get investment activity summary for a date range.
 
-    Returns total amount invested (buys), received from sales, dividends earned,
-    and net cash flow for the period. Useful for the dashboard monthly KPI card.
+    Returns total amount invested, received from sales, dividends earned, and
+    net cash flow for the period. Useful for the dashboard monthly KPI card.
+
+    Invested is the buys recorded on the Investments page plus transfers into
+    investment accounts that hold nothing to record buys against, such as a
+    gold account (the `invested` flow in database.py).
     """
     display_currency = db.get_preference('display_currency', 'EUR')
     exchange_rates = db.get_exchange_rates_map()
@@ -661,8 +665,26 @@ def get_monthly_summary(
             total_dividends += amount
             dividend_count += 1
 
+    # Transfers into investment accounts without holdings. The `invested`
+    # flow also holds the buys' cash legs, already counted above from the
+    # trades; those carry no transfer account.
+    transfer_filters = {'flow': 'invested'}
+    if start_date:
+        transfer_filters['start_date'] = start_date
+    if end_date:
+        transfer_filters['end_date'] = end_date
+    invested_transfers = [t for t in db.get_transactions(transfer_filters)
+                          if t.get('transfer_account_id')]
+    total_transferred = sum(
+        db.convert_with_rates(abs(t['amount']), t.get('account_currency', 'EUR'),
+                              display_currency, exchange_rates)
+        for t in invested_transfers)
+    total_invested += total_transferred
+
     return {
         "total_invested": total_invested,
+        "total_transferred": total_transferred,
+        "transfer_count": len(invested_transfers),
         "total_sold": total_sold,
         "total_dividends": total_dividends,
         "net_cash_flow": total_sold + total_dividends - total_invested,
