@@ -45,7 +45,7 @@ _redoc_url = "/redoc" if os.getenv("ENVIRONMENT", "production") != "production" 
 app = FastAPI(
     title="Finance Tracker API",
     description="Personal finance management API with transaction tracking and reporting",
-    version="2.4.1",
+    version="2.5.0",
     docs_url=_docs_url,
     redoc_url=_redoc_url,
 )

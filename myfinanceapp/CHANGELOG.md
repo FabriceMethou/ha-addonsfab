@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.5.0
+
+**Next Month Prediction, rebuilt**
+- **One-off purchases no longer inflate the forecast.** A €1,500 repair last month used to be predicted to happen again in full; variable spending is now averaged per category over the last 12 months, and a month more than three times a category's typical month counts as three times typical
+- **Refunds lower the forecast** instead of raising it
+- **Bills are recognised**: a recipient paid about once a month for a similar amount (rent, energy, subscriptions) is predicted at its usual amount, and follows a price change. Quarterly and yearly bills (insurance, car tax) are predicted **in the month they fall due** instead of being spread over every month. A cancelled subscription stops counting
+- **Accuracy is measured, not guessed**: the forecast is replayed on each of the last six months, using only what came before it, and the dashboard shows how far off it usually is ("usually within ±€X") and a likely range. Hover the badge to see each month's forecast against what was actually spent. The old "confidence" percentage was a formula and is gone
+- **Budgets are compared per category**, only for the categories that have one, and the ones forecast over budget are named. Before, the whole forecast was compared with the sum of your budgets, so a single Food budget was "exceeded" by the rent
+- **Bills expected** next month are listed with their usual day
+- **This month so far**: what you have spent, what is still expected by month end, and which bills have not come yet
+- With two years of history, a mild same-month-last-year adjustment (−20% to +30%) is applied to variable spending
+- Pending transactions are left out: they have not happened yet
+
 ## 2.4.1
 - **Monthly Savings** is back to income − expenses. Investing is one use of what you saved, not something taken out of it: moving money into an investment leaves your net worth unchanged, so it should not make a month look less thrifty. (2.4.0 briefly subtracted investments too)
 - The dashboard's Monthly Summary shows where the savings went: *of which invested* and *kept in cash*

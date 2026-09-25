@@ -222,13 +222,21 @@ def spending_prediction(
     months_ahead: int = 1,
     current_user: User = Depends(get_current_user)
 ):
-    """Predict spending for upcoming months"""
+    """Predict spending for upcoming months.
+
+    Bills (monthly, or quarterly/yearly in the month they fall due), variable
+    spending per category, the measured accuracy of the method on recent
+    months, and a projection for the month in progress. See predictions.py.
+    """
     try:
         display_currency = db.get_preference('display_currency', 'EUR')
         exchange_rates = db.get_exchange_rates_map()
 
-        # All transactions are fetched and converted to display_currency in one step
-        transactions = db.get_transactions_for_prediction(months=24, display_currency=display_currency)
+        # 36 months: a year of history behind each of the replayed months, and
+        # the same month last year for the seasonal adjustment. Pending
+        # transactions have not happened and are left out.
+        transactions = db.get_transactions_for_prediction(
+            months=36, display_currency=display_currency, confirmed_only=True)
 
         # Normalise budgets to display currency so _compare_with_budgets is accurate
         raw_budgets = db.get_budgets(include_inactive=False)
@@ -249,7 +257,7 @@ def spending_prediction(
         )
 
         prediction = predictor.predict_monthly_spending(months_ahead=months_ahead)
-        category_breakdown = predictor.predict_category_spending()
+        category_breakdown = predictor.predict_category_spending(months_ahead=months_ahead)
 
         return {
             "months_ahead": months_ahead,

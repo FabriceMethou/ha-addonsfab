@@ -6762,7 +6762,8 @@ class FinanceDatabase:
             data = [dict(row) for row in cursor.fetchall()]
             return data
     # ==================== Machine Learning====================
-    def get_transactions_for_prediction(self, months: int = 24, display_currency: str = None) -> List[Dict]:
+    def get_transactions_for_prediction(self, months: int = 24, display_currency: str = None,
+                                        confirmed_only: bool = False) -> List[Dict]:
         """Get transactions for prediction, with amounts converted to the display currency.
 
         All currencies are included and converted so the model trains on a single
@@ -6772,6 +6773,7 @@ class FinanceDatabase:
             months: Number of months of history to retrieve (0 = all history).
             display_currency: Target currency for amount conversion. Falls back to the
                               user's display_currency preference.
+            confirmed_only: Leave out pending transactions, which have not happened.
         """
         if not display_currency:
             display_currency = self.get_preference('display_currency', 'EUR')
@@ -6804,6 +6806,8 @@ class FinanceDatabase:
             if months:
                 query += " AND t.transaction_date >= date('now', ?)"
                 params.append(f'-{months} months')
+            if confirmed_only:
+                query += " AND t.confirmed = 1"
 
             query += " ORDER BY t.transaction_date DESC"
 

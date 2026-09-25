@@ -1,11 +1,32 @@
 """
 Spending Predictions Module
-Analyzes historical data to predict future spending using recurring/non-recurring classification.
+
+Forecasts a month's expenses in three parts:
+
+- Recurring bills: a recipient paid about once a month for a similar amount
+  (rent, subscriptions). Predicted at its usual amount, on its usual day.
+- Periodic bills: a recipient paid every quarter or every year for a similar
+  amount (insurance, car tax). Predicted only in the month it falls due,
+  instead of being spread thinly over every month.
+- Variable spending: everything else, per category, averaged over the last
+  12 complete months. A month more than three times the category's typical
+  month counts as three times typical, so a one-off purchase cannot make the
+  next month look expensive. With two years of history, a mild same-month-
+  last-year adjustment is applied.
+
+Refunds count against spending: an expense-category amount is spending when
+negative and a refund when positive.
+
+The same forecast is replayed on each of the last months, predicted only from
+what came before it, to measure how far off it usually is. That measured
+error, not a formula, is what the dashboard shows.
 """
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Tuple
-import pandas as pd
+from calendar import monthrange
+from datetime import date
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
+import pandas as pd
 
 
 def convert_numpy_types(obj: Any) -> Any:
@@ -26,282 +47,362 @@ def convert_numpy_types(obj: Any) -> Any:
 
 
 class SpendingPredictor:
-    """
-    Predict future spending by classifying (payee, category) pairs as recurring
-    or non-recurring, then summing their individual predictions.
+    """Forecast monthly expenses from past transactions (see module docstring)."""
 
-    Recurring  = appears in ≥2 of the last 3 complete months AND monthly amounts
-                 are within 10% of each other.
-    Non-recurring = everything else, predicted by averaging monthly totals since
-                    the first month that pair appeared (zero months count).
-    """
-
-    RECURRING_MIN_MONTHS = 2       # must appear in at least this many of last 3
-    RECURRING_WINDOW = 3           # number of recent months to examine
-    RECURRING_VARIATION_MAX = 0.10 # max (max-min)/mean allowed
+    LOOKBACK_MONTHS = 12          # variable spending is averaged over this many months
+    RECURRING_WINDOW = 6          # recent months examined for monthly bills
+    RECURRING_MIN_MONTHS = 3      # a monthly bill must have been paid at least this often
+    AMOUNT_TOLERANCE = 0.20       # a bill's amounts stay within ±20% of their median
+    PERIODS = {3: 'quarterly', 12: 'yearly'}
+    OUTLIER_CAP = 3.0             # a month counts at most this many times a typical month
+    SEASONAL_RANGE = (0.8, 1.3)   # same-month-last-year adjustment stays within this
+    BACKTEST_MONTHS = 6           # past months replayed to measure accuracy
+    MIN_BACKTEST_HISTORY = 3      # months of history needed before a month can be replayed
 
     def __init__(self, transactions: List[Dict], pending_transactions: List[Dict] = None,
-                 budgets: List[Dict] = None):
-        self.df = pd.DataFrame(transactions) if transactions else pd.DataFrame()
-        if not self.df.empty:
-            if 'transaction_date' in self.df.columns:
-                self.df['date'] = pd.to_datetime(self.df['transaction_date'])
-            elif 'date' in self.df.columns:
-                self.df['date'] = pd.to_datetime(self.df['date'])
-
+                 budgets: List[Dict] = None, today: Optional[date] = None):
+        self.today = today or date.today()
+        self.current_month = pd.Period(self.today, freq='M')
         self.pending = pending_transactions or []
         self.budgets = budgets or []
+
+        # Kept for detect_anomalies(), which works on the raw rows.
+        self.df = pd.DataFrame(transactions) if transactions else pd.DataFrame()
+        if not self.df.empty:
+            date_column = 'transaction_date' if 'transaction_date' in self.df.columns else 'date'
+            self.df['date'] = pd.to_datetime(self.df[date_column])
+
+        self.expenses = self._prepare_expenses()
+        self.first_month = self.expenses['month'].min() if not self.expenses.empty else None
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
     def predict_monthly_spending(self, months_ahead: int = 1) -> Dict:
-        if self.df.empty or 'date' not in self.df.columns:
+        """Forecast the month `months_ahead` after the current one."""
+        if self.expenses.empty:
             return self._empty_result()
 
-        expenses = self.df[self.df['category'] == 'expense']
-        if expenses.empty:
-            return self._empty_result()
+        target = self.current_month + months_ahead
+        forecast = self._forecast(target)
+        accuracy = self._backtest()
 
-        recurring, non_recurring = self._classify_spending()
+        spread = accuracy['typical_error'] if accuracy else None
+        total = forecast['total']
 
-        recurring_total = sum(item['predicted'] for item in recurring)
-        non_recurring_total = sum(item['predicted'] for item in non_recurring)
-        total_prediction = recurring_total + non_recurring_total
+        return convert_numpy_types({
+            'predicted': total,
+            'target_month': str(target),
+            'recurring_total': forecast['bills_total'],
+            'non_recurring_total': forecast['variable_total'],
+            'range': ({'low': max(0.0, total - spread), 'high': total + spread}
+                      if spread is not None else None),
+            'accuracy': accuracy,
+            'upcoming_bills': forecast['bills'],
+            'seasonal_factor': forecast['seasonal_factor'],
+            'this_month': self._this_month_projection(),
+            'method': 'bills_and_variable',
+            **self._trend(),
+            'budget_comparison': self._compare_with_budgets(forecast['by_category']),
+            'pending_amount': float(sum(
+                abs(p['amount']) for p in self.pending if p.get('category') == 'expense')),
+        })
 
-        # Confidence: scales with the share of spending that is predictable (recurring)
-        if total_prediction > 0:
-            recurring_ratio = recurring_total / total_prediction
-            confidence = min(0.95, 0.40 + recurring_ratio * 0.55)
-        else:
-            confidence = 0.3
+    def predict_category_spending(self, months_ahead: int = 1) -> List[Dict]:
+        """Per-category forecast, split into bills and variable spending."""
+        if self.expenses.empty:
+            return []
+        rows = self._forecast(self.current_month + months_ahead)['by_category']
+        return convert_numpy_types(sorted(rows, key=lambda r: r['predicted'], reverse=True))
 
-        # Linear regression on monthly totals — used only for the trend indicator
-        trend_data = self._compute_trend()
+    # ------------------------------------------------------------------
+    # Forecast
+    # ------------------------------------------------------------------
 
-        budget_info = self._compare_with_budgets(total_prediction)
+    def _prepare_expenses(self) -> pd.DataFrame:
+        columns = ['month', 'day', 'spending', 'payee', 'category']
+        if self.df.empty or 'category' not in self.df.columns:
+            return pd.DataFrame(columns=columns)
+        rows = self.df[self.df['category'] == 'expense'].copy()
+        if rows.empty:
+            return pd.DataFrame(columns=columns)
+        rows['month'] = rows['date'].dt.to_period('M')
+        rows['day'] = rows['date'].dt.day
+        # Expenses are stored negative; a refund is a positive amount.
+        rows['spending'] = -rows['amount'].astype(float)
+        rows['payee'] = (rows['destinataire'].fillna('').astype(str).str.strip()
+                         if 'destinataire' in rows.columns else '')
+        rows['payee'] = rows['payee'].replace('', '(unspecified)')
+        rows['category'] = rows['type_name'].fillna('Other')
+        return rows[columns]
 
-        pending_amount = sum(
-            abs(p['amount']) for p in self.pending
-            if p.get('category') == 'expense'
-        )
+    def _forecast(self, target: pd.Period) -> Dict:
+        """Predict `target` from complete months before it (and before today)."""
+        cutoff = min(target, self.current_month)
+        history = self.expenses[self.expenses['month'] < cutoff]
 
-        return {
-            'predicted': float(total_prediction),
-            'recurring_total': float(recurring_total),
-            'non_recurring_total': float(non_recurring_total),
-            'base_prediction': trend_data['base_prediction'],
-            'confidence': float(confidence),
-            'trend': trend_data['trend'],
-            'slope': trend_data['slope'],
-            'method': 'recurring_classification',
-            'history': trend_data['history'],
-            'pending_amount': float(pending_amount),
-            'budget_comparison': budget_info,
-        }
+        monthly, periodic = self._find_bills(history, cutoff)
+        bills = list(monthly)
+        for bill in periodic:
+            if bill['due_month'] == target:
+                bills.append(bill)
+        bill_keys = {(b['payee'], b['category']) for b in monthly + periodic}
 
-    def predict_category_spending(self) -> List[Dict]:
-        """
-        Return per-category predictions aggregated from the recurring classification.
-        Each entry includes a split into recurring vs non-recurring portions.
-        """
-        recurring, non_recurring = self._classify_spending()
+        variable = self._variable_by_category(history, cutoff, bill_keys)
+        seasonal = self._seasonal_factor(history, target, cutoff, bill_keys)
+        variable = {cat: amount * seasonal for cat, amount in variable.items()}
 
         by_category: Dict[str, Dict] = {}
 
-        for item in recurring + non_recurring:
-            cat = item['category']
-            if cat not in by_category:
-                by_category[cat] = {
-                    'category': cat,
-                    'predicted': 0.0,
-                    'recurring_amount': 0.0,
-                    'non_recurring_amount': 0.0,
-                    'is_recurring': False,
-                }
-            by_category[cat]['predicted'] += item['predicted']
-            if item['is_recurring']:
-                by_category[cat]['recurring_amount'] += item['predicted']
-            else:
-                by_category[cat]['non_recurring_amount'] += item['predicted']
+        def entry(category):
+            return by_category.setdefault(category, {
+                'category': category, 'predicted': 0.0,
+                'recurring_amount': 0.0, 'non_recurring_amount': 0.0, 'is_recurring': False})
 
-        # Mark a category as "recurring" if the majority of its predicted spend is recurring
-        for entry in by_category.values():
-            if entry['predicted'] > 0:
-                entry['is_recurring'] = (
-                    entry['recurring_amount'] / entry['predicted'] >= 0.5
-                )
+        for bill in bills:
+            row = entry(bill['category'])
+            row['recurring_amount'] += bill['amount']
+            row['predicted'] += bill['amount']
+        for category, amount in variable.items():
+            if amount > 0:
+                row = entry(category)
+                row['non_recurring_amount'] += amount
+                row['predicted'] += amount
+        for row in by_category.values():
+            row['is_recurring'] = row['predicted'] > 0 and \
+                row['recurring_amount'] / row['predicted'] >= 0.5
 
-        result = sorted(by_category.values(), key=lambda x: x['predicted'], reverse=True)
-        return convert_numpy_types(result)
-
-    # ------------------------------------------------------------------
-    # Core classification
-    # ------------------------------------------------------------------
-
-    def _classify_spending(self) -> Tuple[List[Dict], List[Dict]]:
-        """
-        Split every (destinataire, category) group into recurring or non-recurring.
-
-        Returns:
-            (recurring_items, non_recurring_items)
-            Each item: { category, destinataire, predicted, months_seen, is_recurring }
-        """
-        expenses = self.df[self.df['category'] == 'expense'].copy()
-        if expenses.empty:
-            return [], []
-
-        expenses['spending'] = expenses['amount'].abs()
-        expenses['month'] = expenses['date'].dt.to_period('M')
-
-        # Only train on complete months
-        current_month = pd.Period(datetime.now(), freq='M')
-        complete = expenses[expenses['month'] < current_month].copy()
-        if complete.empty:
-            complete = expenses.copy()
-
-        all_months = sorted(complete['month'].unique())
-        last_n = all_months[-self.RECURRING_WINDOW:]
-
-        # Normalise destinataire: treat null/empty as empty string
-        complete['destinataire'] = complete['destinataire'].fillna('').str.strip()
-
-        recurring_items: List[Dict] = []
-        non_recurring_items: List[Dict] = []
-
-        for (destinataire, type_name), group in complete.groupby(['destinataire', 'type_name']):
-            monthly_totals = group.groupby('month')['spending'].sum()
-
-            # --- Recurring check ---
-            months_in_window = [m for m in last_n if m in monthly_totals.index]
-            if len(months_in_window) >= self.RECURRING_MIN_MONTHS:
-                recent_amounts = [float(monthly_totals[m]) for m in months_in_window]
-                mean_amt = float(np.mean(recent_amounts))
-
-                if mean_amt > 0:
-                    variation = (max(recent_amounts) - min(recent_amounts)) / mean_amt
-                    if variation <= self.RECURRING_VARIATION_MAX:
-                        recurring_items.append({
-                            'category': type_name,
-                            'destinataire': destinataire or '(unspecified)',
-                            'predicted': mean_amt,
-                            'months_seen': len(months_in_window),
-                            'is_recurring': True,
-                        })
-                        continue
-
-            # --- Non-recurring: average over months since first appearance ---
-            first_month = monthly_totals.index.min()
-            months_since_first = [m for m in all_months if m >= first_month]
-            total_months = len(months_since_first)
-
-            total_spending = float(monthly_totals.sum())
-            avg = total_spending / total_months if total_months > 0 else 0.0
-
-            if avg > 0:
-                non_recurring_items.append({
-                    'category': type_name,
-                    'destinataire': destinataire or '(unspecified)',
-                    'predicted': avg,
-                    'months_seen': len(monthly_totals),
-                    'is_recurring': False,
-                })
-
-        return recurring_items, non_recurring_items
-
-    # ------------------------------------------------------------------
-    # Trend (linear regression on monthly totals — for display only)
-    # ------------------------------------------------------------------
-
-    def _compute_trend(self) -> Dict:
-        """Run linear regression on complete-month totals to get the spend trend."""
-        default = {'trend': 'stable', 'slope': 0.0, 'base_prediction': 0.0,
-                   'history': [], 'method': 'none'}
-
-        if self.df.empty or 'date' not in self.df.columns:
-            return default
-
-        expenses = self.df[self.df['category'] == 'expense'].copy()
-        if expenses.empty:
-            return default
-
-        expenses['spending'] = expenses['amount'].abs()
-        expenses['month'] = expenses['date'].dt.to_period('M')
-        current_month = pd.Period(datetime.now(), freq='M')
-
-        training = expenses[expenses['month'] < current_month]
-        if training.empty:
-            training = expenses
-
-        monthly = training.groupby('month')['spending'].sum().reset_index()
-        monthly.rename(columns={'spending': 'amount'}, inplace=True)
-        monthly['month'] = monthly['month'].astype(str)
-
-        n = len(monthly)
-        slope = 0.0
-        base_prediction = float(monthly['amount'].mean()) if n > 0 else 0.0
-        trend = 'stable'
-        method = 'average'
-
-        if n >= 3:
-            monthly['month_num'] = range(n)
-            x = monthly['month_num'].values
-            y = monthly['amount'].values
-
-            sum_x = np.sum(x)
-            sum_y = np.sum(y)
-            sum_xy = np.sum(x * y)
-            sum_x2 = np.sum(x ** 2)
-            denom = n * sum_x2 - sum_x ** 2
-
-            if denom != 0:
-                slope = float((n * sum_xy - sum_x * sum_y) / denom)
-                intercept = (float(sum_y) - slope * float(sum_x)) / n
-                base_prediction = max(0.0, slope * n + intercept)
-                mean_monthly = float(np.mean(y))
-                if mean_monthly > 0:
-                    rel = slope / mean_monthly
-                    trend = 'increasing' if rel > 0.02 else 'decreasing' if rel < -0.02 else 'stable'
-                method = 'linear_regression'
-
-        history = convert_numpy_types(monthly[['month', 'amount']].to_dict('records'))
+        bills_total = sum(b['amount'] for b in bills)
+        variable_total = sum(v for v in variable.values() if v > 0)
         return {
-            'trend': trend,
-            'slope': float(slope),
-            'base_prediction': float(base_prediction),
-            'history': history,
-            'method': method,
+            'total': bills_total + variable_total,
+            'bills_total': bills_total,
+            'variable_total': variable_total,
+            'variable_by_category': variable,
+            'bills': [
+                {'payee': b['payee'], 'category': b['category'], 'amount': b['amount'],
+                 'day': b['day'], 'kind': b['kind']}
+                for b in sorted(bills, key=lambda b: (b['day'], b['payee']))
+            ],
+            'monthly_bills': monthly,
+            'periodic_bills': periodic,
+            'seasonal_factor': seasonal,
+            'by_category': list(by_category.values()),
+        }
+
+    def _find_bills(self, history: pd.DataFrame, cutoff: pd.Period) -> Tuple[List[Dict], List[Dict]]:
+        """Recipients paid on a rhythm: every month, or every quarter or year.
+
+        A bill is paid once per period for a similar amount. A recipient paid
+        several times a month (groceries) is variable spending, not a bill.
+        """
+        monthly: List[Dict] = []
+        periodic: List[Dict] = []
+        if history.empty:
+            return monthly, periodic
+
+        window = [cutoff - k for k in range(self.RECURRING_WINDOW, 0, -1)
+                  if cutoff - k >= self.first_month]
+
+        for (payee, category), group in history.groupby(['payee', 'category']):
+            per_month = group.groupby('month').agg(
+                spending=('spending', 'sum'), count=('spending', 'size'), day=('day', 'median'))
+            per_month = per_month[per_month['spending'] > 0]
+            if per_month.empty or per_month['count'].median() > 1:
+                continue
+            paid = list(per_month.index)
+
+            # Monthly: nearly every recent month, still being paid.
+            considered = [m for m in window if m >= paid[0]]
+            present = [m for m in considered if m in per_month.index]
+            if (len(present) >= self.RECURRING_MIN_MONTHS
+                    and len(present) >= len(considered) - 1
+                    and present[-1] >= cutoff - 2):
+                recent = per_month.loc[present[-3:]]
+                amount = float(recent['spending'].median())
+                if self._steady(recent['spending'], amount):
+                    monthly.append({'payee': payee, 'category': category, 'amount': amount,
+                                    'day': int(round(recent['day'].median())), 'kind': 'monthly'})
+                    continue
+
+            # Periodic: a steady gap of about a quarter or a year.
+            if len(paid) >= 2:
+                gaps = [(later - earlier).n for earlier, later in zip(paid, paid[1:])]
+                for period, kind in self.PERIODS.items():
+                    if all(abs(gap - period) <= 1 for gap in gaps):
+                        last = per_month.iloc[-1]
+                        amount = float(last['spending'])
+                        if self._steady(per_month['spending'], float(per_month['spending'].median())):
+                            periodic.append({'payee': payee, 'category': category,
+                                             'amount': amount, 'day': int(round(last['day'])),
+                                             'kind': kind, 'due_month': paid[-1] + period})
+                        break
+        return monthly, periodic
+
+    def _steady(self, amounts: pd.Series, reference: float) -> bool:
+        return reference > 0 and all(
+            abs(float(a) - reference) <= self.AMOUNT_TOLERANCE * reference for a in amounts)
+
+    def _lookback(self, cutoff: pd.Period) -> List[pd.Period]:
+        return [cutoff - k for k in range(self.LOOKBACK_MONTHS, 0, -1)
+                if cutoff - k >= self.first_month]
+
+    def _variable_by_category(self, history: pd.DataFrame, cutoff: pd.Period,
+                              bill_keys: set) -> Dict[str, float]:
+        """Average monthly spending per category, one-offs capped."""
+        months = self._lookback(cutoff)
+        if not months:
+            return {}
+        rows = self._without_bills(history[history['month'].isin(months)], bill_keys)
+        result = {}
+        for category, group in rows.groupby('category'):
+            totals = group.groupby('month')['spending'].sum().clip(lower=0)
+            result[category] = self._capped_total(totals) / len(months)
+        return result
+
+    def _capped_total(self, month_totals: pd.Series) -> float:
+        spent = month_totals[month_totals > 0]
+        if spent.empty:
+            return 0.0
+        cap = self.OUTLIER_CAP * float(spent.median())
+        return float(spent.clip(upper=cap).sum())
+
+    def _without_bills(self, rows: pd.DataFrame, bill_keys: set) -> pd.DataFrame:
+        if rows.empty or not bill_keys:
+            return rows
+        keys = list(zip(rows['payee'], rows['category']))
+        return rows[[key not in bill_keys for key in keys]]
+
+    def _seasonal_factor(self, history: pd.DataFrame, target: pd.Period,
+                         cutoff: pd.Period, bill_keys: set) -> float:
+        """How the same month last year compared with the year before it.
+
+        Needs that month and the twelve before it in the history; otherwise 1.
+        Kept within SEASONAL_RANGE, since a single month is a noisy signal.
+        """
+        last_year = target - 12
+        before = [last_year - k for k in range(12, 0, -1)]
+        if self.first_month is None or before[0] < self.first_month or last_year >= cutoff:
+            return 1.0
+        rows = self._without_bills(history, bill_keys)
+        per_month = rows.groupby('month')['spending'].sum().clip(lower=0)
+        baseline = float(sum(per_month.get(m, 0.0) for m in before)) / 12
+        if baseline <= 0:
+            return 1.0
+        ratio = float(per_month.get(last_year, 0.0)) / baseline
+        low, high = self.SEASONAL_RANGE
+        return min(high, max(low, ratio))
+
+    # ------------------------------------------------------------------
+    # Accuracy, trend, this month
+    # ------------------------------------------------------------------
+
+    def _actual(self, month: pd.Period) -> float:
+        spent = self.expenses[self.expenses['month'] == month]['spending'].sum()
+        return max(0.0, float(spent))
+
+    def _backtest(self) -> Optional[Dict]:
+        """Replay the forecast on recent months, each from the data before it."""
+        if self.first_month is None:
+            return None
+        months = []
+        for k in range(self.BACKTEST_MONTHS, 0, -1):
+            month = self.current_month - k
+            if (month - self.first_month).n < self.MIN_BACKTEST_HISTORY:
+                continue
+            months.append({'month': str(month), 'predicted': self._forecast(month)['total'],
+                           'actual': self._actual(month)})
+        if len(months) < 2:
+            return None
+        errors = [abs(m['predicted'] - m['actual']) for m in months]
+        typical_error = float(np.mean(errors))
+        mean_actual = float(np.mean([m['actual'] for m in months]))
+        return {
+            'typical_error': typical_error,
+            'typical_error_pct': typical_error / mean_actual if mean_actual > 0 else None,
+            'months': months,
+        }
+
+    def _trend(self) -> Dict:
+        """Last three complete months against the three before them."""
+        history = [{'month': str(self.current_month - k), 'amount': self._actual(self.current_month - k)}
+                   for k in range(self.LOOKBACK_MONTHS, 0, -1)
+                   if self.first_month is not None and self.current_month - k >= self.first_month]
+        trend, change = 'stable', 0.0
+        if len(history) >= 6:
+            recent = np.mean([h['amount'] for h in history[-3:]])
+            earlier = np.mean([h['amount'] for h in history[-6:-3]])
+            if earlier > 0:
+                change = float(recent / earlier - 1)
+                trend = 'increasing' if change > 0.05 else 'decreasing' if change < -0.05 else 'stable'
+        return {'trend': trend, 'trend_change': change, 'history': history}
+
+    def _this_month_projection(self) -> Dict:
+        """Spent so far this month, plus what is still expected by its end."""
+        month = self.current_month
+        forecast = self._forecast(month)
+        rows = self.expenses[self.expenses['month'] == month]
+        rows = rows[rows['day'] <= self.today.day]
+        spent = max(0.0, float(rows['spending'].sum()))
+        paid = set(zip(rows['payee'], rows['category']))
+
+        bills_left = [b for b in forecast['bills'] if (b['payee'], b['category']) not in paid]
+        days_in_month = monthrange(self.today.year, self.today.month)[1]
+        days_left = days_in_month - self.today.day
+        variable_left = forecast['variable_total'] * days_left / days_in_month
+        expected_left = sum(b['amount'] for b in bills_left) + variable_left
+        return {
+            'month': str(month),
+            'spent': spent,
+            'expected_remaining': expected_left,
+            'projected': spent + expected_left,
+            'bills_remaining': bills_left,
+            'days_left': days_left,
         }
 
     # ------------------------------------------------------------------
     # Budget comparison
     # ------------------------------------------------------------------
 
-    def _compare_with_budgets(self, predicted_total: float) -> Dict:
-        if not self.budgets:
-            return {'has_budget': False, 'total_budget': 0, 'over_budget': False, 'difference': 0}
+    def _compare_with_budgets(self, by_category: List[Dict]) -> Dict:
+        """Compare each budgeted category with its forecast.
 
-        total_budget = sum(
-            b['amount'] if b.get('period') == 'monthly' else b['amount'] / 12
-            for b in self.budgets
-        )
-
-        if total_budget <= 0:
+        Only categories that have a budget take part: set a budget for Food
+        alone and the rest of the forecast has nothing to be over.
+        """
+        budgets: Dict[str, float] = {}
+        for b in self.budgets:
+            monthly = b['amount'] if b.get('period', 'monthly') == 'monthly' else b['amount'] / 12
+            category = b.get('type_name')
+            if category:
+                budgets[category] = budgets.get(category, 0.0) + float(monthly)
+        budgets = {c: v for c, v in budgets.items() if v > 0}
+        if not budgets:
             return {'has_budget': False, 'total_budget': 0, 'over_budget': False,
-                    'difference': 0, 'percentage': None}
+                    'difference': 0, 'percentage': None, 'categories': []}
 
-        over_budget = predicted_total > total_budget
-        difference = predicted_total - total_budget
-        percentage = predicted_total / total_budget * 100
-
+        predicted = {row['category']: row['predicted'] for row in by_category}
+        categories = []
+        for category, budget in sorted(budgets.items()):
+            forecast = float(predicted.get(category, 0.0))
+            categories.append({
+                'category': category, 'budget': budget, 'predicted': forecast,
+                'difference': forecast - budget, 'over': forecast > budget,
+            })
+        total_budget = sum(budgets.values())
+        total_forecast = sum(c['predicted'] for c in categories)
+        over = total_forecast > total_budget
         return {
             'has_budget': True,
-            'total_budget': float(total_budget),
-            'over_budget': bool(over_budget),
-            'difference': float(difference),
-            'percentage': float(percentage),
-            'status': 'over' if over_budget else 'under',
+            'total_budget': total_budget,
+            'predicted_budgeted': total_forecast,
+            'over_budget': over,
+            'difference': total_forecast - total_budget,
+            'percentage': total_forecast / total_budget * 100,
+            'status': 'over' if over else 'under',
+            'categories': categories,
+            'over_categories': [c['category'] for c in categories if c['over']],
         }
 
     # ------------------------------------------------------------------
@@ -349,15 +450,20 @@ class SpendingPredictor:
     def _empty_result(self) -> Dict:
         return {
             'predicted': 0,
+            'target_month': str(self.current_month + 1),
             'recurring_total': 0,
             'non_recurring_total': 0,
-            'base_prediction': 0,
-            'confidence': 0,
-            'trend': 'stable',
-            'slope': 0.0,
+            'range': None,
+            'accuracy': None,
+            'upcoming_bills': [],
+            'seasonal_factor': 1.0,
+            'this_month': None,
             'method': 'none',
+            'trend': 'stable',
+            'trend_change': 0.0,
             'history': [],
             'pending_amount': 0,
             'budget_comparison': {'has_budget': False, 'total_budget': 0,
-                                   'over_budget': False, 'difference': 0},
+                                  'over_budget': False, 'difference': 0,
+                                  'percentage': None, 'categories': []},
         }
