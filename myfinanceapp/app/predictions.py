@@ -92,6 +92,18 @@ class SpendingPredictor:
         spread = accuracy['typical_error'] if accuracy else None
         total = forecast['total']
 
+        # Only the rest of the month is still uncertain, so the current
+        # month's range narrows as it goes: the typical monthly error, scaled
+        # to the share of the month left, and never below what is spent.
+        if spread is not None:
+            uncertainty = spread * this_month['days_left'] / this_month['days_in_month']
+            this_month['range'] = {
+                'low': max(this_month['spent'], this_month['projected'] - uncertainty),
+                'high': this_month['projected'] + uncertainty,
+            }
+        else:
+            this_month['range'] = None
+
         return convert_numpy_types({
             'predicted': total,
             'target_month': str(target),
@@ -334,6 +346,34 @@ class SpendingPredictor:
             'months': months,
         }
 
+    def review_month(self, month: str) -> Optional[Dict]:
+        """How the forecast for a past month compared with what was spent.
+
+        The month is forecast only from what came before it, as in the
+        accuracy check. None when it is not a past month, or when there is not
+        enough history before it to forecast.
+        """
+        period = pd.Period(month, freq='M')
+        if (self.first_month is None or period >= self.current_month
+                or (period - self.first_month).n < self.MIN_BACKTEST_HISTORY):
+            return None
+        forecast = self._forecast(period)
+        predicted = {row['category']: row['predicted'] for row in forecast['by_category']}
+        spent = (self.expenses[self.expenses['month'] == period]
+                 .groupby('category')['spending'].sum().clip(lower=0).to_dict())
+        categories = [
+            {'category': c, 'predicted': float(predicted.get(c, 0.0)), 'actual': float(spent.get(c, 0.0))}
+            for c in set(predicted) | set(spent)
+        ]
+        actual = self._actual(period)
+        return convert_numpy_types({
+            'month': str(period),
+            'predicted': forecast['total'],
+            'actual': actual,
+            'difference': actual - forecast['total'],
+            'categories': sorted(categories, key=lambda c: max(c['predicted'], c['actual']), reverse=True),
+        })
+
     def _trend(self) -> Dict:
         """Last three complete months against the three before them."""
         history = [{'month': str(self.current_month - k), 'amount': self._actual(self.current_month - k)}
@@ -385,6 +425,7 @@ class SpendingPredictor:
             'projected': spent + expected_left,
             'bills_remaining': bills_left,
             'days_left': days_left,
+            'days_in_month': days_in_month,
             'by_category': by_category,
         }
 

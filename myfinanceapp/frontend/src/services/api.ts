@@ -518,8 +518,11 @@ export const reportsAPI = {
     api.get("/api/reports/spending-by-category", { params }),
   getIncomeVsExpenses: (params?: Record<string, unknown>) =>
     api.get("/api/reports/income-vs-expenses", { params }),
-  getSpendingPrediction: (monthsAhead: number = 1) =>
-    api.get(`/api/reports/spending-prediction?months_ahead=${monthsAhead}`),
+  /** reviewMonth (YYYY-MM, a past month) adds its forecast vs what was spent. */
+  getSpendingPrediction: (monthsAhead: number = 1, reviewMonth?: string) =>
+    api.get("/api/reports/spending-prediction", {
+      params: { months_ahead: monthsAhead, review_month: reviewMonth },
+    }),
   getMonthlySummary: (params: ReportPeriodParams) =>
     api.get("/api/reports/monthly-summary", { params }),
   getTagReport: (tag: string, params?: Record<string, unknown>) =>

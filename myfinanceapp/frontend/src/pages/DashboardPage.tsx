@@ -255,14 +255,19 @@ export default function DashboardPage() {
     },
   });
 
-  // Fetch spending prediction
-  const { data: spendingPrediction } = useQuery({
-    queryKey: ["spending-prediction"],
+  // Fetch spending prediction. Viewing a past month also asks how the
+  // forecast for that month compared with what was actually spent.
+  const reviewMonth =
+    !isCurrentMonth && viewDate < today ? format(viewDate, "yyyy-MM") : undefined;
+  const { data: predictionData } = useQuery({
+    queryKey: ["spending-prediction", reviewMonth ?? "current"],
     queryFn: async () => {
-      const response = await reportsAPI.getSpendingPrediction(1);
-      return response.data.prediction;
+      const response = await reportsAPI.getSpendingPrediction(1, reviewMonth);
+      return response.data;
     },
   });
+  const spendingPrediction = predictionData?.prediction;
+  const predictionReview = predictionData?.review;
 
   // Fetch summary by owner for current month
   const { data: summaryByOwner } = useQuery({
@@ -1080,236 +1085,291 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {/* Spending Prediction */}
+      {/* Spending Prediction: the month in progress first, next month below.
+          A past month shows how its forecast compared with what was spent. */}
       {spendingPrediction && (
         <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
           <div className="flex items-center gap-2 mb-5">
             <Lightbulb className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold text-foreground">
-              Next Month Prediction
-              {spendingPrediction.target_month && (
-                <span className="text-foreground-muted font-normal">
-                  {" "}
-                  — {monthName(spendingPrediction.target_month)}
-                </span>
-              )}
+              Spending Prediction
             </h2>
           </div>
 
-          {/* Top row: forecast, likely range, measured accuracy */}
-          <div className="flex flex-wrap items-end gap-6 mb-5">
-            <div>
-              <p className="text-3xl font-bold text-primary">
-                {formatCurrency(spendingPrediction.predicted || 0)}
-              </p>
-              {spendingPrediction.range && (
-                <p className="text-xs text-foreground-muted mt-1">
-                  likely between {formatCurrency(spendingPrediction.range.low)}{" "}
-                  and {formatCurrency(spendingPrediction.range.high)}
+          {reviewMonth ? (
+            predictionReview ? (
+              <div>
+                <p className="text-sm text-foreground-muted mb-1">
+                  {monthName(predictionReview.month)}: forecast vs actually spent
                 </p>
-              )}
-              <p className="text-xs text-foreground-muted mt-1">
-                {spendingPrediction.trend === "increasing"
-                  ? `↑ Spending up ${Math.round((spendingPrediction.trend_change || 0) * 100)}% over the last 3 months`
-                  : spendingPrediction.trend === "decreasing"
-                    ? `↓ Spending down ${Math.round(Math.abs(spendingPrediction.trend_change || 0) * 100)}% over the last 3 months`
-                    : "→ Spending stable over the last 3 months"}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2 pb-1">
-              {spendingPrediction.accuracy ? (
-                <Badge
-                  variant={
-                    (spendingPrediction.accuracy.typical_error_pct ?? 1) <= 0.1
-                      ? "success"
-                      : "warning"
-                  }
-                  title={spendingPrediction.accuracy.months
-                    .map(
-                      (m: any) =>
-                        `${monthName(m.month)}: predicted ${formatCurrency(m.predicted)}, spent ${formatCurrency(m.actual)}`,
-                    )
-                    .join("\n")}
-                >
-                  Usually within ±
-                  {formatCurrency(spendingPrediction.accuracy.typical_error)}
-                  {spendingPrediction.accuracy.typical_error_pct != null &&
-                    ` (${Math.round(spendingPrediction.accuracy.typical_error_pct * 100)}%)`}
-                </Badge>
-              ) : (
-                <Badge variant="default">
-                  Not enough history yet to measure accuracy
-                </Badge>
-              )}
-            </div>
-          </div>
-
-          {/* Bills / variable split */}
-          {(spendingPrediction.recurring_total > 0 ||
-            spendingPrediction.non_recurring_total > 0) && (
-            <div className="grid grid-cols-2 gap-3 mb-5">
-              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-surface border border-border">
-                <RefreshCw className="w-4 h-4 text-primary shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-xs text-foreground-muted">Bills</p>
-                  <p className="text-sm font-semibold text-foreground truncate">
-                    {formatCurrency(spendingPrediction.recurring_total || 0)}
+                <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 mb-4">
+                  <p className="text-3xl font-bold text-foreground">
+                    {formatCurrency(predictionReview.actual)}
                   </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-surface border border-border">
-                <Shuffle className="w-4 h-4 text-foreground-muted shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-xs text-foreground-muted">
-                    Variable spending
-                    {spendingPrediction.seasonal_factor &&
-                      Math.abs(spendingPrediction.seasonal_factor - 1) >= 0.01 &&
-                      ` (${spendingPrediction.seasonal_factor > 1 ? "+" : "−"}${Math.round(Math.abs(spendingPrediction.seasonal_factor - 1) * 100)}% seasonal)`}
-                  </p>
-                  <p className="text-sm font-semibold text-foreground truncate">
-                    {formatCurrency(spendingPrediction.non_recurring_total || 0)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* The month in progress */}
-          {spendingPrediction.this_month && (
-            <div className="px-4 py-3 rounded-lg bg-surface border border-border mb-5">
-              <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
-                <p className="text-sm text-foreground">
-                  {monthName(spendingPrediction.this_month.month)}: spent{" "}
-                  <span className="font-semibold">
-                    {formatCurrency(spendingPrediction.this_month.spent)}
-                  </span>{" "}
-                  so far
-                </p>
-                <p className="text-sm text-foreground-muted">
-                  expected{" "}
-                  <span className="font-semibold text-foreground">
-                    {formatCurrency(spendingPrediction.this_month.projected)}
-                  </span>{" "}
-                  by month end · {spendingPrediction.this_month.days_left} day
-                  {spendingPrediction.this_month.days_left !== 1 ? "s" : ""} left
-                </p>
-              </div>
-              <div className="h-1.5 bg-background rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-primary/60 rounded-full"
-                  style={{
-                    width: `${
-                      spendingPrediction.this_month.projected > 0
-                        ? Math.min(
-                            100,
-                            (spendingPrediction.this_month.spent /
-                              spendingPrediction.this_month.projected) *
-                              100,
-                          )
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
-              {spendingPrediction.this_month.bills_remaining?.length > 0 && (
-                <p className="text-xs text-foreground-muted mt-2">
-                  Still to come:{" "}
-                  {spendingPrediction.this_month.bills_remaining
-                    .map(
-                      (b: any) => `${b.payee} ${formatCurrency(b.amount)}`,
-                    )
-                    .join(" · ")}
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Bills expected next month */}
-          {spendingPrediction.upcoming_bills?.length > 0 && (
-            <div className="mb-5">
-              <p className="text-xs font-medium text-foreground-muted uppercase tracking-wide mb-3">
-                Bills expected
-              </p>
-              <div className="divide-y divide-border rounded-lg border border-border">
-                {spendingPrediction.upcoming_bills.map((bill: any) => (
-                  <div
-                    key={`${bill.payee}-${bill.category}`}
-                    className="flex items-center gap-3 px-3 py-2 text-sm"
-                  >
-                    <span className="w-10 shrink-0 text-foreground-muted tabular-nums">
-                      {ordinal(bill.day)}
+                  <p className="text-sm text-foreground-muted">
+                    forecast {formatCurrency(predictionReview.predicted)} ·{" "}
+                    <span
+                      className={
+                        Math.abs(predictionReview.difference) <=
+                        0.1 * Math.max(predictionReview.predicted, 1)
+                          ? "text-success"
+                          : "text-warning"
+                      }
+                    >
+                      {predictionReview.difference >= 0 ? "+" : "−"}
+                      {formatCurrency(Math.abs(predictionReview.difference))}{" "}
+                      {predictionReview.difference >= 0 ? "more" : "less"} than
+                      forecast
                     </span>
-                    <span className="flex-1 min-w-0 truncate text-foreground">
-                      {bill.payee}
-                      <span className="text-foreground-muted">
-                        {" "}
-                        · {bill.category}
+                  </p>
+                </div>
+                <div className="divide-y divide-border rounded-lg border border-border">
+                  {predictionReview.categories.slice(0, 8).map((c: any) => (
+                    <div
+                      key={c.category}
+                      className="flex items-center gap-3 px-3 py-2 text-sm"
+                    >
+                      <span className="flex-1 min-w-0 truncate text-foreground">
+                        {c.category}
                       </span>
+                      <span className="w-40 text-right text-foreground-muted shrink-0">
+                        forecast {formatCurrency(c.predicted)}
+                      </span>
+                      <span className="w-32 text-right text-foreground shrink-0 tabular-nums">
+                        {formatCurrency(c.actual)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-foreground-muted">
+                Not enough history before {format(viewDate, "MMMM yyyy")} to
+                review its forecast.
+              </p>
+            )
+          ) : (
+            <>
+              {/* The month in progress */}
+              {spendingPrediction.this_month && (
+                <div className="mb-6">
+                  <p className="text-sm text-foreground-muted mb-1">
+                    {monthName(spendingPrediction.this_month.month)}: expected
+                    by month end
+                  </p>
+                  <div className="flex flex-wrap items-end gap-x-6 gap-y-1 mb-3">
+                    <p className="text-3xl font-bold text-primary">
+                      {formatCurrency(spendingPrediction.this_month.projected)}
+                    </p>
+                    {spendingPrediction.this_month.range && (
+                      <p className="text-xs text-foreground-muted pb-1">
+                        likely between{" "}
+                        {formatCurrency(spendingPrediction.this_month.range.low)} and{" "}
+                        {formatCurrency(spendingPrediction.this_month.range.high)}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap justify-between gap-2 text-sm mb-2">
+                    <span className="text-foreground">
+                      <span className="font-semibold">
+                        {formatCurrency(spendingPrediction.this_month.spent)}
+                      </span>{" "}
+                      spent so far
                     </span>
-                    {bill.kind !== "monthly" && (
-                      <Badge variant="info" size="sm">
-                        {bill.kind}
+                    <span className="text-foreground-muted">
+                      {spendingPrediction.this_month.days_left} day
+                      {spendingPrediction.this_month.days_left !== 1 ? "s" : ""} left
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-surface rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary/60 rounded-full"
+                      style={{
+                        width: `${
+                          spendingPrediction.this_month.projected > 0
+                            ? Math.min(
+                                100,
+                                (spendingPrediction.this_month.spent /
+                                  spendingPrediction.this_month.projected) *
+                                  100,
+                              )
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                  {spendingPrediction.this_month.bills_remaining?.length > 0 && (
+                    <p className="text-xs text-foreground-muted mt-2">
+                      Still to come:{" "}
+                      {spendingPrediction.this_month.bills_remaining
+                        .map(
+                          (b: any) =>
+                            `${b.payee} ${formatCurrency(b.amount)} (usually on the ${ordinal(b.day)})`,
+                        )
+                        .join(" · ")}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Budgets: this month first, as in Budget Overview; next month after */}
+              {spendingPrediction.budget_comparison?.has_budget && (
+                <div className="mb-6">
+                  <p className="text-xs font-medium text-foreground-muted uppercase tracking-wide mb-3">
+                    Budgets
+                  </p>
+                  <div className="divide-y divide-border rounded-lg border border-border">
+                    {spendingPrediction.budget_comparison.categories.map((c: any) => (
+                      <div key={c.label} className="px-3 py-2.5 text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-medium text-foreground">
+                            {c.label}
+                          </span>
+                          <span className="text-foreground-muted shrink-0">
+                            budget {formatCurrency(c.budget)}
+                          </span>
+                        </div>
+                        <p
+                          className={`mt-1 ${c.this_month_over ? "text-error" : "text-success"}`}
+                        >
+                          {monthName(spendingPrediction.budget_comparison.this_month)}:{" "}
+                          {formatCurrency(c.this_month_spent)} spent ·{" "}
+                          {formatCurrency(c.this_month_projected)} expected by month
+                          end
+                          {c.this_month_over
+                            ? ` (+${formatCurrency(c.this_month_projected - c.budget)})`
+                            : " · within budget"}
+                        </p>
+                        <p className="text-xs text-foreground-muted mt-0.5">
+                          {monthName(spendingPrediction.budget_comparison.target_month)}{" "}
+                          forecast {formatCurrency(c.predicted)}
+                          {c.over
+                            ? ` · over by ${formatCurrency(c.difference)}`
+                            : " · within budget"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Next month */}
+              <div className="pt-5 border-t border-border">
+                <p className="text-sm text-foreground-muted mb-1">
+                  {spendingPrediction.target_month
+                    ? `${monthName(spendingPrediction.target_month)} forecast`
+                    : "Next month forecast"}
+                </p>
+                <div className="flex flex-wrap items-end gap-x-6 gap-y-2 mb-4">
+                  <div>
+                    <p className="text-2xl font-bold text-foreground">
+                      {formatCurrency(spendingPrediction.predicted || 0)}
+                    </p>
+                    {spendingPrediction.range && (
+                      <p className="text-xs text-foreground-muted mt-1">
+                        likely between {formatCurrency(spendingPrediction.range.low)}{" "}
+                        and {formatCurrency(spendingPrediction.range.high)}
+                      </p>
+                    )}
+                    <p className="text-xs text-foreground-muted mt-1">
+                      {spendingPrediction.trend === "increasing"
+                        ? `↑ Spending up ${Math.round((spendingPrediction.trend_change || 0) * 100)}% over the last 3 months`
+                        : spendingPrediction.trend === "decreasing"
+                          ? `↓ Spending down ${Math.round(Math.abs(spendingPrediction.trend_change || 0) * 100)}% over the last 3 months`
+                          : "→ Spending stable over the last 3 months"}
+                    </p>
+                  </div>
+                  <div className="pb-1">
+                    {spendingPrediction.accuracy ? (
+                      <Badge
+                        variant={
+                          (spendingPrediction.accuracy.typical_error_pct ?? 1) <= 0.1
+                            ? "success"
+                            : "warning"
+                        }
+                        title={spendingPrediction.accuracy.months
+                          .map(
+                            (m: any) =>
+                              `${monthName(m.month)}: predicted ${formatCurrency(m.predicted)}, spent ${formatCurrency(m.actual)}`,
+                          )
+                          .join("\n")}
+                      >
+                        Usually within ±
+                        {formatCurrency(spendingPrediction.accuracy.typical_error)}
+                        {spendingPrediction.accuracy.typical_error_pct != null &&
+                          ` (${Math.round(spendingPrediction.accuracy.typical_error_pct * 100)}%)`}
+                      </Badge>
+                    ) : (
+                      <Badge variant="default">
+                        Not enough history yet to measure accuracy
                       </Badge>
                     )}
-                    <span className="w-24 text-right shrink-0 text-foreground tabular-nums">
-                      {formatCurrency(bill.amount)}
-                    </span>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                </div>
 
-          {/* Budgets: only the categories that have one, per owner where
-              the budget is for one person — the same rules as Budget Overview */}
-          {spendingPrediction.budget_comparison?.has_budget && (
-            <div className="mb-5">
-              <div className="flex items-baseline justify-between gap-3 mb-3">
-                <p className="text-xs font-medium text-foreground-muted uppercase tracking-wide">
-                  Budgets —{" "}
-                  {monthName(spendingPrediction.budget_comparison.target_month)}{" "}
-                  forecast
-                </p>
-                <p className="text-xs text-foreground-muted">
-                  {formatCurrency(
-                    spendingPrediction.budget_comparison.predicted_budgeted || 0,
-                  )}{" "}
-                  of{" "}
-                  {formatCurrency(spendingPrediction.budget_comparison.total_budget)}
-                </p>
-              </div>
-              <div className="divide-y divide-border rounded-lg border border-border">
-                {spendingPrediction.budget_comparison.categories.map((c: any) => (
-                  <div key={c.label} className="px-3 py-2.5 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="font-medium text-foreground">{c.label}</span>
-                      <span className="text-foreground-muted shrink-0">
-                        budget {formatCurrency(c.budget)}
-                      </span>
+                {(spendingPrediction.recurring_total > 0 ||
+                  spendingPrediction.non_recurring_total > 0) && (
+                  <div className="grid grid-cols-2 gap-3 mb-5">
+                    <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-surface border border-border">
+                      <RefreshCw className="w-4 h-4 text-primary shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs text-foreground-muted">Bills</p>
+                        <p className="text-sm font-semibold text-foreground truncate">
+                          {formatCurrency(spendingPrediction.recurring_total || 0)}
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap justify-between gap-x-4 gap-y-0.5 mt-1 text-xs">
-                      <span
-                        className={
-                          c.this_month_over ? "text-error" : "text-foreground-muted"
-                        }
-                      >
-                        {monthName(spendingPrediction.budget_comparison.this_month)}:{" "}
-                        {formatCurrency(c.this_month_spent)} spent ·{" "}
-                        {formatCurrency(c.this_month_projected)} expected by month end
-                      </span>
-                      <span className={c.over ? "text-error" : "text-success"}>
-                        {monthName(spendingPrediction.budget_comparison.target_month)}{" "}
-                        forecast {formatCurrency(c.predicted)}
-                        {c.over
-                          ? ` (+${formatCurrency(c.difference)})`
-                          : " · within budget"}
-                      </span>
+                    <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-surface border border-border">
+                      <Shuffle className="w-4 h-4 text-foreground-muted shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs text-foreground-muted">
+                          Variable spending
+                          {spendingPrediction.seasonal_factor &&
+                            Math.abs(spendingPrediction.seasonal_factor - 1) >= 0.01 &&
+                            ` (${spendingPrediction.seasonal_factor > 1 ? "+" : "−"}${Math.round(Math.abs(spendingPrediction.seasonal_factor - 1) * 100)}% seasonal)`}
+                        </p>
+                        <p className="text-sm font-semibold text-foreground truncate">
+                          {formatCurrency(spendingPrediction.non_recurring_total || 0)}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                )}
+
+                {spendingPrediction.upcoming_bills?.length > 0 && (
+                  <div className="mb-5">
+                    <p className="text-xs font-medium text-foreground-muted uppercase tracking-wide mb-3">
+                      Bills expected
+                    </p>
+                    <div className="divide-y divide-border rounded-lg border border-border">
+                      {spendingPrediction.upcoming_bills.map((bill: any) => (
+                        <div
+                          key={`${bill.payee}-${bill.category}`}
+                          className="flex items-center gap-3 px-3 py-2 text-sm"
+                        >
+                          <span className="w-10 shrink-0 text-foreground-muted tabular-nums">
+                            {ordinal(bill.day)}
+                          </span>
+                          <span className="flex-1 min-w-0 truncate text-foreground">
+                            {bill.payee}
+                            <span className="text-foreground-muted">
+                              {" "}
+                              · {bill.category}
+                            </span>
+                          </span>
+                          {bill.kind !== "monthly" && (
+                            <Badge variant="info" size="sm">
+                              {bill.kind}
+                            </Badge>
+                          )}
+                          <span className="w-24 text-right shrink-0 text-foreground tabular-nums">
+                            {formatCurrency(bill.amount)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
           {/* Category breakdown */}
           {spendingPrediction.category_breakdown?.length > 0 && (
@@ -1373,6 +1433,9 @@ export default function DashboardPage() {
                   })}
               </div>
             </div>
+          )}
+              </div>
+            </>
           )}
         </Card>
       )}

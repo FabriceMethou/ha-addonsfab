@@ -1,6 +1,7 @@
 """
 Reports API endpoints
 """
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
@@ -220,6 +221,7 @@ def income_vs_expenses(
 @router.get("/spending-prediction")
 def spending_prediction(
     months_ahead: int = 1,
+    review_month: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
     """Predict spending for upcoming months.
@@ -227,7 +229,12 @@ def spending_prediction(
     Bills (monthly, or quarterly/yearly in the month they fall due), variable
     spending per category, the measured accuracy of the method on recent
     months, and a projection for the month in progress. See predictions.py.
+
+    `review_month` (YYYY-MM, a past month) adds how the forecast for that month
+    compared with what was actually spent.
     """
+    if review_month and not re.fullmatch(r"\d{4}-\d{2}", review_month):
+        raise HTTPException(status_code=400, detail="review_month must be YYYY-MM")
     try:
         display_currency = db.get_preference('display_currency', 'EUR')
         exchange_rates = db.get_exchange_rates_map()
@@ -262,6 +269,7 @@ def spending_prediction(
         return {
             "months_ahead": months_ahead,
             "prediction": {**prediction, "category_breakdown": category_breakdown},
+            "review": predictor.review_month(review_month) if review_month else None,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")

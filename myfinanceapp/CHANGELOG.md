@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.6.0
+
+**Spending Prediction: the current month first**
+- The dashboard card is now **Spending Prediction** and leads with the **month in progress**: what it is expected to total by month end, with a likely range that narrows as the month goes on, what is spent so far, the days left, and the bills still to come
+- Budgets are compared with the **current month** first (spent so far, expected by month end), like Budget Overview, with next month's forecast as a second line
+- **Next month** follows as its own section: the forecast, its range and measured accuracy, bills and variable spending, the bills expected (yearly ones included), and the breakdown by category
+- Going back to a **past month** on the dashboard turns the card into a review: what that month was forecast (from the data before it) against what was actually spent, category by category, so you can see how far to trust the forecast
+
 ## 2.5.2
 
 **The prediction and Budget Overview now agree**

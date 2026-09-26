@@ -233,3 +233,48 @@ def test_transfers_and_income_are_ignored():
         {"transaction_date": "2026-08-25", "amount": 3000.0, "destinataire": "Employer",
          "type_name": "Salary", "category": "income"}]
     assert predict(rows)["predicted"] == pytest.approx(predict(household())["predicted"])
+
+
+# ── the current month first, past months reviewed ────────────────────────────
+
+def test_the_current_month_range_narrows_with_the_days_left():
+    rows = household() + [tx("2026-08-14", -1500.0, "Car garage", "Transport"),
+                          tx("2026-09-01", -900.0, "Landlord", "Housing")]
+    result = predict(rows)
+    this_month, error = result["this_month"], result["accuracy"]["typical_error"]
+    assert (this_month["days_left"], this_month["days_in_month"]) == (5, 30)
+    assert this_month["range"]["high"] == pytest.approx(this_month["projected"] + error * 5 / 30)
+    assert this_month["range"]["low"] == pytest.approx(this_month["projected"] - error * 5 / 30)
+
+
+def test_the_current_month_range_never_drops_below_what_is_spent():
+    rows = household() + [tx("2026-08-14", -1500.0, "Car garage", "Transport"),
+                          tx("2026-09-01", -900.0, "Landlord", "Housing")]
+    this_month = predict(rows, today=date(2026, 9, 2))["this_month"]
+    assert this_month["range"]["low"] >= this_month["spent"]
+
+
+def test_a_past_month_is_reviewed_against_what_was_spent():
+    rows = household() + [tx("2026-08-14", -1500.0, "Car garage", "Transport")]
+    review = SpendingPredictor(rows, today=TODAY).review_month("2026-08")
+    assert review["predicted"] == pytest.approx(900 + 45 + 260)
+    assert review["actual"] == pytest.approx(900 + 45 + 260 + 1500)
+    assert review["difference"] == pytest.approx(1500)
+    transport = next(c for c in review["categories"] if c["category"] == "Transport")
+    assert (transport["predicted"], transport["actual"]) == (0.0, 1500.0)
+
+
+def test_only_past_months_with_history_before_them_are_reviewed():
+    predictor = SpendingPredictor(household(), today=TODAY)
+    assert predictor.review_month("2026-09") is None          # the current month
+    assert predictor.review_month("2026-11") is None          # the future
+    assert predictor.review_month("2024-11") is None          # nothing to forecast from
+
+
+def test_the_api_refuses_a_malformed_review_month():
+    from fastapi import HTTPException
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
+    from api import reports as reports_api
+    with pytest.raises(HTTPException) as err:
+        reports_api.spending_prediction(review_month="2026/08", current_user=None)
+    assert err.value.status_code == 400
