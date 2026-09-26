@@ -87,6 +87,7 @@ class SpendingPredictor:
         target = self.current_month + months_ahead
         forecast = self._forecast(target)
         accuracy = self._backtest()
+        this_month = self._this_month_projection()
 
         spread = accuracy['typical_error'] if accuracy else None
         total = forecast['total']
@@ -101,10 +102,11 @@ class SpendingPredictor:
             'accuracy': accuracy,
             'upcoming_bills': forecast['bills'],
             'seasonal_factor': forecast['seasonal_factor'],
-            'this_month': self._this_month_projection(),
+            'this_month': this_month,
             'method': 'bills_and_variable',
             **self._trend(),
-            'budget_comparison': self._compare_with_budgets(forecast['by_category']),
+            'budget_comparison': self._compare_with_budgets(
+                target, forecast['by_category'], this_month['by_category']),
             'pending_amount': float(sum(
                 abs(p['amount']) for p in self.pending if p.get('category') == 'expense')),
         })
@@ -121,7 +123,7 @@ class SpendingPredictor:
     # ------------------------------------------------------------------
 
     def _prepare_expenses(self) -> pd.DataFrame:
-        columns = ['month', 'day', 'spending', 'payee', 'category']
+        columns = ['month', 'day', 'spending', 'payee', 'category', 'owner']
         if self.df.empty or 'category' not in self.df.columns:
             return pd.DataFrame(columns=columns)
         rows = self.df[self.df['category'] == 'expense'].copy()
@@ -135,12 +137,20 @@ class SpendingPredictor:
                          if 'destinataire' in rows.columns else '')
         rows['payee'] = rows['payee'].replace('', '(unspecified)')
         rows['category'] = rows['type_name'].fillna('Other')
+        # Transaction owner when set, else the account's; lets a budget set
+        # for one person be compared with that person's spending only.
+        rows['owner'] = rows['owner_id'] if 'owner_id' in rows.columns else None
         return rows[columns]
 
-    def _forecast(self, target: pd.Period) -> Dict:
-        """Predict `target` from complete months before it (and before today)."""
+    def _forecast(self, target: pd.Period, expenses: Optional[pd.DataFrame] = None) -> Dict:
+        """Predict `target` from complete months before it (and before today).
+
+        `expenses` narrows the forecast to a subset, such as one owner's.
+        """
+        if expenses is None:
+            expenses = self.expenses
         cutoff = min(target, self.current_month)
-        history = self.expenses[self.expenses['month'] < cutoff]
+        history = expenses[expenses['month'] < cutoff]
 
         monthly, periodic = self._find_bills(history, cutoff)
         bills = list(monthly)
@@ -338,20 +348,36 @@ class SpendingPredictor:
                 trend = 'increasing' if change > 0.05 else 'decreasing' if change < -0.05 else 'stable'
         return {'trend': trend, 'trend_change': change, 'history': history}
 
-    def _this_month_projection(self) -> Dict:
-        """Spent so far this month, plus what is still expected by its end."""
+    def _this_month_projection(self, expenses: Optional[pd.DataFrame] = None) -> Dict:
+        """Spent so far this month, plus what is still expected by its end.
+
+        Also broken down by category, for the budgets.
+        """
+        if expenses is None:
+            expenses = self.expenses
         month = self.current_month
-        forecast = self._forecast(month)
-        rows = self.expenses[self.expenses['month'] == month]
+        forecast = self._forecast(month, expenses)
+        rows = expenses[expenses['month'] == month]
         rows = rows[rows['day'] <= self.today.day]
-        spent = max(0.0, float(rows['spending'].sum()))
         paid = set(zip(rows['payee'], rows['category']))
 
         bills_left = [b for b in forecast['bills'] if (b['payee'], b['category']) not in paid]
         days_in_month = monthrange(self.today.year, self.today.month)[1]
         days_left = days_in_month - self.today.day
-        variable_left = forecast['variable_total'] * days_left / days_in_month
-        expected_left = sum(b['amount'] for b in bills_left) + variable_left
+        share_left = days_left / days_in_month
+
+        spent_by_category = rows.groupby('category')['spending'].sum().clip(lower=0).to_dict()
+        by_category: Dict[str, Dict] = {}
+        for category in set(spent_by_category) | set(forecast['variable_by_category']) \
+                | {b['category'] for b in bills_left}:
+            spent = float(spent_by_category.get(category, 0.0))
+            left = (sum(b['amount'] for b in bills_left if b['category'] == category)
+                    + max(0.0, forecast['variable_by_category'].get(category, 0.0)) * share_left)
+            by_category[category] = {'spent': spent, 'projected': spent + left}
+
+        spent = max(0.0, float(rows['spending'].sum()))
+        expected_left = (sum(b['amount'] for b in bills_left)
+                         + forecast['variable_total'] * share_left)
         return {
             'month': str(month),
             'spent': spent,
@@ -359,42 +385,73 @@ class SpendingPredictor:
             'projected': spent + expected_left,
             'bills_remaining': bills_left,
             'days_left': days_left,
+            'by_category': by_category,
         }
 
     # ------------------------------------------------------------------
     # Budget comparison
     # ------------------------------------------------------------------
 
-    def _compare_with_budgets(self, by_category: List[Dict]) -> Dict:
-        """Compare each budgeted category with its forecast.
+    def _compare_with_budgets(self, target: pd.Period, by_category: List[Dict],
+                              this_month_by_category: Dict[str, Dict]) -> Dict:
+        """Compare each budget with the forecast for `target`, and with the
+        month in progress, under the same rules as the budget card.
 
         Only categories that have a budget take part: set a budget for Food
-        alone and the rest of the forecast has nothing to be over.
+        alone and the rest of the forecast has nothing to be over. A budget set
+        for one owner is compared with that owner's spending only, and a budget
+        is left out of a month outside its start and end dates.
         """
-        budgets: Dict[str, float] = {}
-        for b in self.budgets:
-            monthly = b['amount'] if b.get('period', 'monthly') == 'monthly' else b['amount'] / 12
-            category = b.get('type_name')
-            if category:
-                budgets[category] = budgets.get(category, 0.0) + float(monthly)
-        budgets = {c: v for c, v in budgets.items() if v > 0}
-        if not budgets:
+        month_start = target.start_time.date().isoformat()
+        month_end = target.end_time.date().isoformat()
+        active = [b for b in self.budgets
+                  if b.get('type_name') and b.get('amount', 0) > 0
+                  and not (b.get('start_date') and b['start_date'] > month_end)
+                  and not (b.get('end_date') and b['end_date'] < month_start)]
+        if not active:
             return {'has_budget': False, 'total_budget': 0, 'over_budget': False,
-                    'difference': 0, 'percentage': None, 'categories': []}
+                    'difference': 0, 'percentage': None, 'categories': [],
+                    'target_month': str(target), 'this_month': str(self.current_month)}
 
-        predicted = {row['category']: row['predicted'] for row in by_category}
+        household = ({row['category']: row['predicted'] for row in by_category},
+                     this_month_by_category)
+        per_owner: Dict[Any, Tuple[Dict, Dict]] = {}
+
+        def figures(owner):
+            if owner is None:
+                return household
+            if owner not in per_owner:
+                rows = self.expenses[self.expenses['owner'] == owner]
+                per_owner[owner] = (
+                    {r['category']: r['predicted'] for r in self._forecast(target, rows)['by_category']},
+                    self._this_month_projection(rows)['by_category'])
+            return per_owner[owner]
+
         categories = []
-        for category, budget in sorted(budgets.items()):
-            forecast = float(predicted.get(category, 0.0))
+        for b in sorted(active, key=lambda b: (b['type_name'], b.get('owner_name') or '')):
+            budget = float(b['amount'] if b.get('period', 'monthly') == 'monthly' else b['amount'] / 12)
+            owner = b.get('owner_id')
+            predicted, this_month = figures(owner)
+            forecast = float(predicted.get(b['type_name'], 0.0))
+            now = this_month.get(b['type_name'], {'spent': 0.0, 'projected': 0.0})
+            label = b['type_name'] + (f" ({b['owner_name']})" if owner and b.get('owner_name') else '')
             categories.append({
-                'category': category, 'budget': budget, 'predicted': forecast,
+                'category': b['type_name'], 'label': label,
+                'owner_id': owner, 'owner_name': b.get('owner_name') if owner else None,
+                'budget': budget, 'predicted': forecast,
                 'difference': forecast - budget, 'over': forecast > budget,
+                'this_month_spent': float(now['spent']),
+                'this_month_projected': float(now['projected']),
+                'this_month_over': float(now['projected']) > budget,
             })
-        total_budget = sum(budgets.values())
+
+        total_budget = sum(c['budget'] for c in categories)
         total_forecast = sum(c['predicted'] for c in categories)
         over = total_forecast > total_budget
         return {
             'has_budget': True,
+            'target_month': str(target),
+            'this_month': str(self.current_month),
             'total_budget': total_budget,
             'predicted_budgeted': total_forecast,
             'over_budget': over,
@@ -402,7 +459,7 @@ class SpendingPredictor:
             'percentage': total_forecast / total_budget * 100,
             'status': 'over' if over else 'under',
             'categories': categories,
-            'over_categories': [c['category'] for c in categories if c['over']],
+            'over_categories': [c['label'] for c in categories if c['over']],
         }
 
     # ------------------------------------------------------------------

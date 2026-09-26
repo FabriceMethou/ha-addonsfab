@@ -824,6 +824,11 @@ export default function DashboardPage() {
                 <Wallet className="w-5 h-5 text-primary" />
                 <h2 className="text-lg font-semibold text-foreground">
                   Budget Overview
+                  <span className="text-foreground-muted font-normal">
+                    {" "}
+                    — {format(viewDate, "MMMM yyyy")}
+                    {isCurrentMonth && " so far"}
+                  </span>
                 </h2>
               </div>
               <p className="text-xs text-foreground-muted">
@@ -1255,38 +1260,54 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Budgets: only the categories that have one */}
+          {/* Budgets: only the categories that have one, per owner where
+              the budget is for one person — the same rules as Budget Overview */}
           {spendingPrediction.budget_comparison?.has_budget && (
-            <div
-              className={`px-4 py-3 rounded-lg mb-5 ${
-                spendingPrediction.budget_comparison.over_categories?.length > 0
-                  ? "bg-error/10 border border-error/20"
-                  : "bg-success/10 border border-success/20"
-              }`}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-foreground">
-                  {spendingPrediction.budget_comparison.over_categories?.length > 0
-                    ? `${spendingPrediction.budget_comparison.over_categories.length} budgeted categor${spendingPrediction.budget_comparison.over_categories.length !== 1 ? "ies" : "y"} forecast over budget`
-                    : "Every budgeted category is forecast within budget"}
-                </span>
-                <span className="text-sm text-foreground-muted shrink-0">
+            <div className="mb-5">
+              <div className="flex items-baseline justify-between gap-3 mb-3">
+                <p className="text-xs font-medium text-foreground-muted uppercase tracking-wide">
+                  Budgets —{" "}
+                  {monthName(spendingPrediction.budget_comparison.target_month)}{" "}
+                  forecast
+                </p>
+                <p className="text-xs text-foreground-muted">
                   {formatCurrency(
                     spendingPrediction.budget_comparison.predicted_budgeted || 0,
                   )}{" "}
                   of{" "}
                   {formatCurrency(spendingPrediction.budget_comparison.total_budget)}
-                </span>
+                </p>
               </div>
-              {spendingPrediction.budget_comparison.categories
-                ?.filter((c: any) => c.over)
-                .map((c: any) => (
-                  <p key={c.category} className="text-xs text-error mt-1">
-                    {c.category}: {formatCurrency(c.predicted)} forecast,{" "}
-                    {formatCurrency(c.budget)} budget (+
-                    {formatCurrency(c.difference)})
-                  </p>
+              <div className="divide-y divide-border rounded-lg border border-border">
+                {spendingPrediction.budget_comparison.categories.map((c: any) => (
+                  <div key={c.label} className="px-3 py-2.5 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-medium text-foreground">{c.label}</span>
+                      <span className="text-foreground-muted shrink-0">
+                        budget {formatCurrency(c.budget)}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap justify-between gap-x-4 gap-y-0.5 mt-1 text-xs">
+                      <span
+                        className={
+                          c.this_month_over ? "text-error" : "text-foreground-muted"
+                        }
+                      >
+                        {monthName(spendingPrediction.budget_comparison.this_month)}:{" "}
+                        {formatCurrency(c.this_month_spent)} spent ·{" "}
+                        {formatCurrency(c.this_month_projected)} expected by month end
+                      </span>
+                      <span className={c.over ? "text-error" : "text-success"}>
+                        {monthName(spendingPrediction.budget_comparison.target_month)}{" "}
+                        forecast {formatCurrency(c.predicted)}
+                        {c.over
+                          ? ` (+${formatCurrency(c.difference)})`
+                          : " · within budget"}
+                      </span>
+                    </div>
+                  </div>
                 ))}
+              </div>
             </div>
           )}
 

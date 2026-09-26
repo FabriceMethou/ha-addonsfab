@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.5.2
+
+**The prediction and Budget Overview now agree**
+- A budget set for **one owner** is compared with that owner's forecast only, as Budget Overview already did. The prediction compared it with the whole household's spending, so it could show a category over budget that Budget Overview showed within
+- A budget is left out of a month outside its start and end dates
+- The prediction's budget list is titled with the month it forecasts, and each budget also shows the **current month**: what is spent so far and what is expected by month end, the same period as Budget Overview. Budget Overview now says which month it shows ("September 2026 so far")
+
+**Budget Overview fixes**
+- Spending on the **last day of a month** was never counted towards any budget
+- **Refunds** counted as more spending; they now reduce it
+- A transaction assigned to a different owner than its account's counted for the account's owner; it now counts for the owner it is assigned to
+
 ## 2.5.1
 - Dashboard › Monthly Summary: when you invest more than you saved in a month, the breakdown now says so, *"invested €3,000: €2,500 from this month's savings and €500 from money you already had"*, instead of showing a negative "kept in cash"
 - The breakdown now compares savings with **net** investing: the capital a sale gives back, and money taken back out of an account such as a gold account, are subtracted. Selling one fund to buy another no longer looks like cash spent. Only the capital is subtracted, not the gain, which is income and already part of your savings. The Monthly Invested card still shows everything invested

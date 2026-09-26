@@ -29,9 +29,9 @@ MONTHS = ([f"2024-{m:02d}" for m in range(10, 13)]
           + [f"2026-{m:02d}" for m in range(1, 9)])   # two years, up to August 2026
 
 
-def tx(day, amount, payee, category="Food"):
+def tx(day, amount, payee, category="Food", owner=None):
     return {"transaction_date": day, "amount": amount, "destinataire": payee,
-            "type_name": category, "category": "expense"}
+            "type_name": category, "category": "expense", "owner_id": owner}
 
 
 def household(months=MONTHS, insurance=True):
@@ -173,9 +173,10 @@ def test_only_budgeted_categories_are_compared():
     budgets = [{"type_name": "Food", "amount": 300.0, "period": "monthly"}]
     comparison = predict(household(), budgets=budgets)["budget_comparison"]
     assert comparison["over_budget"] is False
-    assert comparison["categories"] == [{
-        "category": "Food", "budget": 300.0, "predicted": pytest.approx(260),
-        "difference": pytest.approx(-40), "over": False}]
+    assert comparison["target_month"] == "2026-10"
+    [food] = comparison["categories"]
+    assert (food["label"], food["budget"], food["over"]) == ("Food", 300.0, False)
+    assert food["predicted"] == pytest.approx(260)
 
 
 def test_a_category_forecast_over_its_budget_is_named():
@@ -183,6 +184,39 @@ def test_a_category_forecast_over_its_budget_is_named():
                {"type_name": "Insurance", "amount": 1200.0, "period": "yearly"}]
     comparison = predict(household(), budgets=budgets)["budget_comparison"]
     assert comparison["over_categories"] == ["Food", "Insurance"]   # 480 due > 100/month
+
+
+def test_a_budget_for_one_owner_is_compared_with_that_owner_only():
+    """The reported mismatch: the budget card scoped a budget to its owner,
+    the prediction compared it with the whole household."""
+    rows = household() + [tx(f"{m}-12", -200.0, "Rewe", owner=2) for m in MONTHS]
+    rows = [dict(r, owner_id=r["owner_id"] or 1) for r in rows]
+    budgets = [{"type_name": "Food", "amount": 300.0, "period": "monthly",
+                "owner_id": 1, "owner_name": "Fab"},
+               {"type_name": "Food", "amount": 300.0, "period": "monthly"}]
+    comparison = predict(rows, budgets=budgets)["budget_comparison"]
+    by_label = {c["label"]: c for c in comparison["categories"]}
+    fab, everyone = by_label["Food (Fab)"], by_label["Food"]
+    assert (fab["label"], fab["predicted"], fab["over"]) == ("Food (Fab)", pytest.approx(260), False)
+    assert (everyone["label"], everyone["predicted"], everyone["over"]) == ("Food", pytest.approx(460), True)
+
+
+def test_a_budget_outside_its_dates_is_left_out():
+    budgets = [{"type_name": "Food", "amount": 200.0, "period": "monthly", "end_date": "2026-09-30"},
+               {"type_name": "Housing", "amount": 900.0, "period": "monthly", "start_date": "2026-11-01"}]
+    assert predict(household(), budgets=budgets)["budget_comparison"]["has_budget"] is False
+
+
+def test_each_budget_also_shows_the_month_in_progress():
+    """Lines up with the budget card, which is about the current month."""
+    rows = household() + [tx("2026-09-05", -118.0, "Lidl")]
+    budgets = [{"type_name": "Food", "amount": 200.0, "period": "monthly"}]
+    comparison = predict(rows, budgets=budgets)["budget_comparison"]
+    [food] = comparison["categories"]
+    assert comparison["this_month"] == "2026-09"
+    assert food["this_month_spent"] == 118.0
+    assert food["this_month_projected"] == pytest.approx(118 + 260 * 5 / 30)
+    assert food["this_month_over"] is False and food["over"] is True
 
 
 # ── edge cases ───────────────────────────────────────────────────────────────

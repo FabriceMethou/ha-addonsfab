@@ -5029,7 +5029,7 @@ class FinanceDatabase:
                 - display_currency: The user's preferred display currency
         """
         import calendar
-        from datetime import date
+        from datetime import date, timedelta
 
         start_date = date(year, month, 1)
         last_day = calendar.monthrange(year, month)[1]
@@ -5054,20 +5054,26 @@ class FinanceDatabase:
                 continue  # Budget has already ended before this month
             budgets.append(b)
 
-        # Aggregate expense spending per (type_id, owner_id) in a single query
+        # Aggregate expense spending per (type_id, owner_id) in a single query.
+        # - The month runs up to the 1st of the next one, exclusive: "< last
+        #   day" left the last day of every month out of every budget.
+        # - Amounts are signed: a refund reduces spending (ABS counted it).
+        # - The owner is the transaction's own when set, as everywhere else.
+        next_month_start = (end_date + timedelta(days=1)).isoformat()
         with self.db_connection(commit=False) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT t.type_id, a.owner_id, a.currency as account_currency,
-                       SUM(ABS(t.amount)) as total
+                SELECT t.type_id, COALESCE(t.owner_id, a.owner_id) AS owner_id,
+                       a.currency as account_currency,
+                       SUM(-t.amount) as total
                 FROM transactions t
                 JOIN transaction_types tt ON t.type_id = tt.id
                 JOIN accounts a ON t.account_id = a.id
                 WHERE tt.category = 'expense'
                   AND t.transaction_date >= ?
                   AND t.transaction_date < ?
-                GROUP BY t.type_id, a.owner_id, a.currency
-            """, (start_date.isoformat(), end_date.isoformat()))
+                GROUP BY t.type_id, COALESCE(t.owner_id, a.owner_id), a.currency
+            """, (start_date.isoformat(), next_month_start))
             rows = cursor.fetchall()
 
             # Load exchange rates once for efficient batch conversion
@@ -5115,6 +5121,8 @@ class FinanceDatabase:
                     actual = actual_by_type_and_owner.get((budget['type_id'], budget_owner_id), 0)
                 else:
                     actual = actual_by_type_all.get(budget['type_id'], 0)
+                # Refunds larger than the month's spending leave nothing spent.
+                actual = max(0.0, actual)
 
                 difference = budget_amount - actual
                 percentage = (actual / budget_amount * 100) if budget_amount > 0 else 0
@@ -6804,6 +6812,7 @@ class FinanceDatabase:
                     tt.name as type_name,
                     tt.category,
                     ts.name as subtype_name,
+                    COALESCE(t.owner_id, a.owner_id) as owner_id,
                     a.currency as account_currency
                 FROM transactions t
                 JOIN transaction_types tt ON t.type_id = tt.id
