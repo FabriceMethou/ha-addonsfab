@@ -389,6 +389,8 @@ Located in `scripts/` directory:
   - Finds linked transactions with wrong sign (purchases stored as positive instead of negative)
   - Interactive: asks for confirmation before making changes
   - Should be run once after fixing the investment transaction bug
+- `fix_dividend_totals.py` - Repair dividends stored with a total of 0 (was an API endpoint)
+  - Usage: `python3 scripts/fix_dividend_totals.py [--apply]` (reports only by default)
 
 ## API Interceptor Debug Logging
 

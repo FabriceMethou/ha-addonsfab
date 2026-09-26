@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.7.0
+
+**Investments: fixes that affect your numbers**
+- **Editing a trade works again.** Since 2.1.0 every edit of a buy, sale or dividend failed and nothing was saved. An edit now removes the old trade and adds the new one in one step, so an edited sale is booked exactly like a new one (capital returned + gain), instead of the whole proceeds as income next to the gain
+- **Editing a holding no longer freezes its quantity.** Saving the holding dialog stored its quantity and price, which then overrode every later trade (buy 10, edit the notes, sell 5: still 10). A holding with trades now always takes its quantity and cost from them, and the dialog no longer offers to change them. Values frozen this way are cleared on the first start after updating; holdings without any trade keep what was entered
+- **Price updates now update your balances.** "Update Prices" and the single refresh changed the price but not the investment account's balance, so net worth stayed on old prices until the next restart or trade
+- **Quotes in another currency are converted** to the holding's currency, and a quote with no exchange rate is reported as failed instead of stored in the wrong currency. London prices quoted in pence are turned into pounds
+- **A sale's gain uses the buys made up to the sale.** A later purchase used to change an earlier sale's capital/gain split; editing an earlier buy now re-splits the sales after it. The cash each sale brought in never changes
+- **Buy fees are part of the cost** everywhere: Total Cost and Gain/Loss now agree with the gain booked on a sale. (If you do not enter fees, nothing changes)
+- Moving a holding to another account now re-values the account it left
+
+**Investments page**
+- Holdings kept in another currency are shown in your display currency, with their per-share prices in their own currency; totals and the allocation chart no longer add different currencies together
+- Holdings is the first tab and opens by default, then Transactions, then Securities
+- The summary cards are the same as on the other pages and open the matching tab when clicked; the Dividends card shows the tax withheld
+- Dividends are entered **net**: the form says "Amount received (net of tax)", and the tax withheld is recorded for your overview only. Dividends have no fees field
+- A loading failure shows an error with a retry button, and empty tabs use the app's usual empty state
+
+**Behind the scenes**
+- Removed a debugging endpoint and an endpoint that could not work; the one-off dividend repair is now `scripts/fix_dividend_totals.py`
+
 ## 2.6.0
 
 **Spending Prediction: the current month first**

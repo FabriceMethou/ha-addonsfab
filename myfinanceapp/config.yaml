@@ -1,7 +1,7 @@
 
 name: "Finance Tracker"
 description: "Personal finance management with transaction tracking and reporting (React + FastAPI)"
-version: "2.6.0"
+version: "2.7.0"
 slug: "myfinanceapp"
 init: false
 arch:

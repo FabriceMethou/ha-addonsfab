@@ -47,6 +47,9 @@ import {
   TabsTrigger,
   TabsContent,
   InvestmentsSkeleton,
+  KPICard,
+  QueryError,
+  EmptyState,
 } from "../components/shadcn";
 import { investmentsAPI, accountsAPI } from "../services/api";
 import { format, parseISO } from "date-fns";
@@ -62,10 +65,14 @@ import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
 import {
   addMoney,
   subtractMoney,
-  multiplyMoney,
   percentOf,
 } from "../lib/money";
 import { useIsMobile } from "../hooks/useBreakpoint";
+
+// Tabs. Holdings, the portfolio itself, comes first and opens by default.
+const TAB_SECURITIES = 0;
+const TAB_HOLDINGS = 1;
+const TAB_TRANSACTIONS = 2;
 
 // Colors for pie charts
 const PORTFOLIO_COLORS = [
@@ -130,7 +137,7 @@ export default function InvestmentsPage() {
   const [expandedHolding, setExpandedHolding] = useState<number | null>(null);
   const [expandedInvTx, setExpandedInvTx] = useState<number | null>(null);
 
-  const [tabValue, setTabValue] = useState<number | string>(0);
+  const [tabValue, setTabValue] = useState<number | string>(TAB_HOLDINGS);
   const [holdingDialog, setHoldingDialog] = useState(false);
   const [transactionDialog, setTransactionDialog] = useState(false);
   const [securityDialog, setSecurityDialog] = useState(false);
@@ -291,7 +298,12 @@ export default function InvestmentsPage() {
   });
 
   // Fetch holdings
-  const { data: holdingsData, isLoading: holdingsLoading } = useQuery({
+  const {
+    data: holdingsData,
+    isLoading: holdingsLoading,
+    isError: holdingsError,
+    refetch: refetchHoldings,
+  } = useQuery({
     queryKey: ["investments-holdings"],
     queryFn: async () => {
       const response = await investmentsAPI.getHoldings();
@@ -761,6 +773,11 @@ export default function InvestmentsPage() {
     }
   };
 
+  // A holding with trades takes its quantity and cost from them; the dialog
+  // then edits only what the holding itself owns.
+  const quantityFromTrades =
+    !!editingHolding && (editingHolding.transaction_count || 0) > 0;
+
   const handleSubmitHolding = () => {
     // Validate required fields
     if (!holdingForm.account_id) {
@@ -773,31 +790,37 @@ export default function InvestmentsPage() {
       return;
     }
 
-    if (!holdingForm.quantity || isNaN(parseFloat(holdingForm.quantity))) {
-      toast.error("Please enter a valid quantity");
-      return;
-    }
+    if (!quantityFromTrades) {
+      if (!holdingForm.quantity || isNaN(parseFloat(holdingForm.quantity))) {
+        toast.error("Please enter a valid quantity");
+        return;
+      }
 
-    if (
-      !holdingForm.purchase_price ||
-      isNaN(parseFloat(holdingForm.purchase_price))
-    ) {
-      toast.error("Please enter a valid purchase price");
-      return;
-    }
+      if (
+        !holdingForm.purchase_price ||
+        isNaN(parseFloat(holdingForm.purchase_price))
+      ) {
+        toast.error("Please enter a valid purchase price");
+        return;
+      }
 
-    if (!holdingForm.purchase_date) {
-      toast.error("Please enter a purchase date");
-      return;
+      if (!holdingForm.purchase_date) {
+        toast.error("Please enter a purchase date");
+        return;
+      }
     }
 
     const data = {
       security_id: parseInt(holdingForm.security_id),
       account_id: parseInt(holdingForm.account_id),
-      quantity: parseFloat(holdingForm.quantity),
-      purchase_price: parseFloat(holdingForm.purchase_price),
-      purchase_date: holdingForm.purchase_date,
       notes: holdingForm.notes,
+      ...(quantityFromTrades
+        ? {}
+        : {
+            quantity: parseFloat(holdingForm.quantity),
+            purchase_price: parseFloat(holdingForm.purchase_price),
+            purchase_date: holdingForm.purchase_date,
+          }),
     };
 
     if (editingHolding) {
@@ -818,7 +841,11 @@ export default function InvestmentsPage() {
           : parseFloat(transactionForm.quantity),
       price: parseFloat(transactionForm.price),
       transaction_date: transactionForm.transaction_date,
-      fees: parseFloat(transactionForm.fees) || 0,
+      // Dividends have no fees; the field is hidden for them.
+      fees:
+        transactionForm.transaction_type === "dividend"
+          ? 0
+          : parseFloat(transactionForm.fees) || 0,
       tax: parseFloat(transactionForm.tax) || 0,
       notes: transactionForm.notes,
     };
@@ -838,6 +865,15 @@ export default function InvestmentsPage() {
 
   if (holdingsLoading) {
     return <InvestmentsSkeleton />;
+  }
+
+  if (holdingsError) {
+    return (
+      <QueryError
+        message="Failed to load your investments."
+        onRetry={() => refetchHoldings()}
+      />
+    );
   }
 
   const totalValue = summaryData?.total_value || 0;
@@ -947,178 +983,78 @@ export default function InvestmentsPage() {
         </Button>
       </div>
 
-      {/* Summary KPI Cards */}
+      {/* Summary KPI Cards — the shared card, as on the other pages */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-6">
-        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-3xl rounded-full" />
-          <div className="relative">
-            <div className="flex items-start justify-between mb-2 sm:mb-4">
-              <div className="p-2 sm:p-3 rounded-lg bg-blue-500 bg-opacity-10">
-                <Landmark className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500" />
-              </div>
-            </div>
-            <div>
-              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
-                Total Value
-              </p>
-              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">
-                {formatCurrency(totalValue)}
-              </p>
-            </div>
-          </div>
-        </Card>
-        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500 opacity-5 blur-3xl rounded-full" />
-          <div className="relative">
-            <div className="flex items-start justify-between mb-2 sm:mb-4">
-              <div className="p-2 sm:p-3 rounded-lg bg-cyan-500 bg-opacity-10">
-                <LineChart className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-500" />
-              </div>
-            </div>
-            <div>
-              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
-                Total Cost
-              </p>
-              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">
-                {formatCurrency(totalCost)}
-              </p>
-            </div>
-          </div>
-        </Card>
-        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div
-            className={`absolute top-0 right-0 w-32 h-32 ${totalGainLoss >= 0 ? "bg-emerald-500" : "bg-rose-500"} opacity-5 blur-3xl rounded-full`}
-          />
-          <div className="relative">
-            <div className="flex items-start justify-between mb-2 sm:mb-4">
-              <div
-                className={`p-2 sm:p-3 rounded-lg ${totalGainLoss >= 0 ? "bg-emerald-500" : "bg-rose-500"} bg-opacity-10`}
-              >
-                {totalGainLoss >= 0 ? (
-                  <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-500" />
-                ) : (
-                  <TrendingDown className="w-5 h-5 sm:w-6 sm:h-6 text-rose-500" />
-                )}
-              </div>
-            </div>
-            <div>
-              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
-                Gain/Loss
-              </p>
-              <p
-                className={`text-lg sm:text-2xl font-bold truncate ${totalGainLoss >= 0 ? "text-emerald-500" : "text-rose-500"}`}
-              >
-                {formatCurrency(totalGainLoss)}
-              </p>
-              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1">
-                {totalGainLossPercent >= 0 ? "+" : ""}
-                {totalGainLossPercent.toFixed(2)}%
-              </p>
-            </div>
-          </div>
-        </Card>
-        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500 opacity-5 blur-3xl rounded-full" />
-          <div className="relative">
-            <div className="flex items-start justify-between mb-2 sm:mb-4">
-              <div className="p-2 sm:p-3 rounded-lg bg-violet-500 bg-opacity-10">
-                <LineChart className="w-5 h-5 sm:w-6 sm:h-6 text-violet-500" />
-              </div>
-            </div>
-            <div>
-              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
-                Holdings
-              </p>
-              <p className="text-lg sm:text-2xl font-bold text-foreground">
-                {summaryData?.holdings_count || holdingsData?.length || 0}
-              </p>
-            </div>
-          </div>
-        </Card>
-        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500 opacity-5 blur-3xl rounded-full" />
-          <div className="relative">
-            <div className="flex items-start justify-between mb-2 sm:mb-4">
-              <div className="p-2 sm:p-3 rounded-lg bg-emerald-500 bg-opacity-10">
-                <DollarSign className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-500" />
-              </div>
-            </div>
-            <div>
-              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
-                Total Dividends
-              </p>
-              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">
-                {formatCurrency(summaryData?.total_dividends || 0)}
-              </p>
-              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">
-                12M: {formatCurrency(summaryData?.recent_dividends_12m || 0)}
-              </p>
-            </div>
-          </div>
-        </Card>
-        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500 opacity-5 blur-3xl rounded-full" />
-          <div className="relative">
-            <div className="flex items-start justify-between mb-2 sm:mb-4">
-              <div className="p-2 sm:p-3 rounded-lg bg-cyan-500 bg-opacity-10">
-                <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-500" />
-              </div>
-            </div>
-            <div>
-              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
-                Dividend Yield
-              </p>
-              <p className="text-lg sm:text-2xl font-bold text-foreground">
-                {(summaryData?.dividend_yield || 0).toFixed(2)}%
-              </p>
-              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">
-                Annual yield
-              </p>
-            </div>
-          </div>
-        </Card>
-        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500 opacity-5 blur-3xl rounded-full" />
-          <div className="relative">
-            <div className="flex items-start justify-between mb-2 sm:mb-4">
-              <div className="p-2 sm:p-3 rounded-lg bg-amber-500 bg-opacity-10">
-                <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6 text-amber-500" />
-              </div>
-            </div>
-            <div>
-              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
-                Total Fees
-              </p>
-              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">
-                {formatCurrency(summaryData?.total_fees || 0)}
-              </p>
-              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">
-                All transactions
-              </p>
-            </div>
-          </div>
-        </Card>
-        <Card className="relative overflow-hidden p-4 sm:p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500 opacity-5 blur-3xl rounded-full" />
-          <div className="relative">
-            <div className="flex items-start justify-between mb-2 sm:mb-4">
-              <div className="p-2 sm:p-3 rounded-lg bg-rose-500 bg-opacity-10">
-                <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6 text-rose-500" />
-              </div>
-            </div>
-            <div>
-              <p className="text-xs sm:text-sm text-foreground-muted mb-0.5 sm:mb-1">
-                Total Tax
-              </p>
-              <p className="text-lg sm:text-2xl font-bold text-foreground truncate">
-                {formatCurrency(summaryData?.total_tax || 0)}
-              </p>
-              <p className="text-[10px] sm:text-xs text-foreground-muted mt-0.5 sm:mt-1 hidden sm:block">
-                All transactions
-              </p>
-            </div>
-          </div>
-        </Card>
+        <KPICard
+          title="Total Value"
+          value={formatCurrency(totalValue)}
+          icon={<Landmark size={24} className="text-blue-500" />}
+          iconColor="bg-blue-500"
+          onClick={() => setTabValue(TAB_HOLDINGS)}
+          actionLabel="Show holdings"
+        />
+        <KPICard
+          title="Total Cost"
+          value={formatCurrency(totalCost)}
+          changeLabel="Buy fees included"
+          icon={<LineChart size={24} className="text-cyan-500" />}
+          iconColor="bg-cyan-500"
+        />
+        <KPICard
+          title="Gain/Loss"
+          value={formatCurrency(totalGainLoss)}
+          change={totalGainLossPercent}
+          changeLabel="vs cost"
+          icon={
+            totalGainLoss >= 0 ? (
+              <TrendingUp size={24} className="text-emerald-500" />
+            ) : (
+              <TrendingDown size={24} className="text-rose-500" />
+            )
+          }
+          iconColor={totalGainLoss >= 0 ? "bg-emerald-500" : "bg-rose-500"}
+        />
+        <KPICard
+          title="Holdings"
+          value={String(summaryData?.holdings_count || holdingsData?.length || 0)}
+          icon={<LineChart size={24} className="text-violet-500" />}
+          iconColor="bg-violet-500"
+          onClick={() => setTabValue(TAB_HOLDINGS)}
+          actionLabel="Show holdings"
+        />
+        <KPICard
+          title="Total Dividends"
+          value={formatCurrency(summaryData?.total_dividends || 0)}
+          changeLabel={
+            `12M: ${formatCurrency(summaryData?.recent_dividends_12m || 0)} · ` +
+            `yield ${(summaryData?.dividend_yield || 0).toFixed(2)}%` +
+            (summaryData?.dividend_tax_withheld
+              ? ` · tax withheld ${formatCurrency(summaryData.dividend_tax_withheld)}`
+              : "")
+          }
+          icon={<DollarSign size={24} className="text-emerald-500" />}
+          iconColor="bg-emerald-500"
+          onClick={() => setTabValue(TAB_TRANSACTIONS)}
+          actionLabel="Show transactions"
+        />
+        <KPICard
+          title="Total Fees"
+          value={formatCurrency(summaryData?.total_fees || 0)}
+          changeLabel="All transactions"
+          icon={<AlertTriangle size={24} className="text-amber-500" />}
+          iconColor="bg-amber-500"
+          onClick={() => setTabValue(TAB_TRANSACTIONS)}
+          actionLabel="Show transactions"
+        />
+        <KPICard
+          title="Total Tax"
+          value={formatCurrency(summaryData?.total_tax || 0)}
+          changeLabel="All transactions, dividend tax included"
+          icon={<AlertTriangle size={24} className="text-rose-500" />}
+          iconColor="bg-rose-500"
+          onClick={() => setTabValue(TAB_TRANSACTIONS)}
+          actionLabel="Show transactions"
+        />
       </div>
 
       {/* Portfolio Allocation Charts */}
@@ -1134,10 +1070,7 @@ export default function InvestmentsPage() {
                   data={holdingsData.map((holding: any, index: number) => ({
                     key: `pie-data-${index}`,
                     name: holding.name || holding.symbol,
-                    value:
-                      holding.current_value ||
-                      holding.quantity *
-                        (holding.current_price || holding.average_cost || 0),
+                    value: holding.current_value_display,
                   }))}
                   dataKey="value"
                   nameKey="name"
@@ -1215,24 +1148,15 @@ export default function InvestmentsPage() {
             Top Holdings
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-            {holdingsData
-              .sort((a: any, b: any) => {
-                const aValue =
-                  a.current_value ||
-                  a.quantity * (a.current_price || a.average_cost || 0);
-                const bValue =
-                  b.current_value ||
-                  b.quantity * (b.current_price || b.average_cost || 0);
-                return bValue - aValue;
-              })
+            {[...holdingsData]
+              .sort(
+                (a: any, b: any) =>
+                  b.current_value_display - a.current_value_display,
+              )
               .slice(0, 10)
               .map((holding: any) => {
-                const currentValue =
-                  holding.current_value ||
-                  holding.quantity *
-                    (holding.current_price || holding.average_cost || 0);
-                const costBasis =
-                  holding.quantity * (holding.average_cost || 0);
+                const currentValue = holding.current_value_display;
+                const costBasis = holding.cost_basis_display;
                 const gainLoss = currentValue - costBasis;
                 const gainLossPercent =
                   costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
@@ -1272,13 +1196,13 @@ export default function InvestmentsPage() {
       <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
         <Tabs value={tabValue} onValueChange={setTabValue}>
           <TabsList>
-            <TabsTrigger value={0}>Securities</TabsTrigger>
-            <TabsTrigger value={1}>Holdings</TabsTrigger>
-            <TabsTrigger value={2}>Transactions</TabsTrigger>
+            <TabsTrigger value={TAB_HOLDINGS}>Holdings</TabsTrigger>
+            <TabsTrigger value={TAB_TRANSACTIONS}>Transactions</TabsTrigger>
+            <TabsTrigger value={TAB_SECURITIES}>Securities</TabsTrigger>
           </TabsList>
 
           {/* Securities Tab */}
-          <TabsContent value={0}>
+          <TabsContent value={TAB_SECURITIES}>
             <div className="flex justify-end mb-4">
               <Button
                 onClick={() => {
@@ -1457,30 +1381,24 @@ export default function InvestmentsPage() {
                 </div>
               )
             ) : (
-              <div className="flex flex-col items-center justify-center min-h-[300px]">
-                <LineChart className="h-20 w-20 text-foreground-muted mb-4" />
-                <h2 className="text-xl font-semibold text-foreground-muted mb-2">
-                  No Securities Yet
-                </h2>
-                <p className="text-sm text-foreground-muted mb-6">
-                  Add securities to your master list to easily create holdings
-                </p>
-                <Button
-                  onClick={() => {
+              <EmptyState
+                icon={LineChart}
+                title="No securities yet"
+                description="Add securities to your master list to easily create holdings."
+                action={{
+                  label: "Add Security",
+                  onClick: () => {
                     setEditingSecurity(null);
                     resetSecurityForm();
                     setSecurityDialog(true);
-                  }}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Security
-                </Button>
-              </div>
+                  },
+                }}
+              />
             )}
           </TabsContent>
 
           {/* Holdings Tab */}
-          <TabsContent value={1}>
+          <TabsContent value={TAB_HOLDINGS}>
             {holdingsData && holdingsData.length > 0 ? (
               <div className="space-y-6">
                 {(() => {
@@ -1500,14 +1418,10 @@ export default function InvestmentsPage() {
                         };
                       }
 
-                      const currentValue = multiplyMoney(
-                        holding.quantity,
-                        holding.current_price || holding.average_cost,
-                      );
-                      const costBasis = multiplyMoney(
-                        holding.quantity,
-                        holding.average_cost,
-                      );
+                      // Converted to the display currency: an account's holdings can be kept
+                      // in a currency other than the one the totals are shown in.
+                      const currentValue = holding.current_value_display;
+                      const costBasis = holding.cost_basis_display;
 
                       acc[accountKey].holdings.push(holding);
                       acc[accountKey].totalValue = addMoney(
@@ -1566,11 +1480,8 @@ export default function InvestmentsPage() {
                             <div className="space-y-2">
                               {accountData.holdings.map((holding: any) => {
                                 const currentValue =
-                                  holding.quantity *
-                                  (holding.current_price ||
-                                    holding.average_cost);
-                                const costBasis =
-                                  holding.quantity * holding.average_cost;
+                                  holding.current_value_display;
+                                const costBasis = holding.cost_basis_display;
                                 const gainLoss = currentValue - costBasis;
                                 const gainLossPercent =
                                   costBasis > 0
@@ -1655,9 +1566,7 @@ export default function InvestmentsPage() {
                                               Avg Cost
                                             </p>
                                             <p className="text-sm">
-                                              {formatCurrency(
-                                                holding.average_cost,
-                                              )}
+                                              {formatCurrencyUtil(holding.average_cost, holding.currency)}
                                             </p>
                                           </div>
                                           <div>
@@ -1665,10 +1574,10 @@ export default function InvestmentsPage() {
                                               Current Price
                                             </p>
                                             <p className="text-sm">
-                                              {formatCurrency(
-                                                holding.current_price ||
-                                                  holding.average_cost,
-                                              )}
+                                              {formatCurrencyUtil(
+                                            holding.current_price || holding.average_cost,
+                                            holding.currency,
+                                          )}
                                             </p>
                                           </div>
                                           <div>
@@ -1791,11 +1700,8 @@ export default function InvestmentsPage() {
                                 <TableBody>
                                   {accountData.holdings.map((holding: any) => {
                                     const currentValue =
-                                      holding.quantity *
-                                      (holding.current_price ||
-                                        holding.average_cost);
-                                    const costBasis =
-                                      holding.quantity * holding.average_cost;
+                                  holding.current_value_display;
+                                const costBasis = holding.cost_basis_display;
                                     const gainLoss = currentValue - costBasis;
                                     const gainLossPercent =
                                       costBasis > 0
@@ -1817,12 +1723,12 @@ export default function InvestmentsPage() {
                                           {holding.quantity}
                                         </TableCell>
                                         <TableCell className="text-right">
-                                          {formatCurrency(holding.average_cost)}
+                                          {formatCurrencyUtil(holding.average_cost, holding.currency)}
                                         </TableCell>
                                         <TableCell className="text-right">
-                                          {formatCurrency(
-                                            holding.current_price ||
-                                              holding.average_cost,
+                                          {formatCurrencyUtil(
+                                            holding.current_price || holding.average_cost,
+                                            holding.currency,
                                           )}
                                         </TableCell>
                                         <TableCell className="text-right font-semibold">
@@ -1925,30 +1831,24 @@ export default function InvestmentsPage() {
                 })()}
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center min-h-[300px]">
-                <LineChart className="h-20 w-20 text-foreground-muted mb-4" />
-                <h2 className="text-xl font-semibold text-foreground-muted mb-2">
-                  No Holdings Yet
-                </h2>
-                <p className="text-sm text-foreground-muted mb-6">
-                  Add your first investment holding to track your portfolio
-                </p>
-                <Button
-                  onClick={() => {
+              <EmptyState
+                icon={LineChart}
+                title="No holdings yet"
+                description="Add your first investment holding to track your portfolio."
+                action={{
+                  label: "Add Holding",
+                  onClick: () => {
                     setEditingHolding(null);
                     resetHoldingForm();
                     setHoldingDialog(true);
-                  }}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Holding
-                </Button>
-              </div>
+                  },
+                }}
+              />
             )}
           </TabsContent>
 
           {/* Transactions Tab */}
-          <TabsContent value={2}>
+          <TabsContent value={TAB_TRANSACTIONS}>
             <div className="flex justify-end mb-4">
               <Button
                 onClick={() => {
@@ -2494,51 +2394,62 @@ export default function InvestmentsPage() {
               ) : null}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="quantity">Quantity</Label>
-                <Input
-                  id="quantity"
-                  type="number"
-                  step="any"
-                  value={holdingForm.quantity}
-                  onChange={(e) =>
-                    setHoldingForm({ ...holdingForm, quantity: e.target.value })
-                  }
-                />
+            {quantityFromTrades ? (
+              <p className="text-sm text-foreground-muted rounded-lg border border-border bg-surface px-3 py-2">
+                Quantity and cost come from this holding's{" "}
+                {editingHolding.transaction_count} trade
+                {editingHolding.transaction_count !== 1 ? "s" : ""}: add or
+                edit a trade to change them.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="quantity">Quantity</Label>
+                  <Input
+                    id="quantity"
+                    type="number"
+                    step="any"
+                    value={holdingForm.quantity}
+                    onChange={(e) =>
+                      setHoldingForm({ ...holdingForm, quantity: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="purchasePrice">Purchase Price</Label>
+                  <Input
+                    id="purchasePrice"
+                    type="number"
+                    step="0.01"
+                    value={holdingForm.purchase_price}
+                    onChange={(e) =>
+                      setHoldingForm({
+                        ...holdingForm,
+                        purchase_price: e.target.value,
+                      })
+                    }
+                  />
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="purchasePrice">Purchase Price</Label>
-                <Input
-                  id="purchasePrice"
-                  type="number"
-                  step="0.01"
-                  value={holdingForm.purchase_price}
-                  onChange={(e) =>
-                    setHoldingForm({
-                      ...holdingForm,
-                      purchase_price: e.target.value,
-                    })
-                  }
-                />
-              </div>
-            </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="purchaseDate">Purchase Date</Label>
-                <Input
-                  id="purchaseDate"
-                  type="date"
-                  value={holdingForm.purchase_date}
-                  onChange={(e) =>
-                    setHoldingForm({
-                      ...holdingForm,
-                      purchase_date: e.target.value,
-                    })
-                  }
-                />
-              </div>
+              {!quantityFromTrades && (
+                <div className="space-y-2">
+                  <Label htmlFor="purchaseDate">Purchase Date</Label>
+                  <Input
+                    id="purchaseDate"
+                    type="date"
+                    value={holdingForm.purchase_date}
+                    onChange={(e) =>
+                      setHoldingForm({
+                        ...holdingForm,
+                        purchase_date: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="holdingNotes">Notes (Optional)</Label>
                 <Input
@@ -2739,7 +2650,7 @@ export default function InvestmentsPage() {
             <div className="space-y-2">
               <Label htmlFor="txPrice">
                 {transactionForm.transaction_type === "dividend"
-                  ? "Dividend Amount"
+                  ? "Amount received (net of tax)"
                   : "Price per Unit"}
               </Label>
               <Input
@@ -2756,25 +2667,33 @@ export default function InvestmentsPage() {
               />
             </div>
 
+            {/* A dividend is entered net: the amount is what reached the
+                account, the tax is only recorded. It has no fees. */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {transactionForm.transaction_type !== "dividend" && (
+                <div className="space-y-2">
+                  <Label htmlFor="txFees">Fees (Optional)</Label>
+                  <Input
+                    id="txFees"
+                    type="number"
+                    step="0.01"
+                    value={transactionForm.fees}
+                    onChange={(e) =>
+                      setTransactionForm({
+                        ...transactionForm,
+                        fees: e.target.value,
+                      })
+                    }
+                    placeholder="0.00"
+                  />
+                </div>
+              )}
               <div className="space-y-2">
-                <Label htmlFor="txFees">Fees (Optional)</Label>
-                <Input
-                  id="txFees"
-                  type="number"
-                  step="0.01"
-                  value={transactionForm.fees}
-                  onChange={(e) =>
-                    setTransactionForm({
-                      ...transactionForm,
-                      fees: e.target.value,
-                    })
-                  }
-                  placeholder="0.00"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="txTax">Tax (Optional)</Label>
+                <Label htmlFor="txTax">
+                  {transactionForm.transaction_type === "dividend"
+                    ? "Tax withheld (Optional)"
+                    : "Tax (Optional)"}
+                </Label>
                 <Input
                   id="txTax"
                   type="number"
@@ -2788,6 +2707,12 @@ export default function InvestmentsPage() {
                   }
                   placeholder="0.00"
                 />
+                {transactionForm.transaction_type === "dividend" && (
+                  <p className="text-xs text-foreground-muted">
+                    Already deducted from the amount above; recorded for your
+                    tax overview only.
+                  </p>
+                )}
               </div>
             </div>
 

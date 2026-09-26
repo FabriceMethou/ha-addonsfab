@@ -3,7 +3,7 @@ Investments API endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Literal
+from typing import Optional, Literal, Tuple
 from datetime import datetime
 import sys, os
 import threading
@@ -25,8 +25,39 @@ from deps import DB_PATH
 db = lazy_db   # built on first use; see backend/deps.py
 isin_lookup = ISINLookup()
 
-def _get_latest_price(symbol: str) -> Optional[float]:
-    """Get latest price for a symbol.
+#: Markets Yahoo quotes in a subunit: the price is divided into the main unit.
+_QUOTE_SUBUNITS = {"GBp": ("GBP", 100), "GBX": ("GBP", 100), "ZAc": ("ZAR", 100), "ILA": ("ILS", 100)}
+
+
+def _in_main_unit(price: float, currency: Optional[str]) -> Tuple[float, Optional[str]]:
+    if currency in _QUOTE_SUBUNITS:
+        main, factor = _QUOTE_SUBUNITS[currency]
+        return price / factor, main
+    return price, currency
+
+
+def _price_in_holding_currency(price: float, quote_currency: Optional[str],
+                               holding: dict, rates: dict) -> float:
+    """A quote converted to the currency the holding is kept in.
+
+    Raises ValueError when there is no rate for the quote currency, rather than
+    storing a price in the wrong currency: the old code stored the raw quote,
+    so a USD price was read as EUR.
+    """
+    holding_currency = holding.get("holding_currency") or holding.get("account_currency") or "EUR"
+    if not quote_currency or quote_currency == holding_currency:
+        return price
+    if quote_currency not in rates or holding_currency not in rates:
+        raise ValueError(f"no exchange rate for {quote_currency}: quoted in {quote_currency}, "
+                         f"held in {holding_currency}")
+    return db.convert_with_rates(price, quote_currency, holding_currency, rates)
+
+
+def _get_quote(symbol: str) -> Tuple[Optional[float], Optional[str]]:
+    """Get the latest price for a symbol, and the currency it is quoted in.
+
+    The currency is None when the source does not say. Prices quoted in a
+    subunit (London in pence) come back in the main unit.
 
     The Yahoo chart endpoint (fetched via an HTTP proxy) is tried first because
     direct Yahoo calls are commonly IP-blocked/rate-limited on server hosts,
@@ -80,11 +111,12 @@ def _get_latest_price(symbol: str) -> Optional[float]:
                         f"No Yahoo data for {symbol}: {error.get('description', error)} "
                         f"- manual price entry required"
                     )
-                    return None
+                    return None, None
 
                 result = chart.get("result") or []
                 if result:
                     meta = result[0].get("meta") or {}
+                    currency = meta.get("currency")
                     closes = (
                         (result[0].get("indicators") or {})
                         .get("quote", [{}])[0]
@@ -92,13 +124,13 @@ def _get_latest_price(symbol: str) -> Optional[float]:
                     )
                     for price in reversed(closes):
                         if price is not None:
-                            return float(price)
+                            return _in_main_unit(float(price), currency)
                     # No history rows, but the meta block sometimes carries a price.
                     meta_price = meta.get("regularMarketPrice")
                     if meta_price is not None:
-                        return float(meta_price)
+                        return _in_main_unit(float(meta_price), currency)
                     logger.info(f"Yahoo has no price for {symbol} - manual price entry required")
-                    return None
+                    return None, None
                 break  # valid response but empty result; stop retrying
             except Exception as e:
                 logger.warning(f"Proxy price fetch failed for {symbol} (attempt {attempt + 1}): {e}")
@@ -106,16 +138,19 @@ def _get_latest_price(symbol: str) -> Optional[float]:
 
     # Fallback: direct yfinance (only reaches data where the host isn't blocked).
     ticker = yf.Ticker(symbol)
+    yf_currency = None
 
     try:
         fast_info = ticker.fast_info
+        yf_currency = (fast_info.get("currency") if hasattr(fast_info, "get")
+                       else getattr(fast_info, "currency", None))
         for key in ("last_price", "regular_market_price", "previous_close"):
             if hasattr(fast_info, "get"):
                 price = fast_info.get(key)
             else:
                 price = getattr(fast_info, key, None)
             if price:
-                return float(price)
+                return _in_main_unit(float(price), yf_currency)
     except Exception as e:
         logger.warning(f"Failed to fetch fast info for {symbol}: {e}")
 
@@ -139,7 +174,7 @@ def _get_latest_price(symbol: str) -> Optional[float]:
         if closes.empty:
             continue
 
-        return float(closes.iloc[-1])
+        return _in_main_unit(float(closes.iloc[-1]), yf_currency)
 
     try:
         info = ticker.info
@@ -150,11 +185,11 @@ def _get_latest_price(symbol: str) -> Optional[float]:
             or info.get("previousClose")
         )
         if price is not None:
-            return float(price)
+            return _in_main_unit(float(price), info.get("currency") or yf_currency)
     except Exception as e:
         logger.warning(f"Failed to fetch info for {symbol}: {e}")
 
-    return None
+    return None, None
 
 class SecurityCreate(BaseModel):
     symbol: str
@@ -269,9 +304,37 @@ def delete_security(
 
 @router.get("/holdings")
 def get_holdings(current_user: User = Depends(get_current_user)):
-    """Get all investment holdings with calculated values"""
+    """All holdings, with value, cost and gain in the holding's currency and,
+    as *_display, in the display currency.
+
+    The page used to add up holdings kept in different currencies as if they
+    were one, under the display currency's symbol.
+    """
+    display_currency = db.get_preference('display_currency', 'EUR')
+    rates = db.get_exchange_rates_map()
     holdings = db.get_investment_holdings()
-    return {"holdings": holdings}
+    for h in holdings:
+        currency = h.get('holding_currency') or h.get('account_currency') or 'EUR'
+        quantity = h.get('quantity') or 0
+        average_cost = h.get('average_cost') or 0
+        price = h.get('current_price') or average_cost
+        value, cost = quantity * price, quantity * average_cost
+
+        def display(amount):
+            return (amount if currency == display_currency
+                    else db.convert_with_rates(amount, currency, display_currency, rates))
+
+        h.update({
+            'currency': currency,
+            'current_value': value,
+            'cost_basis': cost,
+            'gain_loss': value - cost,
+            'gain_loss_percent': (value - cost) / cost * 100 if cost > 0 else 0,
+            'current_value_display': display(value),
+            'cost_basis_display': display(cost),
+            'gain_loss_display': display(value - cost),
+        })
+    return {"holdings": holdings, "display_currency": display_currency}
 
 @router.post("/holdings")
 def create_holding(holding: InvestmentHoldingCreate, current_user: User = Depends(get_current_user)):
@@ -381,75 +444,6 @@ def delete_holding(holding_id: int, current_user: User = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Holding not found")
 
     return {"message": "Holding deleted successfully"}
-
-@router.get("/holdings/{holding_id}/current-price")
-def get_current_price(holding_id: int, current_user: User = Depends(get_current_user)):
-    """Get current price for holding using yfinance"""
-    holding = db.get_investment_holding(holding_id)
-    if not holding:
-        raise HTTPException(status_code=404, detail="Holding not found")
-
-    try:
-        current_price = _get_latest_price(holding['symbol'])
-        if current_price is None:
-            raise HTTPException(status_code=400, detail=f"Could not fetch price for {holding['symbol']}")
-        return {
-            "symbol": holding['symbol'],
-            "current_price": current_price,
-            "currency": holding.get('currency') or 'USD'
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch price: {str(e)}")
-
-@router.get("/test-price/{symbol}")
-def test_price(symbol: str, current_user: User = Depends(get_current_user)):
-    """Test price fetching for debugging - shows detailed info"""
-    import logging
-    logger = logging.getLogger("uvicorn")
-
-    try:
-        ticker = yf.Ticker(symbol)
-
-        # Test 1: Try getting info
-        try:
-            info = ticker.info
-            logger.info(f"Successfully got info for {symbol}")
-            logger.info(f"Info keys: {list(info.keys())[:20]}")  # First 20 keys
-
-            price_data = {
-                'regularMarketPrice': info.get('regularMarketPrice'),
-                'currentPrice': info.get('currentPrice'),
-                'regularMarketPreviousClose': info.get('regularMarketPreviousClose'),
-                'previousClose': info.get('previousClose')
-            }
-        except Exception as e:
-            logger.error(f"Failed to get info: {str(e)}")
-            price_data = {"error": str(e)}
-            info = {}
-
-        # Test 2: Try getting history
-        try:
-            history = ticker.history(period="5d", interval="1d", auto_adjust=False)
-            logger.info(f"History shape: {history.shape if not history.empty else 'empty'}")
-            history_data = {
-                'empty': history.empty,
-                'columns': list(history.columns) if not history.empty else [],
-                'last_close': float(history['Close'].iloc[-1]) if not history.empty and 'Close' in history.columns else None
-            }
-        except Exception as e:
-            logger.error(f"Failed to get history: {str(e)}")
-            history_data = {"error": str(e)}
-
-        return {
-            "symbol": symbol,
-            "price_from_info": price_data,
-            "history": history_data,
-            "final_price": _get_latest_price(symbol)
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/lookup/isin/{isin_code}")
 def lookup_isin(isin_code: str, current_user: User = Depends(get_current_user)):
@@ -756,7 +750,7 @@ def get_summary(current_user: User = Depends(get_current_user)):
         quantity = holding.get('quantity', 0) or 0
         average_cost = holding.get('average_cost', 0) or 0
         current_price = holding.get('current_price', 0) or average_cost
-        holding_currency = holding.get('holding_currency') or holding.get('security_currency', 'EUR')
+        holding_currency = holding.get('holding_currency') or holding.get('account_currency') or 'EUR'
 
         cost_basis = quantity * average_cost
         current_value = quantity * current_price
@@ -779,6 +773,7 @@ def get_summary(current_user: User = Depends(get_current_user)):
     from datetime import datetime, timedelta
     one_year_ago = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     recent_dividends = 0
+    dividend_tax_withheld = 0  # dividends are entered net; the tax is for the record
 
     for trans in all_transactions:
         trans_currency = trans.get('currency', 'EUR')
@@ -793,6 +788,7 @@ def get_summary(current_user: User = Depends(get_current_user)):
 
         if trans.get('transaction_type') == 'dividend':
             total_dividends += amount
+            dividend_tax_withheld += tax
             if trans.get('transaction_date', '') >= one_year_ago:
                 recent_dividends += amount
         total_fees += fees
@@ -816,6 +812,7 @@ def get_summary(current_user: User = Depends(get_current_user)):
         "dividend_yield": dividend_yield,
         "total_fees": total_fees,
         "total_tax": total_tax,
+        "dividend_tax_withheld": dividend_tax_withheld,
         "holdings_count": len(holdings),
         "allocation_by_type": allocation_data,
         "display_currency": display_currency
@@ -841,27 +838,31 @@ def update_holding_price(
         symbol = holding.get('symbol')
         logger.info(f"Updating price for {symbol}...")
 
-        current_price = _get_latest_price(symbol)
+        quote, quote_currency = _get_quote(symbol)
 
-        if current_price is None:
+        if quote is None:
             logger.warning(f"No price data available for {symbol}")
             raise HTTPException(status_code=400, detail=f"Could not fetch price for {symbol}")
 
-        # Update in database
-        from datetime import datetime
-        with db.db_connection(commit=True) as conn:
-            conn.execute("""
-                UPDATE investment_holdings
-                SET current_price = ?, last_price_update = ?
-                WHERE id = ?
-            """, (current_price, datetime.now().isoformat(), holding_id))
+        try:
+            current_price = _price_in_holding_currency(
+                quote, quote_currency, holding, db.get_exchange_rates_map())
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Price for {symbol} not stored: {e}")
+
+        # Through update_holding_price: it also re-values the investment
+        # account, which a plain UPDATE left on the old price.
+        db.update_holding_price(holding_id, current_price)
 
         logger.info(f"Price updated for {symbol}: {current_price}")
 
+        from datetime import datetime
         return {
             "message": "Price updated successfully",
             "symbol": symbol,
             "current_price": current_price,
+            "quote": quote,
+            "quote_currency": quote_currency,
             "updated_at": datetime.now().isoformat()
         }
     except HTTPException:
@@ -928,18 +929,22 @@ def _run_price_update(holdings, request_delay):
             fetched_any = True
 
             try:
-                current_price = _get_latest_price(symbol)
-                if current_price is None:
+                quote, quote_currency = _get_quote(symbol)
+                if quote is None:
                     failed.append({"symbol": symbol, "error": "No price data available"})
                     publish()
                     continue
 
-                with db.db_connection(commit=True) as conn:
-                    conn.execute(
-                        "UPDATE investment_holdings "
-                        "SET current_price = ?, last_price_update = ? WHERE id = ?",
-                        (current_price, datetime.now().isoformat(), holding_id),
-                    )
+                try:
+                    current_price = _price_in_holding_currency(
+                        quote, quote_currency, holding, db.get_exchange_rates_map())
+                except ValueError as e:
+                    failed.append({"symbol": symbol, "error": str(e)})
+                    publish()
+                    continue
+
+                # Re-values the investment account too; see update_holding_price.
+                db.update_holding_price(holding_id, current_price)
 
                 logger.info(f"{symbol}: {current_price}")
                 updated_count += 1
@@ -1008,40 +1013,3 @@ def get_price_update_status(current_user: User = Depends(get_current_user)):
     state["status"] = "running" if state["running"] else (
         "error" if state["error"] else "finished" if state["finished_at"] else "idle")
     return state
-
-
-@router.post("/fix-dividend-totals")
-def fix_dividend_totals(current_user: User = Depends(get_current_user)):
-    """
-    Fix existing dividend transactions that have total_amount = 0.
-    This is a one-time utility endpoint to fix data from before the dividend fix.
-    """
-    import logging
-    logger = logging.getLogger("uvicorn")
-
-    # Read, fix and re-read in one transaction, so a failure mid-way leaves the
-    # rows untouched rather than half-updated.
-    with db.db_connection(commit=True) as conn:
-        cursor = conn.cursor()
-
-        cursor.execute('SELECT COUNT(*) as count FROM investment_transactions '
-                       'WHERE transaction_type = "dividend" AND total_amount = 0')
-        count_before = cursor.fetchone()['count']
-        logger.info(f"Found {count_before} dividend transactions with total_amount = 0")
-
-        cursor.execute('UPDATE investment_transactions SET total_amount = price_per_share '
-                       'WHERE transaction_type = "dividend" AND total_amount = 0')
-        rows_updated = cursor.rowcount
-
-        cursor.execute('SELECT COUNT(*) as count FROM investment_transactions '
-                       'WHERE transaction_type = "dividend" AND total_amount = 0')
-        count_after = cursor.fetchone()['count']
-
-    logger.info(f"Fixed {rows_updated} dividend transactions. Remaining with 0 total: {count_after}")
-
-    return {
-        "message": f"Fixed {rows_updated} dividend transactions",
-        "fixed_count": rows_updated,
-        "before": count_before,
-        "after": count_after
-    }

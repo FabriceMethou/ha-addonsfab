@@ -5,7 +5,7 @@ Handles all database operations using SQLite
 import sqlite3
 import logging
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import json
 from pathlib import Path
 import time
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 #: Schema revision, written to PRAGMA user_version after _init_database() runs.
 #: Bump it when adding a migration so a database can report what it has applied.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: Ledger rows whose payee the app writes rather than a person: the cash legs of
 #: investment trades and both legs of a debt payment. Their "payee" is a holding
@@ -1090,6 +1090,18 @@ class FinanceDatabase:
             # later ran on every single startup.
             cursor.execute("DROP TABLE IF EXISTS pending_transactions")
             cursor.execute("DROP TABLE IF EXISTS recurring_templates")
+
+            # Schema 3: a holding with trades takes its quantity and average
+            # cost from them. Editing a holding used to store both, and the
+            # stored values then overrode every later trade. Holdings without
+            # trades keep theirs: it is all they have.
+            cursor.execute("""
+                UPDATE investment_holdings SET quantity = 0, average_cost = 0
+                 WHERE (quantity > 0 OR average_cost > 0)
+                   AND id IN (SELECT holding_id FROM investment_transactions)
+            """)
+            if cursor.rowcount:
+                logger.info(f"Cleared stored quantity/cost on {cursor.rowcount} holding(s) with trades")
 
             # Re-value investment accounts at every start. Their balance used to
             # be left at whatever it was created with — almost always zero —
@@ -3116,7 +3128,8 @@ class FinanceDatabase:
                 CASE WHEN h.current_price IS NOT NULL AND h.current_price > 0
                      THEN h.current_price
                      WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
-                     THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END)
+                     THEN SUM(CASE WHEN t.transaction_type = 'buy'
+                                   THEN t.total_amount + COALESCE(t.fees, 0) ELSE 0 END)
                           / SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
                      ELSE COALESCE(h.average_cost, 0)
                 END AS price,
@@ -5607,126 +5620,58 @@ class FinanceDatabase:
             return success
 
     def get_investment_holdings(self, account_id: int = None) -> List[Dict[str, Any]]:
-        """Get all investment holdings with calculated quantity and average cost from transactions."""
+        """Get investment holdings with quantity and average cost from their trades.
+
+        Average cost includes buy fees, as the capital of a sale does. A holding
+        without trades keeps the quantity and cost stored on it.
+        """
         with self.db_connection(commit=False) as conn:
             cursor = conn.cursor()
-
-            if account_id:
-                query = """
-                    SELECT h.id as holding_id,
-                           h.account_id,
-                           h.security_id,
-                           h.quantity as calculated_quantity,
-                           h.average_cost as calculated_average_cost,
-                           h.currency as holding_currency,
-                           h.current_price,
-                           h.last_price_update,
-                           h.created_at as holding_created_at,
-                           s.symbol,
-                           s.name,
-                           s.investment_type,
-                           s.isin,
-                           s.exchange,
-                           s.currency as security_currency,
-                           s.sector,
-                           s.country,
-                           s.notes as security_notes,
-                           a.name as account_name,
-                           a.currency as account_currency,
-                           -- Prefer stored values, fall back to transaction calculations
-                           CASE
-                               WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
-                               ELSE COALESCE(
-                                   SUM(CASE
-                                       WHEN t.transaction_type = 'buy' THEN t.shares
-                                       WHEN t.transaction_type = 'sell' THEN -t.shares
-                                       ELSE 0
-                                   END), 0
-                               )
-                           END as quantity,
-                           CASE
-                               WHEN h.average_cost IS NOT NULL AND h.average_cost > 0 THEN h.average_cost
-                               WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
-                               THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END) /
-                                    SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
-                               ELSE 0
-                           END as average_cost
-                    FROM investment_holdings h
-                    JOIN securities s ON h.security_id = s.id
-                    JOIN accounts a ON h.account_id = a.id
-                    LEFT JOIN investment_transactions t ON h.id = t.holding_id
-                    WHERE h.account_id = ?
-                    GROUP BY h.id
-                    ORDER BY s.symbol
-                """
-                cursor.execute(query, (account_id,))
-            else:
-                query = """
-                    SELECT h.id as holding_id,
-                           h.account_id,
-                           h.security_id,
-                           h.quantity as calculated_quantity,
-                           h.average_cost as calculated_average_cost,
-                           h.currency as holding_currency,
-                           h.current_price,
-                           h.last_price_update,
-                           h.created_at as holding_created_at,
-                           s.symbol,
-                           s.name,
-                           s.investment_type,
-                           s.isin,
-                           s.exchange,
-                           s.currency as security_currency,
-                           s.sector,
-                           s.country,
-                           s.notes as security_notes,
-                           a.name as account_name,
-                           a.currency as account_currency,
-                           -- Prefer stored values, fall back to transaction calculations
-                           CASE
-                               WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
-                               ELSE COALESCE(
-                                   SUM(CASE
-                                       WHEN t.transaction_type = 'buy' THEN t.shares
-                                       WHEN t.transaction_type = 'sell' THEN -t.shares
-                                       ELSE 0
-                                   END), 0
-                               )
-                           END as quantity,
-                           CASE
-                               WHEN h.average_cost IS NOT NULL AND h.average_cost > 0 THEN h.average_cost
-                               WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
-                               THEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.total_amount ELSE 0 END) /
-                                    SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
-                               ELSE 0
-                           END as average_cost
-                    FROM investment_holdings h
-                    JOIN securities s ON h.security_id = s.id
-                    JOIN accounts a ON h.account_id = a.id
-                    LEFT JOIN investment_transactions t ON h.id = t.holding_id
-                    GROUP BY h.id
-                    ORDER BY a.name, s.symbol
-                """
-                cursor.execute(query)
-
-            rows = cursor.fetchall()
-        
-            # Process rows to merge calculated values with transaction-based values
-            holdings = []
-            for row in rows:
-                holding = dict(row)
-                # Use transaction-based values if available, otherwise use stored values
-                holding['quantity'] = holding['quantity'] or holding['calculated_quantity']
-                holding['average_cost'] = holding['average_cost'] or holding['calculated_average_cost']
-            
-                # Map holding_id to id for frontend compatibility
-                if 'holding_id' in holding:
-                    holding['id'] = holding['holding_id']
-                    del holding['holding_id']
-            
-                holdings.append(holding)
-        
-            return holdings
+            where, params = ("WHERE h.account_id = ?", (account_id,)) if account_id else ("", ())
+            cursor.execute(f"""
+                SELECT h.id,
+                       h.account_id,
+                       h.security_id,
+                       h.currency as holding_currency,
+                       h.current_price,
+                       h.last_price_update,
+                       h.created_at as holding_created_at,
+                       s.symbol,
+                       s.name,
+                       s.investment_type,
+                       s.isin,
+                       s.exchange,
+                       s.currency as security_currency,
+                       s.sector,
+                       s.country,
+                       s.notes as security_notes,
+                       a.name as account_name,
+                       a.currency as account_currency,
+                       COUNT(t.id) AS transaction_count,
+                       CASE
+                           WHEN h.quantity IS NOT NULL AND h.quantity > 0 THEN h.quantity
+                           ELSE COALESCE(SUM(CASE
+                               WHEN t.transaction_type = 'buy' THEN t.shares
+                               WHEN t.transaction_type = 'sell' THEN -t.shares
+                               ELSE 0 END), 0)
+                       END as quantity,
+                       CASE
+                           WHEN h.average_cost IS NOT NULL AND h.average_cost > 0 THEN h.average_cost
+                           WHEN SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END) > 0
+                           THEN SUM(CASE WHEN t.transaction_type = 'buy'
+                                         THEN t.total_amount + COALESCE(t.fees, 0) ELSE 0 END) /
+                                SUM(CASE WHEN t.transaction_type = 'buy' THEN t.shares ELSE 0 END)
+                           ELSE 0
+                       END as average_cost
+                FROM investment_holdings h
+                JOIN securities s ON h.security_id = s.id
+                JOIN accounts a ON h.account_id = a.id
+                LEFT JOIN investment_transactions t ON h.id = t.holding_id
+                {where}
+                GROUP BY h.id
+                ORDER BY a.name, s.symbol
+            """, params)
+            return [dict(row) for row in cursor.fetchall()]
 
     def add_investment_holding(self, holding_data: Dict[str, Any]) -> int:
         """Add a new investment holding with optional ISIN."""
@@ -5794,9 +5739,25 @@ class FinanceDatabase:
             return holding_id
 
     def update_investment_holding(self, holding_id: int, update_data: Dict[str, Any]) -> bool:
-        """Update an existing investment holding."""
+        """Update an existing investment holding.
+
+        A holding with trades takes its quantity and average cost from them, so
+        those two are ignored here: stored, they overrode every later trade
+        (buy 10, edit the notes, sell 5, and it still said 10).
+        """
         with self.db_connection(commit=True) as conn:
             cursor = conn.cursor()
+
+            before = cursor.execute(
+                "SELECT account_id FROM investment_holdings WHERE id = ?", (holding_id,)).fetchone()
+            if not before:
+                return False
+            has_trades = cursor.execute(
+                "SELECT 1 FROM investment_transactions WHERE holding_id = ? LIMIT 1",
+                (holding_id,)).fetchone() is not None
+            if has_trades:
+                update_data = {k: v for k, v in update_data.items()
+                               if k not in ('quantity', 'purchase_price')}
 
             # Build update query dynamically based on provided fields
             update_fields = []
@@ -5872,10 +5833,9 @@ class FinanceDatabase:
                 logger.info(f"Updated investment holding ID {holding_id}: {', '.join(updated_fields)}")
 
             if success:
-                # The holding may have moved account: re-price both.
-                for account_id in {row['account_id'] for row in cursor.execute(
-                        "SELECT account_id FROM investment_holdings WHERE id = ?",
-                        (holding_id,)).fetchall()} | {update_data.get('account_id')}:
+                # The holding may have moved account: re-price the one it left
+                # as well as the one it is in now.
+                for account_id in {before['account_id'], update_data.get('account_id')}:
                     if account_id:
                         self._sync_investment_account_balance(cursor, account_id)
 
@@ -6110,28 +6070,10 @@ class FinanceDatabase:
                 raise ValueError("Transaction type 'Investment Income - Realised Gain' not found in database")
 
             cash_impact = total_amount - fees - tax
-
-            # Average cost of the shares being sold, from the trades so far.
-            cursor.execute("""
-                SELECT
-                    COALESCE(SUM(CASE WHEN transaction_type = 'buy'  THEN shares ELSE 0 END), 0)
-                  - COALESCE(SUM(CASE WHEN transaction_type = 'sell' THEN shares ELSE 0 END), 0)
-                        AS shares_held,
-                    COALESCE(SUM(CASE WHEN transaction_type = 'buy'
-                                      THEN total_amount + fees ELSE 0 END), 0) AS gross_cost,
-                    COALESCE(SUM(CASE WHEN transaction_type = 'buy'  THEN shares ELSE 0 END), 0)
-                        AS shares_bought
-                FROM investment_transactions
-                WHERE holding_id = ?
-            """, (trans_data['holding_id'],))
-            prior = cursor.fetchone()
-
             shares_sold = trans_data.get('shares') or 0
-            avg_cost = ((prior['gross_cost'] / prior['shares_bought'])
-                        if prior['shares_bought'] else 0)
-            # Never book back more capital than was ever put in.
-            cost_of_sold = round(min(avg_cost * shares_sold, prior['gross_cost']), 2)
-            realised_gain = round(cash_impact - cost_of_sold, 2)
+            cost_of_sold, realised_gain = self._sale_split(
+                cursor, trans_data['holding_id'], trans_data['transaction_date'],
+                shares_sold, cash_impact)
 
             description = f"Sale of {shares_sold} shares of {symbol}"
             destinataire = holding_name
@@ -6234,12 +6176,90 @@ class FinanceDatabase:
 
         trans_id = cursor.lastrowid
 
+        # A buy dated before an existing sale changes what that sale cost.
+        self._resplit_sales(cursor, trans_data['holding_id'])
+
         # The trade changed the position, so the account holding it is worth
         # something different now.
         self._sync_investment_account_balance(cursor, investment_account_id)
 
         logger.info(f"Added investment transaction: {transaction_type}, cash impact: {cash_impact} on linked account {linked_account_id}, linked to transaction {linked_transaction_id}")
         return trans_id
+
+    def _sale_split(self, cursor, holding_id: int, sale_date: str,
+                    shares_sold: float, cash_received: float) -> Tuple[float, float]:
+        """Split what a sale brought in into capital returned and gain.
+
+        The capital is the average cost, fees included, of the buys made up to
+        the sale date: a later purchase cannot change what earlier shares cost.
+        Never more capital than was ever put in.
+        """
+        bought = cursor.execute("""
+            SELECT COALESCE(SUM(total_amount + COALESCE(fees, 0)), 0) AS gross_cost,
+                   COALESCE(SUM(shares), 0) AS shares_bought
+              FROM investment_transactions
+             WHERE holding_id = ? AND transaction_type = 'buy' AND transaction_date <= ?
+        """, (holding_id, sale_date)).fetchone()
+        avg_cost = bought['gross_cost'] / bought['shares_bought'] if bought['shares_bought'] else 0
+        cost_of_sold = round(min(avg_cost * shares_sold, bought['gross_cost']), 2)
+        return cost_of_sold, round(cash_received - cost_of_sold, 2)
+
+    def _resplit_sales(self, cursor, holding_id: int) -> None:
+        """Recompute the capital/gain split of every sale of a holding.
+
+        Adding, editing or deleting a buy changes the cost of the shares later
+        sold. Each sale keeps the cash it brought in: only the division between
+        its capital row and its gain row moves, so no balance changes. Sales
+        from before the split existed (booked whole as income) are left alone.
+        """
+        gain_type = cursor.execute("""
+            SELECT tt.id AS type_id, ts.id AS subtype_id
+              FROM transaction_types tt
+              JOIN transaction_subtypes ts ON ts.type_id = tt.id
+             WHERE tt.name = 'Investment Income' AND ts.name = 'Realised Gain'
+        """).fetchone()
+        symbol = (cursor.execute("""
+            SELECT s.symbol FROM investment_holdings h
+              JOIN securities s ON s.id = h.security_id WHERE h.id = ?
+        """, (holding_id,)).fetchone() or {'symbol': ''})['symbol']
+        sales = cursor.execute("""
+            SELECT id, transaction_date, shares, total_amount, fees, tax,
+                   linked_transaction_id, gain_transaction_id
+              FROM investment_transactions
+             WHERE holding_id = ? AND transaction_type = 'sell'
+             ORDER BY transaction_date, id
+        """, (holding_id,)).fetchall()
+
+        for sale in sales:
+            capital = cursor.execute("""
+                SELECT t.*, tt.category FROM transactions t
+                  JOIN transaction_types tt ON tt.id = t.type_id WHERE t.id = ?
+            """, (sale['linked_transaction_id'],)).fetchone()
+            if not capital or capital['category'] != 'transfer' or not gain_type:
+                continue
+            cash = (sale['total_amount'] or 0) - (sale['fees'] or 0) - (sale['tax'] or 0)
+            cost, gain = self._sale_split(cursor, holding_id, sale['transaction_date'],
+                                          sale['shares'] or 0, cash)
+            cursor.execute("UPDATE transactions SET amount = ? WHERE id = ?", (cost, capital['id']))
+            description = f"Realised {'gain' if gain > 0 else 'loss'} on {symbol}"
+            if gain and sale['gain_transaction_id']:
+                cursor.execute("UPDATE transactions SET amount = ?, description = ? WHERE id = ?",
+                               (gain, description, sale['gain_transaction_id']))
+            elif gain:
+                cursor.execute("""
+                    INSERT INTO transactions
+                    (account_id, transaction_date, amount, currency, description,
+                     destinataire, type_id, subtype_id, confirmed)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """, (capital['account_id'], capital['transaction_date'], gain, capital['currency'],
+                      description, capital['destinataire'], gain_type['type_id'], gain_type['subtype_id']))
+                cursor.execute("UPDATE investment_transactions SET gain_transaction_id = ? WHERE id = ?",
+                               (cursor.lastrowid, sale['id']))
+            elif sale['gain_transaction_id']:
+                # The reference goes first: it holds a foreign key to the row.
+                cursor.execute("UPDATE investment_transactions SET gain_transaction_id = NULL WHERE id = ?",
+                               (sale['id'],))
+                cursor.execute("DELETE FROM transactions WHERE id = ?", (sale['gain_transaction_id'],))
 
     def get_investment_transactions(self, holding_id: int = None) -> List[Dict[str, Any]]:
         """Get investment transactions, optionally filtered by holding."""
@@ -6286,210 +6306,20 @@ class FinanceDatabase:
                                        trans_data: Dict[str, Any]) -> bool:
         """Body of update_investment_transaction, inside a managed connection.
 
-        Reverses the old cash impact and applies the new one; both have to land
-        in the same transaction or the linked account keeps only half the edit.
+        An edit is the old trade removed and the new one added, in the same
+        transaction. Adding and deleting are the only code that writes a
+        trade's cash rows, so an edit cannot book them any differently — the
+        hand-written reversal this replaces crashed on every call, and rewrote a
+        sale as whole-proceeds income beside its gain row.
         """
-        cursor = conn.cursor()
-
-        # Get the old transaction data
-        cursor.execute("""
-            SELECT it.*, h.account_id, s.symbol, s.name
-            FROM investment_transactions it
-            JOIN investment_holdings h ON it.holding_id = h.id
-            JOIN securities s ON h.security_id = s.id
-            WHERE it.id = ?
-        """, (transaction_id,))
-        old_trans = cursor.fetchone()
-
-        if not old_trans:
+        exists = conn.execute(
+            "SELECT 1 FROM investment_transactions WHERE id = ?", (transaction_id,)).fetchone()
+        if not exists:
             return False
-
-        old_trans = dict(old_trans)
-        old_investment_account_id = old_trans['account_id']
-
-        # Get the linked account for the OLD transaction
-        cursor.execute("SELECT linked_account_id FROM accounts WHERE id = ?", (old_investment_account_id,))
-        old_inv_account = cursor.fetchone()
-        old_linked_account_id = old_inv_account['linked_account_id'] if old_inv_account else None
-
-        # Reverse old balance impact (if within account opening date range)
-        if old_linked_account_id:
-            cursor.execute("SELECT opening_date FROM accounts WHERE id = ?", (old_linked_account_id,))
-            account_result = cursor.fetchone()
-            account_opening_date = account_result['opening_date'] if account_result else None
-
-            # Calculate old cash impact
-            old_transaction_type = old_trans['transaction_type']
-            old_total = old_trans['total_amount']
-            old_fees = old_trans.get('fees', 0)
-            old_tax = old_trans.get('tax', 0)
-
-            if old_transaction_type == 'buy':
-                old_cash_impact = -(old_total + old_fees + old_tax)
-            elif old_transaction_type == 'sell':
-                old_cash_impact = old_total - old_fees - old_tax
-            elif old_transaction_type == 'dividend':
-                old_cash_impact = old_total
-            else:
-                old_cash_impact = 0
-
-            # Only reverse if transaction was on or after opening date
-            if not (account_opening_date and old_trans['transaction_date'] < account_opening_date):
-                cursor.execute("""
-                    UPDATE accounts
-                    SET balance = balance - ?
-                    WHERE id = ?
-                """, (old_cash_impact, old_linked_account_id))
-
-        # Get the NEW holding's investment account
-        cursor.execute("""
-            SELECT h.account_id, s.symbol, s.name
-            FROM investment_holdings h
-            JOIN securities s ON h.security_id = s.id
-            WHERE h.id = ?
-        """, (trans_data['holding_id'],))
-        holding_result = cursor.fetchone()
-
-        if not holding_result:
-            raise ValueError(f"Holding ID {trans_data['holding_id']} not found")
-
-        new_investment_account_id = holding_result['account_id']
-        symbol = holding_result['symbol']
-        holding_name = holding_result['name']
-
-        # Get the NEW linked account
-        cursor.execute("SELECT linked_account_id, currency FROM accounts WHERE id = ?", (new_investment_account_id,))
-        new_inv_account = cursor.fetchone()
-
-        if not new_inv_account or not new_inv_account['linked_account_id']:
-            raise ValueError(f"Investment account must have a linked account for cash movements")
-
-        new_linked_account_id = new_inv_account['linked_account_id']
-
-        # Get linked account currency
-        cursor.execute("SELECT currency FROM accounts WHERE id = ?", (new_linked_account_id,))
-        linked_account = cursor.fetchone()
-        linked_account_currency = linked_account['currency'] if linked_account else trans_data['currency']
-
-        # Calculate new cash impact
-        transaction_type = trans_data['transaction_type']
-        total_amount = trans_data['total_amount']
-        fees = trans_data.get('fees', 0)
-        tax = trans_data.get('tax', 0)
-
-        if transaction_type == 'buy':
-            cursor.execute("""
-                SELECT tt.id as type_id, ts.id as subtype_id
-                FROM transaction_types tt
-                JOIN transaction_subtypes ts ON ts.type_id = tt.id
-                WHERE tt.name = 'Investments' AND ts.name = 'Securities Purchase'
-            """)
-            type_info = cursor.fetchone()
-            new_cash_impact = -(total_amount + fees + tax)
-            description = f"Purchase of {trans_data.get('shares', 0)} shares of {symbol}"
-            destinataire = holding_name
-
-        elif transaction_type == 'sell':
-            cursor.execute("""
-                SELECT tt.id as type_id, ts.id as subtype_id
-                FROM transaction_types tt
-                JOIN transaction_subtypes ts ON ts.type_id = tt.id
-                WHERE tt.name = 'Investment Income' AND ts.name = 'Sale Proceeds'
-            """)
-            type_info = cursor.fetchone()
-            new_cash_impact = total_amount - fees - tax
-            description = f"Sale of {trans_data.get('shares', 0)} shares of {symbol}"
-            destinataire = holding_name
-
-        elif transaction_type == 'dividend':
-            cursor.execute("""
-                SELECT tt.id as type_id, ts.id as subtype_id
-                FROM transaction_types tt
-                JOIN transaction_subtypes ts ON ts.type_id = tt.id
-                WHERE tt.name = 'Investment Income' AND ts.name = 'Dividends'
-            """)
-            type_info = cursor.fetchone()
-            new_cash_impact = total_amount
-            description = f"Dividend from {symbol}"
-            destinataire = holding_name
-        else:
-            raise ValueError(f"Unknown transaction type: {transaction_type}")
-
-        # Update the linked regular transaction
-        if old_trans.get('linked_transaction_id'):
-            cursor.execute("""
-                UPDATE transactions
-                SET account_id = ?,
-                    transaction_date = ?,
-                    amount = ?,
-                    currency = ?,
-                    description = ?,
-                    destinataire = ?,
-                    type_id = ?,
-                    subtype_id = ?
-                WHERE id = ?
-            """, (
-                new_linked_account_id,
-                trans_data['transaction_date'],
-                new_cash_impact,
-                linked_account_currency,
-                trans_data.get('notes', description),
-                destinataire,
-                type_info['type_id'],
-                type_info['subtype_id'],
-                old_trans['linked_transaction_id']
-            ))
-
-        # Check if new transaction is before linked account opening date
-        cursor.execute("SELECT opening_date FROM accounts WHERE id = ?", (new_linked_account_id,))
-        account_result = cursor.fetchone()
-        account_opening_date = account_result['opening_date'] if account_result else None
-
-        # Only update balance if transaction is on or after account opening date
-        if account_opening_date and trans_data['transaction_date'] < account_opening_date:
-            logger.info(f"Investment transaction dated {trans_data['transaction_date']} is before linked account opening date {account_opening_date} - balance not updated")
-        else:
-            # Apply new balance impact
-            cursor.execute("""
-                UPDATE accounts
-                SET balance = balance + ?
-                WHERE id = ?
-            """, (new_cash_impact, new_linked_account_id))
-
-        # Update the investment transaction
-        cursor.execute("""
-            UPDATE investment_transactions
-            SET holding_id = ?,
-                transaction_type = ?,
-                transaction_date = ?,
-                shares = ?,
-                price_per_share = ?,
-                total_amount = ?,
-                fees = ?,
-                tax = ?,
-                currency = ?,
-                notes = ?
-            WHERE id = ?
-        """, (
-            trans_data['holding_id'],
-            transaction_type,
-            trans_data['transaction_date'],
-            trans_data.get('shares'),
-            trans_data.get('price_per_share'),
-            total_amount,
-            fees,
-            tax,
-            trans_data['currency'],
-            trans_data.get('notes'),
-            transaction_id
-        ))
-
-        success = cursor.rowcount > 0
-
-        if success:
-            self._sync_investment_account_balance(cursor, investment_account_id)
-            logger.info(f"Updated investment transaction {transaction_id}")
-        return success
+        self._delete_investment_transaction(conn, transaction_id)
+        new_id = self._add_investment_transaction(conn, trans_data)
+        logger.info(f"Updated investment transaction {transaction_id} (now {new_id})")
+        return True
 
     def delete_investment_transaction(self, transaction_id: int) -> bool:
         """
@@ -6570,6 +6400,7 @@ class FinanceDatabase:
                 cursor.execute("DELETE FROM transactions WHERE id = ?", (row_id,))
 
         if success:
+            self._resplit_sales(cursor, trans['holding_id'])
             self._sync_investment_account_balance(cursor, investment_account_id)
             logger.info(f"Deleted investment transaction {transaction_id}")
         return success
@@ -6721,43 +6552,6 @@ class FinanceDatabase:
             'holdings': holdings_summary
         }
 
-    def update_all_prices_from_yahoo(self) -> int:
-        """Update all holding prices from Yahoo Finance."""
-        # Imported here rather than at module scope: yfinance pulls in pandas and
-        # the whole market-data stack, which would make `import database` — and
-        # therefore the entire test suite — depend on it.
-        import yfinance as yf
-
-        holdings = self.get_investment_holdings()
-        updated = 0
-
-        for holding in holdings:
-            try:
-                symbol = holding['symbol']
-                ticker = yf.Ticker(symbol)
-                info = ticker.info
-
-                # Try multiple price fields (different securities use different fields)
-                # European securities often use different fields than US stocks
-                current_price = (
-                    info.get('currentPrice') or
-                    info.get('regularMarketPrice') or
-                    info.get('previousClose') or
-                    info.get('navPrice')
-                )
-
-                if current_price and current_price > 0:
-                    self.update_holding_price(holding['id'], current_price)
-                    updated += 1
-                    logger.info(f"Updated {holding['symbol']}: {current_price}")
-                else:
-                    logger.warning(f"No valid price found for {holding['symbol']} (ISIN: {holding.get('isin', 'N/A')})")
-            except Exception as e:
-                logger.error(f"Failed to update {holding['symbol']} (ISIN: {holding.get('isin', 'N/A')}): {e}")
-
-        return updated
-
-    # ==================== Machine Learning====================
     def get_training_data(self, min_transactions: int = 100) -> List[Dict]:
         #"""Get transactions for ML training."""
         with self.db_connection(commit=False) as conn:

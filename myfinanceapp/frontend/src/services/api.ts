@@ -398,8 +398,6 @@ export const investmentsAPI = {
   updateHolding: (id: number, data: Record<string, unknown>) =>
     api.put(`/api/investments/holdings/${id}`, data),
   deleteHolding: (id: number) => api.delete(`/api/investments/holdings/${id}`),
-  getCurrentPrice: (id: number) =>
-    api.get(`/api/investments/holdings/${id}/current-price`),
   getMonthly: (params: { start_date?: string; end_date?: string } = {}) =>
     api.get("/api/investments/monthly", { params }),
   getSummary: () => api.get("/api/investments/summary"),
@@ -419,7 +417,6 @@ export const investmentsAPI = {
     api.post("/api/investments/holdings/update-all-prices"),
   getPriceUpdateStatus: () =>
     api.get("/api/investments/holdings/price-update-status"),
-  fixDividendTotals: () => api.post("/api/investments/fix-dividend-totals"),
 };
 
 // Work Profiles API
