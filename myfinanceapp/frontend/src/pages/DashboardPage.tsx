@@ -414,7 +414,15 @@ export default function DashboardPage() {
   // (it leaves net worth unchanged), shown as a breakdown, not taken out.
   const monthlySavings = subtractMoney(monthlyIncome, monthlyExpenses);
   const monthlyInvested = monthlyInvestments?.total_invested ?? 0;
-  const monthlyKeptInCash = subtractMoney(monthlySavings, monthlyInvested);
+  // The savings breakdown compares savings with *net* investing: money from a
+  // sale or taken back out of an investment is not new money, so selling one
+  // fund to buy another does not look like cash spent.
+  const monthlyNetInvested =
+    monthlyInvestments?.net_invested ?? monthlyInvested;
+  const monthlyTakenOut = subtractMoney(monthlyInvested, monthlyNetInvested);
+  const monthlyKeptInCash = subtractMoney(monthlySavings, monthlyNetInvested);
+  // Invested beyond this month's savings came from money already there.
+  const monthlyFromExistingCash = Math.max(0, -monthlyKeptInCash);
 
   const previousIncome = previousTransactionsSummary?.total_income ?? 0;
   const previousExpenses = absMoney(
@@ -575,14 +583,54 @@ export default function DashboardPage() {
             </p>
             {/* Where the savings went: invested, or still in cash. */}
             <p className="text-xs text-foreground-muted mt-2">
-              of which invested{" "}
-              <span className="text-amber-500 font-medium">
-                {formatCurrency(monthlyInvested)}
-              </span>
-              {" · "}kept in cash{" "}
-              <span className="text-foreground font-medium">
-                {formatCurrency(monthlyKeptInCash)}
-              </span>
+              {monthlyNetInvested < 0 ? (
+                <>
+                  took{" "}
+                  <span className="text-amber-500 font-medium">
+                    {formatCurrency(-monthlyNetInvested)}
+                  </span>{" "}
+                  out of investments · kept in cash{" "}
+                  <span className="text-foreground font-medium">
+                    {formatCurrency(monthlyKeptInCash)}
+                  </span>
+                </>
+              ) : monthlyFromExistingCash > 0 ? (
+                <>
+                  invested{" "}
+                  <span className="text-amber-500 font-medium">
+                    {formatCurrency(monthlyNetInvested)}
+                  </span>
+                  {monthlySavings > 0 ? (
+                    <>
+                      : {formatCurrency(monthlySavings)} from this month's
+                      savings and{" "}
+                      <span className="text-foreground font-medium">
+                        {formatCurrency(monthlyFromExistingCash)}
+                      </span>{" "}
+                      from money you already had
+                    </>
+                  ) : (
+                    " from money you already had"
+                  )}
+                </>
+              ) : (
+                <>
+                  of which invested{" "}
+                  <span className="text-amber-500 font-medium">
+                    {formatCurrency(monthlyNetInvested)}
+                  </span>
+                  {" · "}kept in cash{" "}
+                  <span className="text-foreground font-medium">
+                    {formatCurrency(monthlyKeptInCash)}
+                  </span>
+                </>
+              )}
+              {monthlyTakenOut > 0 && monthlyNetInvested >= 0 && (
+                <>
+                  {" "}
+                  (net of {formatCurrency(monthlyTakenOut)} sold or taken out)
+                </>
+              )}
             </p>
           </div>
         </div>

@@ -62,6 +62,14 @@ _INVESTED_TRANSFER = f"""(t.transfer_account_id IS NOT NULL
 #: What Monthly Invested adds up.
 _INVESTED = f"({_INVESTED_BUY}) OR {_INVESTED_TRANSFER}"
 
+#: The reverse of _INVESTED_TRANSFER: money moved out of an investment account
+#: without holdings to an account outside investments, e.g. gold sold back.
+_DIVESTED_TRANSFER = f"""(t.transfer_account_id IS NOT NULL
+    AND t.amount < 0
+    AND {_CATEGORY_OF_T} = 'transfer'
+    AND t.account_id IN ({_HOLDINGLESS_INVESTMENT_ACCOUNTS})
+    AND t.transfer_account_id NOT IN (SELECT id FROM accounts WHERE account_type = 'investment'))"""
+
 #: Which transactions `t` each dashboard card counts, so a click on a card can
 #: list exactly them. Income and expenses go by sign and leave transfers out,
 #: as the dashboard summary does, so investing is never an expense.
@@ -72,6 +80,8 @@ FLOW_CLAUSES = {
     # saved, not something taken out of it: it leaves net worth unchanged.
     'savings': f"{_CATEGORY_OF_T} != 'transfer'",
     'invested': _INVESTED,
+    # Taken back out of investments; with sales, what makes investing net.
+    'divested': _DIVESTED_TRANSFER,
     # Money sent towards investments that Monthly Invested does not count:
     # transfers into an investment account with holdings or its cash account,
     # and anything filed under the Investments category by hand. Trade legs are

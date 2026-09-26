@@ -181,7 +181,7 @@ def test_a_transfer_to_the_brokers_cash_account_counts_as_sent(db, month):
 
 
 def test_counting_agrees_with_listing(db, month):
-    for flow in ("income", "expense", "savings", "invested", "investment_transfers"):
+    for flow in ("income", "expense", "savings", "invested", "divested", "investment_transfers"):
         filters = {**MONTH, "flow": flow}
         assert db.count_transactions(filters) == len(db.get_transactions(filters)), flow
 
@@ -197,6 +197,53 @@ def test_a_buy_without_cash_transaction_is_reported(api, db, month):
 
     assert card["buy_count"] == 2
     assert card["unlinked_buy_count"] == 1
+
+
+def test_money_taken_out_of_gold_is_listed_as_divested(db, month):
+    add(db, month["gold"], -80.0, ids_of(db, "Transfer", "Between Accounts"), "Cash",
+        date="2026-03-25", is_transfer=True, transfer_account_id=month["cash"])
+    assert listed(db, "divested") == [("Cash", -80.0)]
+
+
+def sell_half(db, month):
+    """Sell 5 of the 10 shares bought at 10 for 12 each: capital plus a gain."""
+    db.add_investment_transaction({
+        "holding_id": month["holding"], "transaction_type": "sell", "transaction_date": "2026-03-20",
+        "shares": 5, "price_per_share": 12.0, "total_amount": 60.0,
+        "fees": 0.0, "tax": 0.0, "currency": "EUR"})
+    with db.db_connection(commit=False) as conn:
+        capital, gain = conn.execute(
+            "SELECT c.amount, g.amount FROM investment_transactions it "
+            "JOIN transactions c ON c.id = it.linked_transaction_id "
+            "JOIN transactions g ON g.id = it.gain_transaction_id "
+            "WHERE it.transaction_type = 'sell'").fetchone()
+    return capital, gain
+
+
+def test_net_investing_takes_out_capital_returned_and_withdrawals(api, db, month):
+    """What the savings breakdown uses: selling one position to buy another,
+    or taking gold back, is not new money invested. The card stays gross."""
+    capital, gain = sell_half(db, month)
+    add(db, month["gold"], -80.0, ids_of(db, "Transfer", "Between Accounts"), "Cash",
+        date="2026-03-25", is_transfer=True, transfer_account_id=month["cash"])
+
+    card = api[1].get_monthly_summary(**MONTH, current_user=None)
+
+    assert card["total_invested"] == 351.0
+    assert (card["total_sold"], card["total_withdrawn"]) == (60.0, 80.0)
+    assert card["capital_returned"] == capital
+    assert card["net_invested"] == pytest.approx(351.0 - capital - 80.0)
+
+
+def test_a_sale_gain_is_not_counted_twice(api, db, month):
+    """The gain is income, already in savings: net investing takes back the
+    proceeds minus the gain, or 'kept in cash' would count the gain twice."""
+    capital, gain = sell_half(db, month)
+    assert gain > 0 and capital + gain == pytest.approx(60.0)
+
+    card = api[1].get_monthly_summary(**MONTH, current_user=None)
+    assert card["net_invested"] == pytest.approx(351.0 - (60.0 - gain))
+    assert gain in [t["amount"] for t in db.get_transactions({**MONTH, "flow": "income"})]
 
 
 def test_an_unknown_flow_is_refused(api, month):

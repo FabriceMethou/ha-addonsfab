@@ -637,6 +637,7 @@ def get_monthly_summary(
     total_dividends = 0.0  # sum of dividend amounts
     buy_count = 0
     unlinked_buy_count = 0  # buys with no cash transaction to list on the Transactions page
+    sale_legs = []          # first ledger row of each sale: the capital returned
     sell_count = 0
     dividend_count = 0
 
@@ -661,6 +662,8 @@ def get_monthly_summary(
         elif t_type == 'sell':
             total_sold += amount - fees - tax
             sell_count += 1
+            if t.get('linked_transaction_id'):
+                sale_legs.append(t['linked_transaction_id'])
         elif t_type == 'dividend':
             total_dividends += amount
             dividend_count += 1
@@ -681,10 +684,44 @@ def get_monthly_summary(
         for t in invested_transfers)
     total_invested += total_transferred
 
+    # The capital a sale returned, not its proceeds: a sale writes the capital
+    # as a transfer and the gain as income, and the gain is already in the
+    # month's savings. Older sales booked whole as income return nothing here,
+    # being in savings in full.
+    capital_returned = 0.0
+    if sale_legs:
+        with db.db_connection(commit=False) as conn:
+            legs = conn.execute(f"""
+                SELECT t.amount, a.currency
+                  FROM transactions t
+                  JOIN accounts a ON a.id = t.account_id
+                  JOIN transaction_types tt ON tt.id = t.type_id
+                 WHERE t.id IN ({','.join('?' * len(sale_legs))})
+                   AND tt.category = 'transfer'
+            """, sale_legs).fetchall()
+        capital_returned = sum(
+            db.convert_with_rates(abs(leg['amount']), leg['currency'] or 'EUR',
+                                  display_currency, exchange_rates)
+            for leg in legs)
+
+    # Money taken back out of those accounts. With the capital returned by
+    # sales, it turns investing into net investing: what the savings
+    # breakdown compares with savings, so selling one fund to buy another is
+    # not counted as new money.
+    divested_filters = {**transfer_filters, 'flow': 'divested'}
+    divested = db.get_transactions(divested_filters)
+    total_withdrawn = sum(
+        db.convert_with_rates(abs(t['amount']), t.get('account_currency', 'EUR'),
+                              display_currency, exchange_rates)
+        for t in divested)
+
     return {
         "total_invested": total_invested,
         "total_transferred": total_transferred,
         "transfer_count": len(invested_transfers),
+        "total_withdrawn": total_withdrawn,
+        "capital_returned": capital_returned,
+        "net_invested": total_invested - capital_returned - total_withdrawn,
         "total_sold": total_sold,
         "total_dividends": total_dividends,
         "net_cash_flow": total_sold + total_dividends - total_invested,

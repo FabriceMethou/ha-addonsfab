@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.5.1
+- Dashboard › Monthly Summary: when you invest more than you saved in a month, the breakdown now says so, *"invested €3,000: €2,500 from this month's savings and €500 from money you already had"*, instead of showing a negative "kept in cash"
+- The breakdown now compares savings with **net** investing: the capital a sale gives back, and money taken back out of an account such as a gold account, are subtracted. Selling one fund to buy another no longer looks like cash spent. Only the capital is subtracted, not the gain, which is income and already part of your savings. The Monthly Invested card still shows everything invested
+
 ## 2.5.0
 
 **Next Month Prediction, rebuilt**
