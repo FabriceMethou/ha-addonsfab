@@ -1,0 +1,44 @@
+{
+  "_comment": "The live stream's message shapes. The same file is in the app's test resources (MyLife360/app/src/test/resources/stream_messages.json); both test suites check against it, so backend and app cannot drift apart. Change both copies together.",
+  "position": {
+    "type": "position",
+    "device_id": 7,
+    "latitude": 48.8566,
+    "longitude": 2.3522,
+    "speed_kmh": 42.5,
+    "course": 90.0,
+    "altitude": 35.0,
+    "accuracy": 8.0,
+    "address": "1 Rue de Rivoli",
+    "battery_level": 64.0,
+    "is_charging": true,
+    "alarm": "sos",
+    "fix_time": "2026-09-27T18:00:00+00:00"
+  },
+  "alert": {
+    "type": "alert",
+    "id": 12,
+    "created_at": "2026-09-27T18:00:05+00:00",
+    "kind": "arrival",
+    "severity": "info",
+    "device_id": 7,
+    "place_id": 100,
+    "place_name": "Home",
+    "title": "Alice arrived at Home",
+    "body": "Arrived",
+    "latitude": 48.8566,
+    "longitude": 2.3522
+  },
+  "member_status": {
+    "type": "member_status",
+    "device_id": 7,
+    "sharing": "paused",
+    "app_version": "1.2.0"
+  },
+  "device": {
+    "type": "device",
+    "device_id": 7,
+    "status": "online",
+    "last_update": "2026-09-27T18:00:00+00:00"
+  }
+}
