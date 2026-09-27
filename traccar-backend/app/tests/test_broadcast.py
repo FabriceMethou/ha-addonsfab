@@ -1,114 +1,103 @@
-"""Tests for the BroadcastBus."""
+"""Tests for the BroadcastBus: every message reaches exactly its audience."""
 import asyncio
 import json
 
 import pytest
 
-from app.broadcast import BroadcastBus
+from app.broadcast import QUEUE_SIZE, BroadcastBus
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_publish_to_subscriber():
-    bus = BroadcastBus()
-    q = await bus.subscribe()
-    await bus.publish("hello")
-    assert await q.get() == "hello"
-    await bus.unsubscribe(q)
+def _drain(sub) -> list[dict]:
+    out = []
+    while not sub.queue.empty():
+        out.append(json.loads(sub.queue.get_nowait()))
+    return out
 
 
-async def test_publish_to_multiple_subscribers():
+async def test_update_reaches_subscribers_who_can_see_the_device():
     bus = BroadcastBus()
-    q1 = await bus.subscribe()
-    q2 = await bus.subscribe()
-    await bus.publish("msg")
-    assert await q1.get() == "msg"
-    assert await q2.get() == "msg"
-    await bus.unsubscribe(q1)
-    await bus.unsubscribe(q2)
+    alice = await bus.subscribe(device_id=1, visible={1, 2})
+    carol = await bus.subscribe(device_id=3, visible={3})
+    await bus.publish_update({"type": "position", "device_id": 2}, subject_device_id=2)
+    assert _drain(alice) == [{"type": "position", "device_id": 2}]
+    assert _drain(carol) == []
+
+
+async def test_flat_position_messages_are_scoped():
+    """Regression: the old bus let flattened messages through to everyone."""
+    bus = BroadcastBus()
+    outsider = await bus.subscribe(device_id=9, visible={9})
+    await bus.publish_update(
+        {"type": "position", "device_id": 1, "latitude": 1.0, "longitude": 2.0}, 1
+    )
+    assert _drain(outsider) == []
+
+
+async def test_publish_to_targets_named_devices_only():
+    bus = BroadcastBus()
+    a = await bus.subscribe(device_id=1, visible={1})
+    b = await bus.subscribe(device_id=2, visible={2})
+    await bus.publish_to({"type": "alert", "id": 5}, recipients={2})
+    assert _drain(a) == []
+    assert _drain(b) == [{"type": "alert", "id": 5}]
+
+
+async def test_control_messages_without_recipients_reach_everyone():
+    bus = BroadcastBus()
+    a = await bus.subscribe(device_id=1, visible={1})
+    b = await bus.subscribe(device_id=2, visible={2})
+    await bus.publish_to({"type": "reconnecting"})
+    assert _drain(a) == [{"type": "reconnecting"}]
+    assert _drain(b) == [{"type": "reconnecting"}]
+
+
+async def test_unfiltered_subscriber_sees_every_update():
+    bus = BroadcastBus()
+    admin = await bus.subscribe()
+    await bus.publish_update({"type": "position", "device_id": 4}, 4)
+    assert len(_drain(admin)) == 1
 
 
 async def test_unsubscribe_stops_delivery():
     bus = BroadcastBus()
-    q = await bus.subscribe()
-    await bus.unsubscribe(q)
-    await bus.publish("should not arrive")
-    assert q.empty()
+    sub = await bus.subscribe(device_id=1, visible={1})
+    await bus.unsubscribe(sub)
+    await bus.publish_update({"type": "position", "device_id": 1}, 1)
+    assert sub.queue.empty()
+    assert bus.subscriber_count() == 0
 
-
-
-
-async def test_unsubscribe_nonexistent_is_safe():
-    bus = BroadcastBus()
-    q: asyncio.Queue = asyncio.Queue()
-    await bus.unsubscribe(q)  # Should not raise
-
-
-# ---------------------------------------------------------------------------
-# A saturated subscriber must not be silently unsubscribed (finding D-06)
-# ---------------------------------------------------------------------------
 
 async def test_slow_subscriber_keeps_receiving_after_saturation():
-    """Dropping the oldest position is fine. Dropping the client is not:
-    its SSE connection stays open, so the app shows a live map frozen forever.
-    """
+    """A full queue drops its oldest message, never the subscription (D-06)."""
     bus = BroadcastBus()
-    q = await bus.subscribe()
-    for i in range(150):  # more than maxsize
-        await bus.publish(f"msg-{i}")
-
-    assert len(bus._queues) == 1, "subscriber must still be attached"
-    await bus.publish("fresh")
-    drained = []
-    while not q.empty():
-        drained.append(q.get_nowait())
-    assert "fresh" in drained, "newest message must reach a slow subscriber"
+    sub = await bus.subscribe(device_id=1, visible={1})
+    for i in range(QUEUE_SIZE + 5):
+        await bus.publish_update({"n": i}, 1)
+    await bus.publish_update({"n": "fresh"}, 1)
+    received = _drain(sub)
+    assert len(received) == QUEUE_SIZE
+    assert received[-1] == {"n": "fresh"}
+    assert bus.subscriber_count() == 1
 
 
-# ---------------------------------------------------------------------------
-# Fan-out is scoped to the subscriber's circles (finding C-01, realtime channel)
-# ---------------------------------------------------------------------------
-
-POSITIONS = '{"positions": [{"deviceId": 1, "latitude": 48.85}, {"deviceId": 2, "latitude": 55.67}]}'
-
-
-async def test_subscriber_only_receives_positions_it_may_see():
+async def test_refresh_visibility_applies_new_circles():
     bus = BroadcastBus()
-    q = await bus.subscribe(visible_ids={1})
-    await bus.publish(POSITIONS)
-    payload = json.loads(await q.get())
-    assert [p["deviceId"] for p in payload["positions"]] == [1]
+    sub = await bus.subscribe(device_id=1, unique_id="ml360-alice", visible={1})
+
+    async def resolve(unique_id: str) -> set[int]:
+        assert unique_id == "ml360-alice"
+        return {1, 2}
+
+    await bus.refresh_visibility(resolve)
+    assert _drain(sub) == [{"type": "circles_changed"}]
+    await bus.publish_update({"type": "position", "device_id": 2}, 2)
+    assert _drain(sub) == [{"type": "position", "device_id": 2}]
 
 
-async def test_message_is_withheld_when_nothing_is_visible():
+async def test_many_subscribers_do_not_block_each_other():
     bus = BroadcastBus()
-    q = await bus.subscribe(visible_ids={9})
-    await bus.publish(POSITIONS)
-    assert q.empty()
-
-
-async def test_devices_and_events_are_filtered_too():
-    bus = BroadcastBus()
-    q = await bus.subscribe(visible_ids={2})
-    await bus.publish('{"devices": [{"id": 1}, {"id": 2}], "events": ['
-                      '{"deviceId": 1, "type": "geofenceEnter"},'
-                      '{"deviceId": 2, "type": "geofenceExit"}]}')
-    payload = json.loads(await q.get())
-    assert [d["id"] for d in payload["devices"]] == [2]
-    assert [e["deviceId"] for e in payload["events"]] == [2]
-
-
-async def test_control_messages_reach_everyone():
-    """Keepalives and reconnection notices carry no device data."""
-    bus = BroadcastBus()
-    q = await bus.subscribe(visible_ids={99})
-    await bus.publish('{"type": "reconnecting"}')
-    assert json.loads(await q.get()) == {"type": "reconnecting"}
-
-
-async def test_unfiltered_subscriber_still_gets_everything():
-    bus = BroadcastBus()
-    q = await bus.subscribe()
-    await bus.publish(POSITIONS)
-    payload = json.loads(await q.get())
-    assert len(payload["positions"]) == 2
+    subs = [await bus.subscribe(device_id=i, visible={0, i}) for i in range(1, 20)]
+    await asyncio.gather(*(bus.publish_update({"device_id": 0}, 0) for _ in range(3)))
+    assert all(len(_drain(s)) == 3 for s in subs)

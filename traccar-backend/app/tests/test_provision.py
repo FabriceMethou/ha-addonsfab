@@ -1,193 +1,150 @@
-"""Tests for POST /provision endpoint."""
+"""Tests for POST /provision and moving to a new phone."""
+import json
+
+import httpx
 import pytest
 import respx
-import httpx
 
-from app.tests.conftest import TRACCAR, PROVISION_CODE
+from app.authz import visible_device_ids
+from app.database import add_device_to_group, create_group, get_groups_for_device, get_session
+from app.tests.conftest import PROVISION_CODE, TRACCAR, auth, mock_admin_session, seed_session
 
 pytestmark = pytest.mark.asyncio
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-ADMIN_SESSION_MOCK = httpx.Response(200, json={"id": 1, "administrator": True})
-
 
 def _device(id, name, unique_id, last_update="2024-01-15T10:00:00Z"):
-    return {
-        "id": id,
-        "name": name,
-        "uniqueId": unique_id,
-        "lastUpdate": last_update,
-        "status": "online",
-    }
+    return {"id": id, "name": name, "uniqueId": unique_id, "lastUpdate": last_update,
+            "status": "online"}
 
 
-def _user(id, email, name="User"):
-    return {"id": id, "name": name, "email": email}
+def _enrol(name: str, unique_id: str, **extra) -> dict:
+    return {"display_name": name, "device_unique_id": unique_id, **extra}
 
-
-# ---------------------------------------------------------------------------
-# Test cases
-# ---------------------------------------------------------------------------
 
 @respx.mock
-async def test_provision_new_device_and_user(client):
-    """Brand-new device and user — everything is created fresh."""
-    unique_id = "ml360-newdev001"
-    email = f"{unique_id}@mylife360.local"
-
-    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
+async def test_provision_new_device(client):
+    mock_admin_session()
     respx.get(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(200, json=[]))
-    respx.get(f"{TRACCAR}/api/users").mock(return_value=httpx.Response(200, json=[]))
-    respx.post(f"{TRACCAR}/api/users").mock(
-        return_value=httpx.Response(201, json=_user(10, email, "Alice"))
+    create = respx.post(f"{TRACCAR}/api/devices").mock(
+        return_value=httpx.Response(201, json=_device(5, "Alice's phone", "ml360-new"))
     )
-    respx.post(f"{TRACCAR}/api/devices").mock(
-        return_value=httpx.Response(201, json=_device(5, "Alice's phone", unique_id))
-    )
-    # Admin → new device, new user → new device (no existing users/devices)
-    respx.post(f"{TRACCAR}/api/permissions").mock(return_value=httpx.Response(204, json={}))
 
-    resp = await client.post(
-        "/provision",
-        json={"display_name": "Alice", "device_unique_id": unique_id, "enrolment_code": PROVISION_CODE},
-    )
+    resp = await client.post("/provision", json=_enrol("Alice", "ml360-new",
+                                                        enrolment_code=PROVISION_CODE))
     assert resp.status_code == 201
     body = resp.json()
-    assert "device_token" in body
+    assert body["device_id"] == 5
     assert body["tracking_url"] == "http://traccar.test"
+    assert json.loads(create.calls[0].request.read())["name"] == "Alice's phone"
+    assert (await get_session(body["device_token"]))["traccar_device_id"] == 5
 
 
 @respx.mock
-async def test_provision_existing_device_same_uuid(client):
-    """Device already registered with same UUID — reuse it, skip creation."""
-    unique_id = "ml360-existing"
-    email = f"{unique_id}@mylife360.local"
-
-    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
+async def test_reinstall_on_the_same_phone_reuses_its_device(client):
+    mock_admin_session()
     respx.get(f"{TRACCAR}/api/devices").mock(
-        return_value=httpx.Response(200, json=[_device(3, "Bob's phone", unique_id)])
+        return_value=httpx.Response(200, json=[_device(3, "Bob's phone", "ml360-bob")])
     )
-    respx.get(f"{TRACCAR}/api/users").mock(
-        return_value=httpx.Response(200, json=[_user(20, email, "Bob")])
-    )
-    # Password update for existing user
-    respx.put(f"{TRACCAR}/api/users/20").mock(return_value=httpx.Response(200, json=_user(20, email)))
-    respx.post(f"{TRACCAR}/api/permissions").mock(return_value=httpx.Response(204, json={}))
+    create = respx.post(f"{TRACCAR}/api/devices")
 
-    resp = await client.post(
-        "/provision",
-        json={"display_name": "Bob", "device_unique_id": unique_id, "enrolment_code": PROVISION_CODE},
-    )
+    resp = await client.post("/provision", json=_enrol("Bob", "ml360-bob",
+                                                        enrolment_code=PROVISION_CODE))
     assert resp.status_code == 201
-    assert "device_token" in resp.json()
+    assert resp.json()["device_id"] == 3
+    assert not create.called
 
 
 @respx.mock
-async def test_provision_reinstall_device_found_by_name(client):
-    """App reinstalled with new UUID — device found by name, uniqueId updated."""
-    old_uid = "ml360-old"
-    new_uid = "ml360-new"
-    email = f"{new_uid}@mylife360.local"
-    device_name = "Carol's phone"
-
-    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
+async def test_enrolling_with_an_existing_name_does_not_take_over_that_device(client):
+    """Regression for E-08: the name fallback rebound other people's devices."""
+    mock_admin_session()
     respx.get(f"{TRACCAR}/api/devices").mock(
-        return_value=httpx.Response(200, json=[_device(7, device_name, old_uid)])
+        return_value=httpx.Response(200, json=[_device(7, "Carol's phone", "ml360-carol")])
     )
-    respx.put(f"{TRACCAR}/api/devices/7").mock(
-        return_value=httpx.Response(200, json=_device(7, device_name, new_uid))
+    takeover = respx.put(f"{TRACCAR}/api/devices/7")
+    respx.post(f"{TRACCAR}/api/devices").mock(
+        return_value=httpx.Response(201, json=_device(8, "Carol's phone", "ml360-impostor"))
     )
-    respx.get(f"{TRACCAR}/api/users").mock(return_value=httpx.Response(200, json=[]))
-    respx.post(f"{TRACCAR}/api/users").mock(
-        return_value=httpx.Response(201, json=_user(30, email, "Carol"))
-    )
-    respx.post(f"{TRACCAR}/api/permissions").mock(return_value=httpx.Response(204, json={}))
 
-    resp = await client.post(
-        "/provision",
-        json={"display_name": "Carol", "device_unique_id": new_uid, "enrolment_code": PROVISION_CODE},
-    )
+    resp = await client.post("/provision", json=_enrol("Carol", "ml360-impostor",
+                                                        enrolment_code=PROVISION_CODE))
     assert resp.status_code == 201
+    assert resp.json()["device_id"] == 8
+    assert not takeover.called
 
 
 @respx.mock
-async def test_provision_reinstall_user_found_by_old_email(client):
-    """Reinstall — device found by name, user found via old-UUID email hint."""
-    old_uid = "ml360-old2"
-    new_uid = "ml360-new2"
-    old_email = f"{old_uid}@mylife360.local"
-    new_email = f"{new_uid}@mylife360.local"
-    device_name = "Dave's phone"
+async def test_moving_to_a_new_phone_keeps_device_and_circles(client):
+    old_token = await seed_session(device_unique_id="ml360-old", traccar_device_id=11,
+                                   display_name="Dave")
+    await seed_session(device_unique_id="ml360-eve", traccar_device_id=12, display_name="Eve")
+    fam = await create_group("Family", "#4CAF50", owner_unique_id="ml360-old")
+    await add_device_to_group("ml360-eve", fam["id"])
 
-    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
+    code = (await client.post("/devices/me/transfer-code", headers=auth(old_token))).json()["code"]
+
+    mock_admin_session()
     respx.get(f"{TRACCAR}/api/devices").mock(
-        return_value=httpx.Response(200, json=[_device(8, device_name, old_uid)])
+        return_value=httpx.Response(200, json=[_device(11, "Dave's phone", "ml360-old")])
     )
-    respx.put(f"{TRACCAR}/api/devices/8").mock(
-        return_value=httpx.Response(200, json=_device(8, device_name, new_uid))
+    moved = respx.put(f"{TRACCAR}/api/devices/11").mock(
+        return_value=httpx.Response(200, json=_device(11, "Dave's phone", "ml360-newphone"))
     )
-    respx.get(f"{TRACCAR}/api/users").mock(
-        return_value=httpx.Response(200, json=[_user(40, old_email, "Dave")])
-    )
-    # Email update
-    respx.put(f"{TRACCAR}/api/users/40").mock(
-        return_value=httpx.Response(200, json=_user(40, new_email, "Dave"))
-    )
-    # Password update (second put on same user — both are PUT /api/users/40)
-    respx.post(f"{TRACCAR}/api/permissions").mock(return_value=httpx.Response(204, json={}))
 
-    resp = await client.post(
-        "/provision",
-        json={"display_name": "Dave", "device_unique_id": new_uid, "enrolment_code": PROVISION_CODE},
-    )
+    resp = await client.post("/provision", json=_enrol("Dave", "ml360-newphone",
+                                                        transfer_code=code.lower()))
     assert resp.status_code == 201
+    assert resp.json()["device_id"] == 11
+    assert json.loads(moved.calls[0].request.read())["uniqueId"] == "ml360-newphone"
+
+    new_session = await get_session(resp.json()["device_token"])
+    assert await get_groups_for_device("ml360-newphone") == [fam["id"]]
+    assert await visible_device_ids(new_session) == {11, 12}
+    # The old phone's token no longer works.
+    assert (await client.get("/groups", headers=auth(old_token))).status_code == 401
 
 
 @respx.mock
-async def test_provision_multiple_devices_same_name_picks_most_recent(client):
-    """When multiple devices share the display name, pick the most recently updated."""
-    new_uid = "ml360-newest"
-    device_name = "Eve's phone"
-
-    devices = [
-        _device(10, device_name, "old-uid-a", last_update="2024-01-01T00:00:00Z"),
-        _device(11, device_name, "old-uid-b", last_update="2024-06-01T00:00:00Z"),  # most recent
-        _device(12, device_name, "old-uid-c", last_update="2023-12-01T00:00:00Z"),
-    ]
-
-    respx.get(f"{TRACCAR}/api/session").mock(return_value=ADMIN_SESSION_MOCK)
-    respx.get(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(200, json=devices))
-    # Should update device 11 (most recent)
+async def test_transfer_code_works_once(client):
+    old_token = await seed_session(device_unique_id="ml360-old", traccar_device_id=11)
+    code = (await client.post("/devices/me/transfer-code", headers=auth(old_token))).json()["code"]
+    mock_admin_session()
+    respx.get(f"{TRACCAR}/api/devices").mock(
+        return_value=httpx.Response(200, json=[_device(11, "X's phone", "ml360-old")])
+    )
     respx.put(f"{TRACCAR}/api/devices/11").mock(
-        return_value=httpx.Response(200, json=_device(11, device_name, new_uid))
+        return_value=httpx.Response(200, json=_device(11, "X's phone", "ml360-a"))
     )
-    respx.get(f"{TRACCAR}/api/users").mock(return_value=httpx.Response(200, json=[]))
-    respx.post(f"{TRACCAR}/api/users").mock(
-        return_value=httpx.Response(201, json=_user(50, f"{new_uid}@mylife360.local", "Eve"))
-    )
-    respx.post(f"{TRACCAR}/api/permissions").mock(return_value=httpx.Response(204, json={}))
+    first = await client.post("/provision", json=_enrol("X", "ml360-a", transfer_code=code))
+    second = await client.post("/provision", json=_enrol("X", "ml360-b", transfer_code=code))
+    assert first.status_code == 201
+    assert second.status_code == 403
 
-    resp = await client.post(
-        "/provision",
-        json={"display_name": "Eve", "device_unique_id": new_uid, "enrolment_code": PROVISION_CODE},
-    )
-    assert resp.status_code == 201
-    # Verify the PUT on device 11 was called (not 10 or 12)
-    assert respx.calls.call_count > 0
+
+async def test_unknown_transfer_code_is_refused(client):
+    resp = await client.post("/provision", json=_enrol("X", "ml360-x", transfer_code="ZZZZZZZZ"))
+    assert resp.status_code == 403
+
+
+async def test_repeated_wrong_codes_trip_the_global_brake(client):
+    """X-Forwarded-For can be forged, so the per-IP limit alone is not enough."""
+    statuses = []
+    for i in range(12):
+        resp = await client.post(
+            "/provision",
+            json=_enrol("X", f"ml360-{i}", enrolment_code="wrong"),
+            headers={"X-Forwarded-For": f"10.0.0.{i}"},
+        )
+        statuses.append(resp.status_code)
+    assert statuses[:10] == [403] * 10
+    assert statuses[10:] == [429, 429]
 
 
 @respx.mock
 async def test_provision_traccar_5xx_returns_503(client):
-    """If Traccar admin session fails with 5xx, return 503."""
     respx.get(f"{TRACCAR}/api/session").mock(
         return_value=httpx.Response(500, text="Internal Server Error")
     )
-
-    resp = await client.post(
-        "/provision",
-        json={"display_name": "Frank", "device_unique_id": "ml360-fail", "enrolment_code": PROVISION_CODE},
-    )
+    resp = await client.post("/provision", json=_enrol("Frank", "ml360-fail",
+                                                        enrolment_code=PROVISION_CODE))
     assert resp.status_code == 503

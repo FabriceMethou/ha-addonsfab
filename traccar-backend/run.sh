@@ -8,6 +8,11 @@ if [ -z "${TRACCAR_URL:-}" ]; then
     export TRACCAR_ADMIN_TOKEN=$(bashio::config 'traccar_admin_token')
     export TRACCAR_ADMIN_USER_ID=$(bashio::config 'traccar_admin_user_id')
     export ENROLMENT_CODE=$(bashio::config 'enrolment_code')
+    export SPEEDING_LIMIT_KMH=$(bashio::config 'speeding_limit_kmh' '130')
+    export LOW_BATTERY_PERCENT=$(bashio::config 'low_battery_percent' '15')
+    if bashio::config.has_value 'traccar_osmand_lan_url'; then
+        export TRACCAR_OSMAND_LAN_URL=$(bashio::config 'traccar_osmand_lan_url')
+    fi
     export LOG_LEVEL=$(bashio::config 'log_level' 'info')
 fi
 

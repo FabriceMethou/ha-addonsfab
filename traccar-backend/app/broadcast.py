@@ -1,91 +1,103 @@
-"""Fan-out broadcast bus for real-time event distribution."""
+"""Fan-out bus for real-time delivery to connected phones.
+
+Every message says who may receive it, explicitly:
+
+* ``publish_update`` carries data about one device (a position, a status
+  change). It reaches subscribers whose circles include that device.
+* ``publish_to`` targets named devices (alerts, status requests), or everyone
+  when ``recipients`` is None (control messages such as "reconnecting").
+
+The previous bus inferred the audience from the payload's shape and treated
+anything it did not recognise as a control frame. The stream published
+flattened messages it did not recognise, so every phone received every
+device's position regardless of circles.
+"""
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
+from typing import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
-# Keys in a Traccar websocket frame, mapped to the field naming the device.
-_DEVICE_KEYS = {"positions": "deviceId", "events": "deviceId", "devices": "id"}
+QUEUE_SIZE = 100
+
+
+@dataclass(eq=False)
+class Subscriber:
+    device_id: int | None
+    unique_id: str | None
+    visible: set[int] | None
+    queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=QUEUE_SIZE))
 
 
 class BroadcastBus:
-    """Fan-out bus: one producer feeds many consumer queues.
-
-    Two rules beyond plain fan-out:
-
-    * A subscriber receives only the devices it is allowed to see. Without
-      this the realtime channel leaks every family's positions even once the
-      REST routes are scoped (finding C-01).
-    * A subscriber that falls behind loses its oldest messages, never its
-      subscription. Detaching it left the SSE connection open and the map
-      frozen with no error anywhere (finding D-06).
-    """
-
     def __init__(self) -> None:
-        self._queues: list[tuple[asyncio.Queue, set[int] | None]] = []
+        self._subs: list[Subscriber] = []
         self._lock = asyncio.Lock()
 
-    async def subscribe(self, visible_ids: set[int] | None = None) -> asyncio.Queue:
-        """Attach a consumer. ``visible_ids`` of None means unfiltered."""
-        q: asyncio.Queue = asyncio.Queue(maxsize=100)
+    async def subscribe(
+        self,
+        device_id: int | None = None,
+        unique_id: str | None = None,
+        visible: set[int] | None = None,
+    ) -> Subscriber:
+        """Attach a consumer. ``visible`` of None means it sees every device."""
+        sub = Subscriber(device_id, unique_id, None if visible is None else set(visible))
         async with self._lock:
-            self._queues.append((q, visible_ids))
-        return q
+            self._subs.append(sub)
+        return sub
 
-    async def unsubscribe(self, q: asyncio.Queue) -> None:
+    async def unsubscribe(self, sub: Subscriber) -> None:
         async with self._lock:
-            self._queues = [(qq, f) for qq, f in self._queues if qq is not q]
+            self._subs = [s for s in self._subs if s is not sub]
 
-    async def publish(self, data: str) -> None:
-        parsed = _parse(data)
+    async def publish_update(self, message: dict, subject_device_id: int) -> None:
+        payload = json.dumps(message)
         async with self._lock:
-            for q, visible in self._queues:
-                payload = _scoped_payload(parsed, data, visible)
-                if payload is None:
-                    continue
-                _offer(q, payload)
+            for sub in self._subs:
+                if sub.visible is None or subject_device_id in sub.visible:
+                    _offer(sub.queue, payload)
 
+    async def publish_to(self, message: dict, recipients: set[int] | None = None) -> None:
+        payload = json.dumps(message)
+        async with self._lock:
+            for sub in self._subs:
+                if recipients is None or sub.device_id in recipients:
+                    _offer(sub.queue, payload)
 
-def _parse(data: str) -> dict | None:
-    try:
-        parsed = json.loads(data)
-    except (ValueError, TypeError):
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    async def refresh_visibility(
+        self, resolve: Callable[[str], Awaitable[set[int]]]
+    ) -> None:
+        """Recompute every subscriber's audience after circles change."""
+        async with self._lock:
+            subs = list(self._subs)
+        for sub in subs:
+            if sub.unique_id is None or sub.visible is None:
+                continue
+            visible = await resolve(sub.unique_id)
+            if sub.device_id is not None:
+                visible.add(sub.device_id)
+            sub.visible = visible
+            _offer(sub.queue, json.dumps({"type": "circles_changed"}))
 
-
-def _scoped_payload(parsed: dict | None, raw: str, visible: set[int] | None) -> str | None:
-    """Return what this subscriber should receive, or None to withhold."""
-    if visible is None or parsed is None:
-        return raw
-
-    present = [k for k in _DEVICE_KEYS if isinstance(parsed.get(k), list)]
-    if not present:
-        # Control frames (keepalive, reconnecting) carry no device data.
-        return raw
-
-    scoped = dict(parsed)
-    kept = 0
-    for key in present:
-        id_field = _DEVICE_KEYS[key]
-        rows = [r for r in parsed[key]
-                if isinstance(r, dict) and r.get(id_field) in visible]
-        scoped[key] = rows
-        kept += len(rows)
-
-    return json.dumps(scoped) if kept else None
+    def subscriber_count(self) -> int:
+        return len(self._subs)
 
 
 def _offer(q: asyncio.Queue, payload: str) -> None:
-    """Enqueue, making room by discarding the oldest message if needed."""
+    """Enqueue, making room by discarding the oldest message if needed.
+
+    A subscriber that falls behind loses its oldest messages, never its
+    subscription (finding D-06).
+    """
     try:
         q.put_nowait(payload)
         return
     except asyncio.QueueFull:
         pass
     try:
-        q.get_nowait()  # drop the stalest update — it is worthless anyway
+        q.get_nowait()
     except asyncio.QueueEmpty:
         pass
     try:

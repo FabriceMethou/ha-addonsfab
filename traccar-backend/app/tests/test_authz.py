@@ -8,7 +8,7 @@ import pytest
 import respx
 
 from app.authz import visible_device_ids
-from app.database import add_device_to_group, create_group, get_session
+from app.database import add_device_to_group, create_group, get_session, insert_alert
 from app.tests.conftest import seed_session, TRACCAR
 
 pytestmark = pytest.mark.asyncio
@@ -151,24 +151,15 @@ async def test_route_of_own_device_is_allowed(client):
     assert len(resp.json()) == 1
 
 
-@respx.mock
-async def test_events_only_cover_visible_devices(client):
+async def test_alerts_only_cover_visible_devices(client):
     token, _ = await _device("ml360-alice", 1, "Alice")
     await _device("ml360-bob", 2, "Bob")
-    respx.get(f"{TRACCAR}/api/session").mock(return_value=httpx.Response(200, json={"id": 42}))
-    respx.get(f"{TRACCAR}/api/devices").mock(
-        return_value=httpx.Response(200, json=[
-            {"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"},
-        ])
-    )
-    respx.get(f"{TRACCAR}/api/geofences").mock(return_value=httpx.Response(200, json=[]))
-    events_route = respx.get(f"{TRACCAR}/api/reports/events").mock(
-        return_value=httpx.Response(200, json=[])
-    )
+    for device_id in (1, 2):
+        await insert_alert({
+            "created_at": "2026-09-27T10:00:00+00:00", "kind": "arrival", "severity": "info",
+            "device_id": device_id, "title": f"device {device_id} arrived", "body": "",
+        })
 
-    resp = await client.get("/events", headers=_auth(token))
+    resp = await client.get("/alerts", headers=_auth(token))
     assert resp.status_code == 200
-    # Bob's id must never even be asked for.
-    asked = events_route.calls[0].request.url
-    assert "deviceId=2" not in str(asked)
-    assert "deviceId=1" in str(asked)
+    assert [a["device_id"] for a in resp.json()] == [1]

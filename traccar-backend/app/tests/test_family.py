@@ -46,7 +46,10 @@ async def test_family_merged_result(client):
     assert len(data) == 1
     entry = data[0]
     assert entry["device_id"] == 7
-    assert entry["name"] == "Alice"
+    # The name the person enrolled with, not Traccar's "<name>'s phone" label.
+    assert entry["name"] == "TestUser"
+    assert entry["is_me"] is True
+    assert entry["sharing"] == "active"
     assert entry["latitude"] == 50.123
     assert entry["longitude"] == 8.456
     assert entry["battery_level"] == 85.0

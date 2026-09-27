@@ -14,11 +14,14 @@ import pytest
 import pytest_asyncio
 import respx
 import httpx
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.database import init_db, upsert_session, _DB_PATH
 from app.rate_limit import provision_limiter, crash_report_limiter
+from app.routers.provision import reset_failure_brake
+from app import places as place_cache
+from app.broadcast import bus
 
 
 # ---------------------------------------------------------------------------
@@ -37,20 +40,25 @@ async def _fresh_db():
     await init_db()
     yield
     # Clean tables between tests
-    await hold.execute("DELETE FROM wifi_mappings")
-    await hold.execute("DELETE FROM device_groups")
-    await hold.execute("DELETE FROM groups")
-    await hold.execute("DELETE FROM device_sessions")
+    for table in (
+        "wifi_mappings", "device_groups", "groups", "device_sessions", "group_invites",
+        "place_groups", "transfer_codes", "device_state", "place_presence", "alerts",
+        "driving_events",
+    ):
+        await hold.execute(f"DELETE FROM {table}")
     await hold.commit()
     await hold.close()
-    # Reset rate limiter state between tests
+    # Reset in-memory state between tests
     provision_limiter._hits.clear()
     crash_report_limiter._hits.clear()
+    reset_failure_brake()
+    place_cache.invalidate()
+    bus._subs.clear()
 
 
 @pytest_asyncio.fixture
 async def client() -> AsyncClient:
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 
@@ -74,4 +82,17 @@ async def seed_session(
 
 
 TRACCAR = "http://traccar.test"
+OSMAND = "http://traccar.test:5055"
 PROVISION_CODE = "test-enrolment-code"
+
+
+def auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def mock_admin_session() -> None:
+    """Traccar accepts the admin token (call inside an active respx mock)."""
+    import respx as _respx
+    _respx.get(f"{TRACCAR}/api/session").mock(
+        return_value=httpx.Response(200, json={"id": 1, "name": "admin"})
+    )

@@ -46,66 +46,39 @@ async def test_admin_session_raises_on_failure():
 
 
 # ---------------------------------------------------------------------------
-# User session
+# link_geofence_to_device — 400/409 silently ignored, 5xx raises
 # ---------------------------------------------------------------------------
 
 @respx.mock
-async def test_user_session_success():
-    tc = _client()
-    respx.post(f"{TRACCAR}/api/session").mock(
-        return_value=httpx.Response(200, json={"id": 5})
-    )
-
-    session = await tc.user_session("user@test.com", "pass")
-    assert session is not None
-    await session.aclose()
-
-
-@respx.mock
-async def test_user_session_wrong_credentials():
-    tc = _client()
-    respx.post(f"{TRACCAR}/api/session").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
-
-    with pytest.raises(TraccarError, match="User session failed"):
-        await tc.user_session("bad@test.com", "wrong")
-
-
-# ---------------------------------------------------------------------------
-# link_permission — 400/409 silently ignored, 5xx raises
-# ---------------------------------------------------------------------------
-
-@respx.mock
-async def test_link_permission_already_linked_409_is_ignored():
+async def test_link_geofence_already_linked_409_is_ignored():
     tc = _client()
     async with httpx.AsyncClient(base_url=TRACCAR) as http:
         respx.post(f"{TRACCAR}/api/permissions").mock(
             return_value=httpx.Response(409, text="Conflict")
         )
         # Should not raise
-        await tc.link_permission(http, user_id=1, device_id=2)
+        await tc.link_geofence_to_device(http, device_id=1, geofence_id=2)
 
 
 @respx.mock
-async def test_link_permission_400_is_ignored():
+async def test_link_geofence_400_is_ignored():
     tc = _client()
     async with httpx.AsyncClient(base_url=TRACCAR) as http:
         respx.post(f"{TRACCAR}/api/permissions").mock(
             return_value=httpx.Response(400, text="Bad Request")
         )
-        await tc.link_permission(http, user_id=1, device_id=2)
+        await tc.link_geofence_to_device(http, device_id=1, geofence_id=2)
 
 
 @respx.mock
-async def test_link_permission_5xx_raises():
+async def test_link_geofence_5xx_raises():
     tc = _client()
     async with httpx.AsyncClient(base_url=TRACCAR) as http:
         respx.post(f"{TRACCAR}/api/permissions").mock(
             return_value=httpx.Response(500, text="Server Error")
         )
         with pytest.raises(TraccarError, match="server error"):
-            await tc.link_permission(http, user_id=1, device_id=2)
+            await tc.link_geofence_to_device(http, device_id=1, geofence_id=2)
 
 
 # ---------------------------------------------------------------------------

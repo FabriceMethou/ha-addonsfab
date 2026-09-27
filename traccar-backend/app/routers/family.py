@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 
 from app.auth import require_session
 from app.authz import visible_device_ids
+from app.database import list_device_states, list_sessions, load_status
 from app.errors import http_error_from_traccar
 from app.traccar import TraccarError, traccar
 
@@ -26,6 +27,8 @@ async def get_family(session: dict = Depends(require_session)) -> list[dict[str,
 
     allowed = await visible_device_ids(session)
     pos_by_device: dict[int, dict] = {p["deviceId"]: p for p in positions}
+    states = await list_device_states()
+    names = {s["traccar_device_id"]: s["display_name"] for s in await list_sessions()}
 
     result = []
     for device in devices:
@@ -33,9 +36,13 @@ async def get_family(session: dict = Depends(require_session)) -> list[dict[str,
         if did not in allowed:
             continue
         pos = pos_by_device.get(did)
+        state = states.get(did) or {}
         entry: dict[str, Any] = {
             "device_id": did,
-            "name": device.get("name"),
+            "name": names.get(did) or device.get("name"),
+            "is_me": did == session["traccar_device_id"],
+            "sharing": state.get("sharing", "active"),
+            "app_version": load_status(state.get("status_json")).get("app_version"),
             "status": device.get("status"),
             "last_update": device.get("lastUpdate"),
             "latitude": pos["latitude"] if pos else None,

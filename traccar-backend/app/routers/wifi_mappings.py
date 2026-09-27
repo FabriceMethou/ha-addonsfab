@@ -1,10 +1,10 @@
-import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from app.auth import require_session
+from app.authz import visible_device_ids
 from app.database import (
     delete_wifi_mapping_for_groups,
     get_groups_for_device,
@@ -64,7 +64,7 @@ async def create_wifi_mapping(
     session: dict = Depends(require_session),
 ) -> WifiMappingResponse:
     # Write one row per circle the caller belongs to. A device in no circle
-    # falls back to the legacy unscoped bucket, which only it can see.
+    # falls back to the legacy unscoped bucket (group 0), visible to all.
     my_groups = await get_groups_for_device(session["device_unique_id"])
     for group_id in (my_groups or [0]):
         await upsert_wifi_mapping(body.ssid, body.place_id, group_id)
@@ -72,7 +72,7 @@ async def create_wifi_mapping(
         "WiFi mapping saved: ssid=%r → place_id=%d for circles %s",
         body.ssid, body.place_id, my_groups or ["unscoped"],
     )
-    await bus.publish(json.dumps({"type": "wifi_mapping_changed"}))
+    await bus.publish_to({"type": "wifi_mapping_changed"}, await visible_device_ids(session))
 
     place_name = ""
     try:
@@ -99,4 +99,4 @@ async def remove_wifi_mapping(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WiFi mapping not found")
     logger.info("WiFi mapping deleted: ssid=%r", ssid)
-    await bus.publish(json.dumps({"type": "wifi_mapping_changed"}))
+    await bus.publish_to({"type": "wifi_mapping_changed"}, await visible_device_ids(session))
