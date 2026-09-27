@@ -39,6 +39,32 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/myfinanceapp/app
         run: pytest tests/ -q --cov=. --cov-report=term-missing:skip-covered
 
+  mylife360-backend:
+    name: MyLife360 backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            traccar-backend/app/requirements.txt
+            traccar-backend/app/tests/requirements-test.txt
+
+      - name: Install dependencies
+        working-directory: traccar-backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt -r app/tests/requirements-test.txt
+
+      - name: Run tests
+        working-directory: traccar-backend
+        env:
+          PYTHONPATH: ${{ github.workspace }}/traccar-backend
+        run: pytest -q
+
   frontend:
     name: Frontend typecheck and lint
     runs-on: ubuntu-latest
@@ -84,3 +110,13 @@ jobs:
             exit 1
           fi
           echo "No application data under version control."
+
+      - name: Reject virtualenvs and bytecode
+        run: |
+          offenders=$(git ls-files | grep -E '(^|/)(\.venv|venv|__pycache__|node_modules)/|\.pyc$' || true)
+          if [ -n "$offenders" ]; then
+            echo "Build artefacts must not be committed:"
+            echo "$offenders" | head -20 | sed 's/^/  /'
+            exit 1
+          fi
+          echo "No virtualenvs or bytecode under version control."
