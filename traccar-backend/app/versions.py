@@ -24,9 +24,13 @@ def is_supported(version: str, minimum: str = MIN_APP_VERSION) -> bool:
     return parse_version(version) >= parse_version(minimum)
 
 
+# An app too old for everything else must still be able to fetch its update.
+EXEMPT_PREFIXES = ("/app/", "/health", "/crash-report")
+
+
 async def require_supported_app(request: Request, call_next):
     version = request.headers.get(HEADER)
-    if version and not is_supported(version):
+    if version and not is_supported(version) and not request.url.path.startswith(EXEMPT_PREFIXES):
         return JSONResponse(
             status_code=426,
             content={"detail": "This version of MyLife360 is too old. Please update the app."},

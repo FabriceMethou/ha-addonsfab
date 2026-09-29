@@ -134,6 +134,12 @@ async def test_an_app_too_old_is_asked_to_update(client):
     assert (await client.get("/groups", headers=auth(alice))).status_code == 200
 
 
+async def test_an_app_too_old_can_still_fetch_its_update(client):
+    alice, _, _ = await _family()
+    resp = await client.get("/app/latest", headers={**auth(alice), "X-MyLife360-Version": "1.0.0"})
+    assert resp.status_code != 426
+
+
 async def test_versions_compare_as_numbers():
     assert is_supported("1.10.0", "1.2.0")
     assert is_supported("1.2.0-debug", "1.2.0")
