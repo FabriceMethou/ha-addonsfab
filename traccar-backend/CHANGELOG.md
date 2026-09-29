@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.3
+
+Best with MyLife360 app 1.2.0 built on or after 29 September.
+
+- A trip saved while the phone had no data (a flight, a tunnel, abroad) no
+  longer replays on the map when the phone reconnects. Every position is
+  still stored in the history, so the trip shows on the member's page, but
+  only the newest moves the marker.
+- Positions older than the last one were skipped entirely; they now go into
+  the history too.
+
 ## 1.2.2
 
 - No more "took off" alerts on the autobahn or on a TGV: a flight now needs

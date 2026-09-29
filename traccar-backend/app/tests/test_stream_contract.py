@@ -31,7 +31,7 @@ def test_alert_message_has_exactly_the_contract_fields():
     assert {"type": "alert", **public_alert(alert)} == FIXTURE["alert"]
 
 
-@pytest.mark.parametrize("kind", ["member_status", "device"])
+@pytest.mark.parametrize("kind", ["member_status", "device", "history_updated"])
 def test_other_messages_are_documented(kind):
     assert FIXTURE[kind]["type"] == kind
     assert "device_id" in FIXTURE[kind]

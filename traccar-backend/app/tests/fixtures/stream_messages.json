@@ -40,5 +40,10 @@
     "device_id": 7,
     "status": "online",
     "last_update": "2026-09-27T18:00:00+00:00"
+  },
+  "history_updated": {
+    "type": "history_updated",
+    "device_id": 7,
+    "since": "2026-09-27T16:00:00+00:00"
   }
 }

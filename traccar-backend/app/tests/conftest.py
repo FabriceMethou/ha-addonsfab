@@ -22,6 +22,7 @@ from app.rate_limit import provision_limiter, crash_report_limiter
 from app.routers.provision import reset_failure_brake
 from app import places as place_cache
 from app.broadcast import bus
+from app.routers.positions import forget_recent
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +55,7 @@ async def _fresh_db():
     reset_failure_brake()
     place_cache.invalidate()
     bus._subs.clear()
+    forget_recent()
 
 
 @pytest_asyncio.fixture

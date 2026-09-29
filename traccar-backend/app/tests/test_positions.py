@@ -242,3 +242,36 @@ async def test_state_remembers_last_position_for_checkins(client, tokens):
     await client.post("/positions", headers=auth(tokens["alice"]), json={"positions": [fix(0)]})
     state = await get_device_state(1)
     assert (state["last_latitude"], state["last_longitude"]) == (48.0, 2.0)
+
+
+@respx.mock
+async def test_a_trip_saved_offline_goes_to_history_without_moving_the_map(client, tokens):
+    """Back online after a flight: the family sees where she is now, and the
+    flight appears in her history, but the map does not replay it."""
+    _mock_no_places()
+    osmand = respx.get(f"{OSMAND}/").mock(return_value=httpx.Response(200))
+    bob = await bus.subscribe(device_id=2, visible={1, 2})
+
+    arrived = fix(0, latitude=41.3, longitude=2.08)          # current: landed
+    await client.post("/positions", headers=auth(tokens["alice"]), json={"positions": [arrived]})
+    first = [m for m in _drain(bob) if m["type"] == "position"]
+    assert [(m["latitude"], m["longitude"]) for m in first] == [(41.3, 2.08)]
+
+    flight = [fix(-7200 + i * 600, latitude=48.0 - i * 0.5, speed=230.0) for i in range(12)]
+    resp = await client.post("/positions", headers=auth(tokens["alice"]), json={"positions": flight})
+    assert resp.json() == {"accepted": 12}
+    assert osmand.call_count == 13                       # all stored in the history
+    messages = _drain(bob)
+    assert [m["type"] for m in messages] == ["history_updated"]   # nobody's map moved
+    assert messages[0]["device_id"] == 1
+
+
+@respx.mock
+async def test_only_the_newest_of_a_batch_moves_the_map(client, tokens):
+    _mock_no_places()
+    respx.get(f"{OSMAND}/").mock(return_value=httpx.Response(200))
+    bob = await bus.subscribe(device_id=2, visible={1, 2})
+    batch = [fix(-300 + i * 60, latitude=48.0 + i * 0.01) for i in range(6)]
+    await client.post("/positions", headers=auth(tokens["alice"]), json={"positions": batch})
+    updates = [m for m in _drain(bob) if m["type"] == "position"]
+    assert [m["latitude"] for m in updates] == [48.05]

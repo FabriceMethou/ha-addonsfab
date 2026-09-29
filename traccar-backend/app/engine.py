@@ -102,11 +102,17 @@ def _default_state(device_id: int) -> dict:
     }
 
 
-async def process(device_id: int, pos: dict, *, skip_alarm: bool = False) -> bool:
+async def process(device_id: int, pos: dict, *, skip_alarm: bool = False,
+                  publish: bool = True) -> bool:
     """Run one position through detection. False if it was already seen.
 
     ``pos`` holds fix_time (datetime), latitude, longitude, speed_kmh and
     optionally course, altitude, accuracy, battery, charging, alarm, address.
+
+    Only a position newer than the last one counts as live: an older one is
+    history uploaded late (a trip saved while offline) and must not move
+    anyone on the map. ``publish=False`` also keeps a newer one off the map,
+    for all but the last of a batch.
     """
     async with _lock:
         state = await get_device_state(device_id) or _default_state(device_id)
@@ -115,7 +121,8 @@ async def process(device_id: int, pos: dict, *, skip_alarm: bool = False) -> boo
         if last is not None and fix_time <= last:
             return False
 
-        await bus.publish_update(live_message(device_id, pos), device_id)
+        if publish:
+            await bus.publish_update(live_message(device_id, pos), device_id)
 
         late = utcnow() - fix_time > LATE_AFTER
         name = await display_name(device_id)

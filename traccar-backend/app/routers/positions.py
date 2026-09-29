@@ -5,6 +5,7 @@ Traccar's public OsmAnd port. The backend forwards each one to Traccar on the
 LAN (Traccar stays the history store), then runs it through detection.
 """
 import logging
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -15,7 +16,8 @@ from pydantic import BaseModel, Field
 from app import engine
 from app.alerts import SEVERITY_INFO, display_name, public_alert, raise_alert
 from app.auth import require_session
-from app.database import get_device_state
+from app.broadcast import bus
+from app.database import get_device_state, iso
 from app.places import find_place
 from app.traccar import traccar
 
@@ -69,27 +71,67 @@ def _normalise(p: PositionIn) -> dict:
     }
 
 
+# Fix times already forwarded, per device, so a batch re-sent after a lost
+# response is not stored twice. Older positions are legitimate (a trip saved
+# offline arrives after the current position), so "older than the last one"
+# cannot be the test. Lost on restart, which at worst duplicates one batch.
+_RECENT_LIMIT = 5000
+_recent: dict[int, OrderedDict[int, None]] = {}
+
+
+def _seen(device_id: int, timestamp: int) -> bool:
+    return timestamp in _recent.get(device_id, ())
+
+
+def _remember(device_id: int, timestamp: int) -> None:
+    seen = _recent.setdefault(device_id, OrderedDict())
+    seen[timestamp] = None
+    while len(seen) > _RECENT_LIMIT:
+        seen.popitem(last=False)
+
+
+def forget_recent() -> None:
+    _recent.clear()
+
+
 @router.post("/positions")
 async def post_positions(body: PositionsIn, session: dict = Depends(require_session)) -> dict:
-    """Accept a batch, oldest first. Returns how many were stored.
+    """Store a batch in Traccar's history; move the live map only for the newest.
+
+    The phone sends its current position first, then anything saved while it
+    had no data. Every position goes into the history, so the trip shows on
+    the member's page, but only one newer than what the family already sees
+    moves the marker; replaying a finished flight on the map would show the
+    person travelling when they have already arrived.
 
     Stops at the first position Traccar refuses, so the phone keeps the rest
-    buffered and retries them later, in order.
+    and retries them later. Returns how many were stored.
     """
     device_id = session["traccar_device_id"]
     unique_id = session["device_unique_id"]
     batch = sorted((_normalise(p) for p in body.positions), key=lambda p: p["timestamp"])
+    newest = batch[-1]["timestamp"] if batch else None
     state = await get_device_state(device_id) or {}
-    already = engine.parse_time(state.get("last_fix_time"))
+    live_up_to = engine.parse_time(state.get("last_fix_time"))
+    backfilled_from = None
     accepted = 0
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as http:
         for pos in batch:
-            # A batch re-sent after a lost response: stored already, skip.
-            if already is None or pos["fix_time"] > already:
+            if not _seen(device_id, pos["timestamp"]):
                 if not await traccar.forward_osmand(http, unique_id, pos):
                     break
-                await engine.process(device_id, pos)
+                _remember(device_id, pos["timestamp"])
+                if live_up_to is not None and pos["fix_time"] < live_up_to:
+                    backfilled_from = min(backfilled_from or pos["fix_time"], pos["fix_time"])
+                await engine.process(device_id, pos, publish=pos["timestamp"] == newest)
             accepted += 1
+    if backfilled_from is not None:
+        # Tell the circle this person's history grew in the past, so cached
+        # trips are fetched again and the late trip appears.
+        await bus.publish_update(
+            {"type": "history_updated", "device_id": device_id, "since": iso(backfilled_from)},
+            device_id,
+        )
     if body.status is not None:
         await engine.process_status(device_id, body.status.model_dump(exclude_none=True))
     if batch and accepted < len(batch):
