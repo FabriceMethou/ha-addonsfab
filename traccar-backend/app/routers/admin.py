@@ -64,8 +64,8 @@ async def admin_page() -> HTMLResponse:
             <td>{_e(version or "?")}</td>
             <td>{_e(", ".join(circles_of.get(s["device_unique_id"], [])) or "none")}</td>
             <td>
-              <form method="post" action="admin/revoke/{s["traccar_device_id"]}"
-                    onsubmit="return confirm('Revoke {_e(s["display_name"])}? The phone stops sharing and must join again.');">
+              <form method="post" action="admin/revoke/{s["traccar_device_id"]}" class="revoke"
+                    data-name="{_e(s["display_name"])}">
                 <button type="submit">Revoke</button>
               </form>
             </td>
@@ -105,6 +105,17 @@ async def admin_page() -> HTMLResponse:
 <p><small>Revoke a lost or stolen phone: it is signed out, removed from its circles, and cannot join again without the enrolment code. Change the code in the add-on configuration if it may have been seen.</small></p>
 <h2>Circles</h2><ul>{circle_rows or '<li>No circles yet.</li>'}</ul>
 <h2>Recent alerts</h2><ul>{alert_rows or '<li>None yet.</li>'}</ul>
+<script>
+  // Names come from the phones: read them as data, never build script from them.
+  document.querySelectorAll("form.revoke").forEach(function (form) {{
+    form.addEventListener("submit", function (event) {{
+      var name = form.dataset.name;
+      if (!confirm("Revoke " + name + "? The phone stops sharing and must join again.")) {{
+        event.preventDefault();
+      }}
+    }});
+  }});
+</script>
 </body></html>"""
     return HTMLResponse(page)
 

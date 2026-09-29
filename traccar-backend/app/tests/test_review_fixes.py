@@ -180,6 +180,17 @@ async def test_the_admin_page_is_only_reachable_through_home_assistant(client):
         assert "Alice" in page.text and "Bob" in page.text
 
 
+async def test_a_crafted_name_cannot_run_script_in_the_admin_page(client):
+    await seed_session(device_unique_id="ml360-x", traccar_device_id=3,
+                       display_name="x');alert(1);//<b>")
+    ingress = ASGITransport(app=app, client=("172.30.32.2", 40000))
+    async with AsyncClient(transport=ingress, base_url="http://test") as ha:
+        page = (await ha.get("/")).text
+    assert "onsubmit" not in page
+    assert "<b>" not in page
+    assert 'data-name="x&#x27;);alert(1);//&lt;b&gt;"' in page
+
+
 async def test_revoking_a_lost_phone_cuts_it_off(client):
     alice, bob, fam = await _family()
     ingress = ASGITransport(app=app, client=("172.30.32.2", 40000))
