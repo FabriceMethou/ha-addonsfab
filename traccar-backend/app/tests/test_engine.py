@@ -158,6 +158,14 @@ async def test_low_battery_alerts_once_until_charged(family):
 
 
 @respx.mock
+async def test_autobahn_or_tgv_speeds_are_not_a_flight(family):
+    _mock_places()
+    for i, s in enumerate([230, 245, 250, 320, 318, 120]):
+        await engine.process(1, pos(i * 60, speed_kmh=float(s)))
+    assert await _alerts("flight") == []
+
+
+@respx.mock
 async def test_flight_takeoff_and_landing(family):
     _mock_places()
     speeds = [30, 250, 800, 820, 40, 10]

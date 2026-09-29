@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.2
+
+- No more "took off" alerts on the autobahn or on a TGV: a flight now needs
+  350 km/h, above any car or high-speed train and below any cruising plane.
+
 ## 1.2.1
 
 - The driving report no longer fails with a server error when Traccar is

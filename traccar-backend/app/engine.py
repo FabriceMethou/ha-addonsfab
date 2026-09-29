@@ -38,7 +38,9 @@ ENTER_MAX_ACCURACY_M = 250.0
 EXIT_MARGIN_M = 50.0
 PLACE_DEDUPE_MINUTES = 10
 SOS_DEDUPE_MINUTES = 2
-TAKEOFF_KMH = 200.0
+# Above any car (the autobahn has no limit in places; cars top out near 250)
+# and any high-speed train (320), below any cruising aircraft.
+TAKEOFF_KMH = 350.0
 LANDED_KMH = 50.0
 FLIGHT_CONFIRMATIONS = 2
 HARD_BRAKE_MIN_KMH = 30.0
