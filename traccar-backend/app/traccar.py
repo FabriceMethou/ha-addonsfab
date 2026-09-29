@@ -3,9 +3,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import httpx
-import websockets
-import websockets.exceptions
-from websockets.legacy.client import WebSocketClientProtocol
+from websockets.asyncio.client import ClientConnection, connect
 
 from app.config import settings
 
@@ -229,7 +227,7 @@ class TraccarClient:
     # WebSocket
     # ------------------------------------------------------------------
 
-    async def connect_admin_websocket(self) -> WebSocketClientProtocol:
+    async def connect_admin_websocket(self) -> ClientConnection:
         """Open a Traccar websocket authenticated via the admin token."""
         async with httpx.AsyncClient(base_url=self._base, timeout=_TIMEOUT) as http:
             resp = await http.get("/api/session", params={"token": self._admin_token})
@@ -239,7 +237,7 @@ class TraccarClient:
         ws_url = self._base.replace("http://", "ws://").replace("https://", "wss://")
         ws_url = f"{ws_url}/api/socket"
         extra_headers = {"Cookie": cookie_header} if cookie_header else {}
-        return await websockets.connect(ws_url, extra_headers=extra_headers)
+        return await connect(ws_url, additional_headers=extra_headers)
 
 
 # ------------------------------------------------------------------

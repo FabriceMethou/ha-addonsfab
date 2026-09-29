@@ -1,25 +1,23 @@
 """What phones send: positions, their own status, SOS and check-ins.
 
 Positions arrive here with the device token instead of going straight to
-Traccar's public OsmAnd port. The backend forwards each one to Traccar on the
-LAN (Traccar stays the history store), then runs it through detection.
+Traccar's public OsmAnd port. The backend runs each one through detection and
+queues it for Traccar on the LAN (Traccar stays the history store; see
+forwarder.py).
 """
 import logging
-from collections import OrderedDict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app import engine
+from app import engine, forwarder
 from app.alerts import SEVERITY_INFO, display_name, public_alert, raise_alert
 from app.auth import require_session
-from app.broadcast import bus
-from app.database import get_device_state, iso
-from app.places import find_place
-from app.traccar import traccar
+from app.database import get_device_state, outbox_add
+from app.places import places_for_device
+from app.rate_limit import DeviceRateLimiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -54,11 +52,21 @@ class PositionsIn(BaseModel):
     status: StatusIn | None = None
 
 
-def _normalise(p: PositionIn) -> dict:
-    seconds = p.time // 1000
+# A phone clock can be wrong. A fix dated in the future would become the
+# "latest" and make every real position after it look like history,
+# freezing the person on the map (finding S-01).
+MAX_CLOCK_SKEW = timedelta(minutes=5)
+
+
+def _normalise(p: PositionIn, now: datetime | None = None) -> dict:
+    now = now or datetime.now(timezone.utc)
+    fix_time = datetime.fromtimestamp(p.time // 1000, tz=timezone.utc)
+    if fix_time > now + MAX_CLOCK_SKEW:
+        logger.warning("Fix dated %s is in the future; using the server's time", fix_time)
+        fix_time = now.replace(microsecond=0)
     return {
-        "timestamp": seconds,
-        "fix_time": datetime.fromtimestamp(seconds, tz=timezone.utc),
+        "timestamp": int(fix_time.timestamp()),
+        "fix_time": fix_time,
         "latitude": p.latitude,
         "longitude": p.longitude,
         "speed_kmh": max(0.0, p.speed) * 3.6,
@@ -67,76 +75,48 @@ def _normalise(p: PositionIn) -> dict:
         "accuracy": p.accuracy,
         "battery": p.battery,
         "charging": p.charging,
+        "mock": p.mock,
         "alarm": p.alarm,
     }
 
 
-# Fix times already forwarded, per device, so a batch re-sent after a lost
-# response is not stored twice. Older positions are legitimate (a trip saved
-# offline arrives after the current position), so "older than the last one"
-# cannot be the test. Lost on restart, which at worst duplicates one batch.
-_RECENT_LIMIT = 5000
-_recent: dict[int, OrderedDict[int, None]] = {}
-
-
-def _seen(device_id: int, timestamp: int) -> bool:
-    return timestamp in _recent.get(device_id, ())
-
-
-def _remember(device_id: int, timestamp: int) -> None:
-    seen = _recent.setdefault(device_id, OrderedDict())
-    seen[timestamp] = None
-    while len(seen) > _RECENT_LIMIT:
-        seen.popitem(last=False)
-
-
-def forget_recent() -> None:
-    _recent.clear()
+# Uploads per phone per minute. Batching keeps a phone far below this.
+positions_limiter = DeviceRateLimiter(max_calls=60, window=60)
 
 
 @router.post("/positions")
 async def post_positions(body: PositionsIn, session: dict = Depends(require_session)) -> dict:
-    """Store a batch in Traccar's history; move the live map only for the newest.
+    """Record a batch; move the live map only for the newest.
 
     The phone sends its current position first, then anything saved while it
-    had no data. Every position goes into the history, so the trip shows on
-    the member's page, but only one newer than what the family already sees
-    moves the marker; replaying a finished flight on the map would show the
-    person travelling when they have already arrived.
-
-    Stops at the first position Traccar refuses, so the phone keeps the rest
-    and retries them later. Returns how many were stored.
+    had no data. Every position is recorded and goes into Traccar's history,
+    so the trip shows on the member's page, but only one newer than what the
+    family already sees moves the marker. Detection runs straight away;
+    Traccar receives the positions from the outbox, so its being down only
+    delays the history.
     """
     device_id = session["traccar_device_id"]
+    positions_limiter.check(device_id)
     unique_id = session["device_unique_id"]
     batch = sorted((_normalise(p) for p in body.positions), key=lambda p: p["timestamp"])
     newest = batch[-1]["timestamp"] if batch else None
     state = await get_device_state(device_id) or {}
     live_up_to = engine.parse_time(state.get("last_fix_time"))
-    backfilled_from = None
-    accepted = 0
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as http:
-        for pos in batch:
-            if not _seen(device_id, pos["timestamp"]):
-                if not await traccar.forward_osmand(http, unique_id, pos):
-                    break
-                _remember(device_id, pos["timestamp"])
-                if live_up_to is not None and pos["fix_time"] < live_up_to:
-                    backfilled_from = min(backfilled_from or pos["fix_time"], pos["fix_time"])
-                await engine.process(device_id, pos, publish=pos["timestamp"] == newest)
-            accepted += 1
-    if backfilled_from is not None:
-        # Tell the circle this person's history grew in the past, so cached
-        # trips are fetched again and the late trip appears.
-        await bus.publish_update(
-            {"type": "history_updated", "device_id": device_id, "since": iso(backfilled_from)},
-            device_id,
-        )
+    backlog: list[dict] = []
+    for pos in batch:
+        backfill = live_up_to is not None and pos["fix_time"] < live_up_to
+        if not await outbox_add(device_id, unique_id, pos, backfill):
+            continue  # a re-sent batch: recorded already
+        if backfill:
+            backlog.append(pos)
+        await engine.process(device_id, pos, publish=pos["timestamp"] == newest)
+    if batch:
+        forwarder.kick()
+    if backlog:
+        await engine.summarise_backlog(device_id, backlog)
     if body.status is not None:
         await engine.process_status(device_id, body.status.model_dump(exclude_none=True))
-    if batch and accepted < len(batch):
-        logger.warning("Device %s: stored %d of %d positions", device_id, accepted, len(batch))
-    return {"accepted": accepted}
+    return {"accepted": len(batch)}
 
 
 @router.post("/status")
@@ -176,8 +156,8 @@ async def post_sos(body: SosIn, session: dict = Depends(require_session)) -> dic
             "longitude": lon, "speed_kmh": 0.0, "accuracy": body.accuracy,
             "battery": body.battery, "alarm": body.kind,
         }
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as http:
-            await traccar.forward_osmand(http, session["device_unique_id"], full)
+        await outbox_add(device_id, session["device_unique_id"], full, backfill=False)
+        forwarder.kick()
         await engine.process(device_id, full, skip_alarm=True)
 
     return {"alert_id": alert["id"], "recipients": alert["recipient_count"]}
@@ -205,7 +185,8 @@ async def post_checkin(body: CheckinIn, session: dict = Depends(require_session)
     lat, lon = state.get("last_latitude"), state.get("last_longitude")
 
     if body.kind == "on_my_way":
-        place = await find_place(body.place_id) if body.place_id is not None else None
+        mine = await places_for_device(session["device_unique_id"])
+        place = next((p for p in mine if p.id == body.place_id), None)
         if place is None:
             raise HTTPException(status_code=422, detail="Choose where you are going")
         title, place_name, place_id = f"{name} is on the way to {place.name}", place.name, place.id

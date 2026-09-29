@@ -41,3 +41,53 @@ class RateLimiter:
 # Shared instances for public endpoints
 provision_limiter = RateLimiter(max_calls=5, window=60)
 crash_report_limiter = RateLimiter(max_calls=20, window=60)
+
+
+class GlobalLimiter:
+    """A ceiling for everyone together, which a forged address cannot dodge."""
+
+    def __init__(self, max_calls: int, window: int) -> None:
+        self._max_calls = max_calls
+        self._window = window
+        self._hits: list[float] = []
+
+    async def __call__(self) -> None:
+        now = time.monotonic()
+        self._hits = [t for t in self._hits if now - t < self._window]
+        if len(self._hits) >= self._max_calls:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Too many reports — try again later")
+        self._hits.append(now)
+
+    def reset(self) -> None:
+        self._hits.clear()
+
+
+crash_report_global_limiter = GlobalLimiter(max_calls=60, window=3600)
+
+
+class DeviceRateLimiter:
+    """Limit calls per enrolled phone, keyed by its device id (finding S-10).
+
+    Keyed on the token's device rather than an IP address, which a caller
+    can claim freely.
+    """
+
+    def __init__(self, max_calls: int, window: int) -> None:
+        self._max_calls = max_calls
+        self._window = window
+        self._hits: dict[int, list[float]] = defaultdict(list)
+
+    def check(self, device_id: int) -> None:
+        now = time.monotonic()
+        hits = [t for t in self._hits[device_id] if now - t < self._window]
+        if len(hits) >= self._max_calls:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests from this phone — slow down",
+            )
+        hits.append(now)
+        self._hits[device_id] = hits
+
+    def reset(self) -> None:
+        self._hits.clear()

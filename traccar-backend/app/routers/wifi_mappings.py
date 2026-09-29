@@ -12,6 +12,7 @@ from app.database import (
     upsert_wifi_mapping,
 )
 from app.broadcast import bus
+from app.places import places_for_device
 from app.traccar import TraccarError, traccar
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,9 @@ async def create_wifi_mapping(
 ) -> WifiMappingResponse:
     # Write one row per circle the caller belongs to. A device in no circle
     # falls back to the legacy unscoped bucket (group 0), visible to all.
+    visible = await places_for_device(session["device_unique_id"])
+    if not any(p.id == body.place_id for p in visible):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Place not found")
     my_groups = await get_groups_for_device(session["device_unique_id"])
     for group_id in (my_groups or [0]):
         await upsert_wifi_mapping(body.ssid, body.place_id, group_id)

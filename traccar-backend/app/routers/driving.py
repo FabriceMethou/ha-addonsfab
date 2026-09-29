@@ -76,6 +76,13 @@ async def get_driving(
         "days": days,
         "speeding_limit_kmh": settings.speeding_limit_kmh,
         "trips_error": trips_error,
+        # Every speeding and hard-braking event, so the app can mark them on
+        # its own trip timeline.
+        "events": [
+            {"kind": e["kind"], "time": e["event_time"], "speed_kmh": e["speed_kmh"],
+             "value": e["value"]}
+            for e in events
+        ],
         "totals": {
             "trips": len(trips),
             "distance_km": round(sum(t["distance_km"] for t in trips), 1),

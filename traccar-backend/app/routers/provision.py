@@ -165,8 +165,9 @@ async def _run_provision(
         device_unique_id=device_unique_id,
     )
 
-    tracking_url = settings.traccar_osmand_url or settings.traccar_url
-    return ProvisionResponse(device_token=token, tracking_url=tracking_url, device_id=device["id"])
+    # tracking_url is kept empty for app builds that still read it; positions
+    # go to POST /positions.
+    return ProvisionResponse(device_token=token, tracking_url="", device_id=device["id"])
 
 
 def _find_by_unique_id(devices: list[dict], unique_id: str) -> dict | None:

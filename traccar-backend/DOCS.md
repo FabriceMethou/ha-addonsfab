@@ -17,9 +17,7 @@ phone ──HTTPS, device token──▶ this add-on ──LAN──▶ Traccar 
 | Option | What it is |
 |---|---|
 | `traccar_url` | Traccar's address **on your LAN**, e.g. `http://192.168.2.243:30206`. |
-| `traccar_osmand_url` | Public OsmAnd address. Only apps older than 1.2.0 use it; leave empty once every phone runs 1.2.0. |
 | `traccar_admin_token` | A Traccar API token (see *Traccar account* below). |
-| `traccar_admin_user_id` | The Traccar user that token belongs to. |
 | `enrolment_code` | The code a new phone must type to join. **Required**: without it nobody can enrol. |
 | `traccar_osmand_lan_url` | Optional. Where Traccar's OsmAnd listener is on the LAN. Defaults to the host of `traccar_url` on port 5055. |
 | `speeding_limit_kmh` | Speed counted as speeding in driving reports. Default 130. |
@@ -32,6 +30,28 @@ invitation code created from inside the circle (valid 48 hours). Members see
 each other's position, history and alerts; nobody else does. Places belong to
 a circle. Places created in Traccar's own interface belong to no circle and are
 visible to everyone until a member assigns them to one.
+
+## The MyLife360 panel
+
+*MyLife360* in Home Assistant's sidebar lists every enrolled phone (name,
+app version, last heard from, circles), the circles and their members, the
+latest alerts and whether Traccar is taking positions.
+
+**Lost or stolen phone:** press *Revoke* next to it. The phone is signed
+out, removed from every circle and can no longer see anyone. Its history
+stays in Traccar. To use MyLife360 again it has to enrol with the enrolment
+code.
+
+The panel is only reachable through Home Assistant; the same pages do not
+exist on the add-on's public address.
+
+## Monitoring
+
+`GET /health` answers `"status": "ok"` while Traccar takes positions and
+`"degraded"` while it does not. Positions are then kept and sent later
+(`pending_positions`); arrivals, departures and other alerts keep working in
+the meantime, only the history is late. A Home Assistant REST sensor or an
+uptime checker on this address shows when Traccar needs attention.
 
 ## Moving to a new phone
 
@@ -46,6 +66,9 @@ takes over the same history and circles; the old phone is signed out.
 2. Copy it into Home Assistant's `share` folder, under `mylife360/`
    (Samba or the File editor add-on).
 3. Each phone shows *Update available* the next time the app opens.
+
+Phones older than 1.2.0 that send their version are asked to update instead
+of failing in ways nobody can explain.
 
 ## Traccar account
 

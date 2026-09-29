@@ -6,7 +6,6 @@ import uuid
 os.environ.setdefault("DB_PATH", "file:testdb?mode=memory&cache=shared")
 os.environ.setdefault("TRACCAR_URL", "http://traccar.test")
 os.environ.setdefault("TRACCAR_ADMIN_TOKEN", "admintoken")
-os.environ.setdefault("TRACCAR_ADMIN_USER_ID", "1")
 os.environ.setdefault("ENROLMENT_CODE", "test-enrolment-code")
 
 import aiosqlite
@@ -18,11 +17,13 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.database import init_db, upsert_session, _DB_PATH
-from app.rate_limit import provision_limiter, crash_report_limiter
+from app.rate_limit import provision_limiter, crash_report_limiter, crash_report_global_limiter
+from app.routers import stream as stream_router
 from app.routers.provision import reset_failure_brake
 from app import places as place_cache
 from app.broadcast import bus
-from app.routers.positions import forget_recent
+from app.routers.positions import positions_limiter
+from app import forwarder
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ async def _fresh_db():
     for table in (
         "wifi_mappings", "device_groups", "groups", "device_sessions", "group_invites",
         "place_groups", "transfer_codes", "device_state", "place_presence", "alerts",
-        "driving_events",
+        "driving_events", "traccar_outbox",
     ):
         await hold.execute(f"DELETE FROM {table}")
     await hold.commit()
@@ -52,10 +53,13 @@ async def _fresh_db():
     # Reset in-memory state between tests
     provision_limiter._hits.clear()
     crash_report_limiter._hits.clear()
+    crash_report_global_limiter.reset()
+    stream_router._open_streams.clear()
     reset_failure_brake()
     place_cache.invalidate()
     bus._subs.clear()
-    forget_recent()
+    positions_limiter.reset()
+    forwarder.state.__init__()
 
 
 @pytest_asyncio.fixture

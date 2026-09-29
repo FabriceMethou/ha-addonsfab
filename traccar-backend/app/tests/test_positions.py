@@ -6,6 +6,7 @@ import httpx
 import pytest
 import respx
 
+from app import forwarder
 from app.broadcast import bus
 from app.database import add_device_to_group, create_group, get_device_state, set_place_group
 from app.routers.stream import handle_traccar_frame
@@ -50,6 +51,7 @@ async def test_positions_are_forwarded_to_traccar_on_the_lan_in_order(client, to
         "positions": [fix(20, speed=10.0), fix(0, charging=True)],
     })
     assert resp.json() == {"accepted": 2}
+    await forwarder.forward_once()
     sent = [dict(c.request.url.params) for c in osmand.calls]
     assert [int(p["timestamp"]) for p in sent] == [NOW_MS // 1000, NOW_MS // 1000 + 20]
     assert sent[0]["id"] == "ml360-alice"
@@ -58,13 +60,29 @@ async def test_positions_are_forwarded_to_traccar_on_the_lan_in_order(client, to
 
 
 @respx.mock
-async def test_batch_stops_at_the_first_refusal_so_the_phone_retries(client, tokens):
+async def test_traccar_down_delays_history_but_not_detection(client, tokens):
+    """Regression for I-01: alerts no longer wait for Traccar."""
     _mock_no_places()
-    respx.get(f"{OSMAND}/").mock(side_effect=[httpx.Response(200), httpx.Response(503),
-                                              httpx.Response(200)])
+    osmand = respx.get(f"{OSMAND}/").mock(side_effect=[
+        httpx.Response(200), httpx.Response(503), httpx.Response(200), httpx.Response(200),
+    ])
+    bob = await bus.subscribe(device_id=2, visible={1, 2})
     resp = await client.post("/positions", headers=auth(tokens["alice"]),
                              json={"positions": [fix(0), fix(10), fix(20)]})
-    assert resp.json() == {"accepted": 1}
+    assert resp.json() == {"accepted": 3}
+    assert [m["type"] for m in _drain(bob)] == ["position"]      # live straight away
+
+    await forwarder.forward_once()                               # Traccar refuses the 2nd
+    health = (await client.get("/health")).json()
+    assert health["status"] == "degraded"
+    assert health["pending_positions"] == 2
+
+    await forwarder.forward_once()                               # Traccar is back
+    health = (await client.get("/health")).json()
+    assert (health["status"], health["pending_positions"]) == ("ok", 0)
+    assert [int(dict(c.request.url.params)["timestamp"]) for c in osmand.calls] == [
+        NOW_MS // 1000, NOW_MS // 1000 + 10, NOW_MS // 1000 + 10, NOW_MS // 1000 + 20,
+    ]
 
 
 @respx.mock
@@ -73,8 +91,10 @@ async def test_a_resent_batch_is_acknowledged_without_storing_twice(client, toke
     osmand = respx.get(f"{OSMAND}/").mock(return_value=httpx.Response(200))
     body = {"positions": [fix(0), fix(10)]}
     await client.post("/positions", headers=auth(tokens["alice"]), json=body)
+    await forwarder.forward_once()
     again = await client.post("/positions", headers=auth(tokens["alice"]), json=body)
     assert again.json() == {"accepted": 2}
+    await forwarder.forward_once()
     assert osmand.call_count == 2
 
 
@@ -165,6 +185,7 @@ async def test_sos_tells_the_circle_and_says_how_many_were_told(client, tokens):
     assert resp.status_code == 201
     assert resp.json()["recipients"] == 1
     assert [m["kind"] for m in _drain(bob) if m["type"] == "alert"] == ["sos"]
+    await forwarder.forward_once()
     assert dict(osmand.calls[0].request.url.params)["alarm"] == "sos"
 
 
@@ -254,12 +275,18 @@ async def test_a_trip_saved_offline_goes_to_history_without_moving_the_map(clien
 
     arrived = fix(0, latitude=41.3, longitude=2.08)          # current: landed
     await client.post("/positions", headers=auth(tokens["alice"]), json={"positions": [arrived]})
+    await forwarder.forward_once()
     first = [m for m in _drain(bob) if m["type"] == "position"]
     assert [(m["latitude"], m["longitude"]) for m in first] == [(41.3, 2.08)]
 
+    # 230 m/s, about 830 km/h: a flight, found in the backlog.
     flight = [fix(-7200 + i * 600, latitude=48.0 - i * 0.5, speed=230.0) for i in range(12)]
     resp = await client.post("/positions", headers=auth(tokens["alice"]), json={"positions": flight})
     assert resp.json() == {"accepted": 12}
+    landed = _drain(bob)
+    assert [(m["type"], m.get("title")) for m in landed] == [("alert", "Alice landed")]  # L-06
+
+    await forwarder.forward_once()
     assert osmand.call_count == 13                       # all stored in the history
     messages = _drain(bob)
     assert [m["type"] for m in messages] == ["history_updated"]   # nobody's map moved
@@ -275,3 +302,31 @@ async def test_only_the_newest_of_a_batch_moves_the_map(client, tokens):
     await client.post("/positions", headers=auth(tokens["alice"]), json={"positions": batch})
     updates = [m for m in _drain(bob) if m["type"] == "position"]
     assert [m["latitude"] for m in updates] == [48.05]
+
+
+async def test_a_fix_dated_in_the_future_is_pulled_back_to_now(client, tokens):
+    """Regression for S-01: a wrong phone clock froze the person on the map."""
+    with respx.mock:
+        _mock_no_places()
+        await client.post("/positions", headers=auth(tokens["alice"]),
+                          json={"positions": [fix(3 * 24 * 3600, latitude=10.0)]})  # 3 days ahead
+        await client.post("/positions", headers=auth(tokens["alice"]),
+                          json={"positions": [fix(60, latitude=11.0)]})
+    state = await get_device_state(1)
+    assert state["last_latitude"] == 11.0
+
+
+async def test_mock_locations_are_flagged_to_the_family(client, tokens):
+    with respx.mock:
+        _mock_no_places()
+        await client.post("/positions", headers=auth(tokens["alice"]),
+                          json={"positions": [fix(0, mock=True)]})
+    assert (await get_device_state(1))["last_mock"] == 1
+
+
+async def test_uploads_are_limited_per_phone(client, tokens):
+    codes = set()
+    for _ in range(61):
+        resp = await client.post("/positions", headers=auth(tokens["alice"]), json={"positions": []})
+        codes.add(resp.status_code)
+    assert codes == {200, 429}

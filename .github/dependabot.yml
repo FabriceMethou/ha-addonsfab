@@ -1,0 +1,17 @@
+# Weekly pull requests for outdated packages (finding I-03 of the MyLife360
+# review). The add-on's base image is pinned in traccar-backend/build.yaml
+# and is bumped by hand.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /traccar-backend/app
+    schedule:
+      interval: weekly
+    groups:
+      mylife360-backend:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

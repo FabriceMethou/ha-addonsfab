@@ -18,6 +18,7 @@ from app.database import (
     get_presence,
     get_session_by_device_id,
     insert_driving_event,
+    list_device_states,
     iso,
     last_driving_event,
     load_status,
@@ -99,6 +100,8 @@ def _default_state(device_id: int) -> dict:
         "sharing": "active",
         "status_json": None,
         "status_at": None,
+        "last_mock": 0,
+        "last_seen_at": None,
     }
 
 
@@ -137,6 +140,7 @@ async def process(device_id: int, pos: dict, *, skip_alarm: bool = False,
             await _flight(pos, state, name, device_id)
         await _driving(device_id, pos, state)
 
+        back_from_silence = state["sharing"] == "no_signal"
         state.update({
             "last_fix_time": iso(fix_time),
             "last_latitude": pos["latitude"],
@@ -144,9 +148,15 @@ async def process(device_id: int, pos: dict, *, skip_alarm: bool = False,
             "last_speed_kmh": pos.get("speed_kmh") or 0.0,
             "last_battery": pos.get("battery"),
             "last_charging": int(bool(pos.get("charging"))),
+            "last_mock": int(bool(pos.get("mock"))),
+            "last_seen_at": iso(utcnow()),
         })
+        if back_from_silence:
+            state["sharing"] = "active"
         await save_device_state(state)
-        return True
+    if back_from_silence:
+        await _announce_sharing(device_id, "active", state, previous="no_signal")
+    return True
 
 
 async def raise_emergency(device_id: int, kind: str, pos: dict, name: str | None = None,
@@ -289,6 +299,7 @@ def sharing_from_status(status: dict) -> str:
 
 
 _SHARING_ALERTS = {
+    "no_signal": ("has not been heard from for an hour", SEVERITY_WARNING),
     "paused": ("paused location sharing", SEVERITY_WARNING),
     "location_off": ("turned location off", SEVERITY_WARNING),
     "no_permission": ("stopped sharing location (permission removed)", SEVERITY_WARNING),
@@ -304,18 +315,80 @@ async def process_status(device_id: int, status: dict) -> str:
         after = sharing_from_status(status)
         state["status_json"] = dump_status({**load_status(state["status_json"]), **status})
         state["status_at"] = iso(utcnow())
+        state["last_seen_at"] = state["status_at"]
         state["sharing"] = after
         await save_device_state(state)
-    await bus.publish_update(
-        {"type": "member_status", "device_id": device_id, "sharing": after,
-         "app_version": status.get("app_version")},
-        device_id,
-    )
     if after != before:
-        name = await display_name(device_id)
-        text, severity = _SHARING_ALERTS[after]
-        await alerts_mod.raise_alert(
-            f"sharing_{after}", severity, device_id, f"{name} {text}", "",
-            latitude=state["last_latitude"], longitude=state["last_longitude"],
+        await _announce_sharing(device_id, after, state, status.get("app_version"), previous=before)
+    else:
+        await bus.publish_update(
+            {"type": "member_status", "device_id": device_id, "sharing": after,
+             "app_version": status.get("app_version")},
+            device_id,
         )
     return after
+
+
+async def _announce_sharing(device_id: int, sharing: str, state: dict,
+                            app_version: str | None = None, previous: str | None = None) -> None:
+    await bus.publish_update(
+        {"type": "member_status", "device_id": device_id, "sharing": sharing,
+         "app_version": app_version or load_status(state.get("status_json")).get("app_version")},
+        device_id,
+    )
+    name = await display_name(device_id)
+    text, severity = _SHARING_ALERTS[sharing]
+    if sharing == "active" and previous == "no_signal":
+        text = "is back online"
+    await alerts_mod.raise_alert(
+        f"sharing_{sharing}", severity, device_id, f"{name} {text}", "",
+        latitude=state.get("last_latitude"), longitude=state.get("last_longitude"),
+    )
+
+
+# A phone that stops reporting while supposedly sharing: switched off,
+# out of battery, killed, or out of coverage (finding L-05). Phones report
+# at least every few minutes and send their status every half hour.
+NO_SIGNAL_AFTER = timedelta(minutes=60)
+
+
+async def check_silent_devices(now: datetime | None = None) -> list[int]:
+    """Mark phones not heard from for an hour; returns their device ids."""
+    now = now or utcnow()
+    flagged: list[int] = []
+    for device_id, state in (await list_device_states()).items():
+        if state["sharing"] != "active":
+            continue
+        seen = parse_time(state.get("last_seen_at") or state.get("status_at") or state.get("last_fix_time"))
+        if seen is None or now - seen < NO_SIGNAL_AFTER:
+            continue
+        if await get_session_by_device_id(device_id) is None:
+            continue
+        async with _lock:
+            state["sharing"] = "no_signal"
+            await save_device_state(state)
+        await _announce_sharing(device_id, "no_signal", state)
+        flagged.append(device_id)
+    return flagged
+
+
+# A flight is found in positions sent after landing, when the phone gets data
+# back. Recent enough to be news, it becomes one alert (finding L-06).
+FLIGHT_SUMMARY_WITHIN = timedelta(hours=12)
+
+
+async def summarise_backlog(device_id: int, backlog: list[dict]) -> None:
+    fast = [p for p in backlog if (p.get("speed_kmh") or 0.0) >= TAKEOFF_KMH]
+    if len(fast) < FLIGHT_CONFIRMATIONS:
+        return
+    if utcnow() - max(p["fix_time"] for p in fast) > FLIGHT_SUMMARY_WITHIN:
+        return
+    name = await display_name(device_id)
+    place = await current_place_name(device_id)
+    state = await get_device_state(device_id) or {}
+    await alerts_mod.raise_alert(
+        "flight", SEVERITY_INFO, device_id, f"{name} landed",
+        f"Now at {place}" if place else "Flight found once the phone was back online",
+        latitude=state.get("last_latitude"), longitude=state.get("last_longitude"),
+        dedupe_minutes=int(FLIGHT_SUMMARY_WITHIN.total_seconds() // 60),
+    )

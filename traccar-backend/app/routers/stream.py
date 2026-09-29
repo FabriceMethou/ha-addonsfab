@@ -1,17 +1,20 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
 import websockets
 import websockets.exceptions
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
 from app import engine
 from app.auth import require_session
 from app.authz import visible_device_ids
 from app.broadcast import bus
+from app.database import get_session_by_device_id
+from app.routers.positions import MAX_CLOCK_SKEW
 from app.traccar import TraccarError, traccar
 
 logger = logging.getLogger(__name__)
@@ -69,8 +72,13 @@ async def handle_traccar_frame(raw: str) -> None:
 
     for pos in msg.get("positions") or []:
         normalised = normalise_traccar_position(pos)
-        if normalised is not None:
-            await engine.process(pos["deviceId"], normalised)
+        if normalised is None:
+            continue
+        # Devices that never enrolled (a car tracker, a test device) belong
+        # to no circle; their alerts would reach nobody (finding L-09).
+        if await get_session_by_device_id(pos["deviceId"]) is None:
+            continue
+        await engine.process(pos["deviceId"], normalised)
 
 
 def normalise_traccar_position(pos: dict) -> dict | None:
@@ -79,6 +87,9 @@ def normalise_traccar_position(pos: dict) -> dict | None:
     fix_time = engine.parse_time(pos.get("fixTime"))
     if fix_time is None or pos.get("latitude") is None or pos.get("longitude") is None:
         return None
+    now = datetime.now(timezone.utc)
+    if fix_time > now + MAX_CLOCK_SKEW:  # see routers/positions.py (S-01)
+        fix_time = now.replace(microsecond=0)
     attrs = pos.get("attributes") or {}
     battery = attrs.get("batteryLevel", attrs.get("battery"))
     return {
@@ -108,11 +119,18 @@ async def request_status(session: dict = Depends(require_session)) -> None:
     await bus.publish_to({"type": "status_request"}, recipients)
 
 
+MAX_STREAMS_PER_PHONE = 3
+_open_streams: dict[int, int] = {}
+
+
 @router.get("/stream")
 async def stream(
     request: Request,
     session: dict = Depends(require_session),
 ) -> EventSourceResponse:
+    device_id = session["traccar_device_id"]
+    if _open_streams.get(device_id, 0) >= MAX_STREAMS_PER_PHONE:
+        raise HTTPException(status_code=429, detail="Too many live connections from this phone")
     sub = await bus.subscribe(
         device_id=session["traccar_device_id"],
         unique_id=session["device_unique_id"],
@@ -125,6 +143,7 @@ async def stream(
 
 
 async def _client_generator(request: Request, sub) -> AsyncIterator[dict]:
+    _open_streams[sub.device_id] = _open_streams.get(sub.device_id, 0) + 1
     try:
         while True:
             if await request.is_disconnected():
@@ -135,4 +154,5 @@ async def _client_generator(request: Request, sub) -> AsyncIterator[dict]:
             except asyncio.TimeoutError:
                 yield {"comment": "keepalive"}
     finally:
+        _open_streams[sub.device_id] = max(0, _open_streams.get(sub.device_id, 1) - 1)
         await bus.unsubscribe(sub)

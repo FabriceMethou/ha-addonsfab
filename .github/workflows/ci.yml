@@ -45,9 +45,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same Python as the add-on image (Home Assistant base, Alpine 3.24).
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: |
             traccar-backend/app/requirements.txt

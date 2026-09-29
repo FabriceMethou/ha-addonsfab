@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.4
+
+Best with MyLife360 app 1.2.1.
+
+- **Traccar down no longer means no alerts.** Positions are processed as soon
+  as they arrive and queued for Traccar's history, which catches up when
+  Traccar is back. `/health` reports `degraded` and how many positions wait.
+- **Revoke a lost phone** from the new *MyLife360* panel in Home Assistant's
+  sidebar, which also lists phones, circles and recent alerts.
+- **"Has not been heard from for an hour"**: a phone that is sharing but
+  stops reporting (switched off, flat battery, no coverage) raises an alert,
+  and "is back online" when it reports again.
+- **"Landed"**: a flight found in positions sent after landing becomes one
+  alert.
+- A phone whose clock is days ahead no longer freezes on the map.
+- Positions from simulated-location apps are flagged to the family.
+- Optional phone number per member for a *Call* button.
+- The driving report lists each speeding and hard-braking event.
+- Device tokens are stored hashed; existing phones keep working.
+- Limits on uploads, live connections and crash reports per phone.
+- Devices that never enrolled in MyLife360 no longer raise alerts.
+- Removed the unused `traccar_osmand_url` and `traccar_admin_user_id` options.
+- The add-on image is pinned to Home Assistant's Alpine 3.24 base and
+  installs its packages in a virtualenv: the unpinned `latest` base had moved
+  to Alpine 3.24, where the old image would no longer build. Dependencies
+  updated (FastAPI, Uvicorn, httpx, websockets, sse-starlette, aiosqlite).
+
 ## 1.2.3
 
 Best with MyLife360 app 1.2.0 built on or after 29 September.

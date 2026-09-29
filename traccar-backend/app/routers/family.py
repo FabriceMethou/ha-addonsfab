@@ -28,7 +28,7 @@ async def get_family(session: dict = Depends(require_session)) -> list[dict[str,
     allowed = await visible_device_ids(session)
     pos_by_device: dict[int, dict] = {p["deviceId"]: p for p in positions}
     states = await list_device_states()
-    names = {s["traccar_device_id"]: s["display_name"] for s in await list_sessions()}
+    sessions = {s["traccar_device_id"]: s for s in await list_sessions()}
 
     result = []
     for device in devices:
@@ -39,7 +39,9 @@ async def get_family(session: dict = Depends(require_session)) -> list[dict[str,
         state = states.get(did) or {}
         entry: dict[str, Any] = {
             "device_id": did,
-            "name": names.get(did) or device.get("name"),
+            "name": (sessions.get(did) or {}).get("display_name") or device.get("name"),
+            "phone": (sessions.get(did) or {}).get("phone"),
+            "mock_location": bool(state.get("last_mock")),
             "is_me": did == session["traccar_device_id"],
             "sharing": state.get("sharing", "active"),
             "app_version": load_status(state.get("status_json")).get("app_version"),

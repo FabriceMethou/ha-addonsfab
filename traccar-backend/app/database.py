@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -18,6 +19,12 @@ def utcnow() -> datetime:
 
 def iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat()
+
+
+def hash_token(token: str) -> str:
+    """Tokens are stored hashed, so a copy of the database (or of a Home
+    Assistant backup) cannot be used to act as a family phone."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 CREATE_SESSIONS = """
@@ -134,6 +141,25 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 """
 
+# Positions waiting to be written to Traccar's history. Detection runs as
+# soon as a position arrives; Traccar being down only delays the history.
+# Rows are kept a week after forwarding so a re-sent batch is recognised.
+CREATE_TRACCAR_OUTBOX = """
+CREATE TABLE IF NOT EXISTS traccar_outbox (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id    INTEGER NOT NULL,
+    unique_id    TEXT NOT NULL,
+    timestamp    INTEGER NOT NULL,
+    latitude     REAL NOT NULL,
+    longitude    REAL NOT NULL,
+    payload      TEXT NOT NULL,
+    backfill     INTEGER NOT NULL DEFAULT 0,
+    forwarded_at TEXT,
+    created_at   TEXT NOT NULL,
+    UNIQUE (unique_id, timestamp, latitude, longitude)
+);
+"""
+
 CREATE_DRIVING_EVENTS = """
 CREATE TABLE IF NOT EXISTS driving_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,8 +263,31 @@ async def init_db() -> None:
             CREATE_PLACE_PRESENCE,
             CREATE_ALERTS,
             CREATE_DRIVING_EVENTS,
+            CREATE_TRACCAR_OUTBOX,
         ):
             await db.execute(ddl)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_outbox_pending ON traccar_outbox(forwarded_at, id)"
+        )
+
+        # Columns added after 1.2.0.
+        if "phone" not in await _columns(db, "device_sessions"):
+            await db.execute("ALTER TABLE device_sessions ADD COLUMN phone TEXT")
+        if "last_mock" not in await _columns(db, "device_state"):
+            await db.execute("ALTER TABLE device_state ADD COLUMN last_mock INTEGER NOT NULL DEFAULT 0")
+        if "last_seen_at" not in await _columns(db, "device_state"):
+            await db.execute("ALTER TABLE device_state ADD COLUMN last_seen_at TEXT")
+
+        # Tokens stored before 1.2.4 are in clear (UUIDs, 36 characters):
+        # replace each with its hash. Phones keep working unchanged.
+        async with db.execute(
+            "SELECT token FROM device_sessions WHERE length(token) != 64"
+        ) as cur:
+            clear_tokens = [row[0] async for row in cur]
+        for token in clear_tokens:
+            await db.execute(
+                "UPDATE device_sessions SET token = ? WHERE token = ?", (hash_token(token), token)
+            )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_alerts_device ON alerts(device_id, id)"
         )
@@ -271,7 +320,7 @@ async def upsert_session(
                 traccar_device_id = excluded.traccar_device_id,
                 display_name      = excluded.display_name
             """,
-            (token, traccar_device_id, display_name, device_unique_id),
+            (hash_token(token), traccar_device_id, display_name, device_unique_id),
         )
         await db.commit()
 
@@ -280,7 +329,7 @@ async def get_session(token: str) -> dict | None:
     async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM device_sessions WHERE token = ?", (token,)
+            "SELECT * FROM device_sessions WHERE token = ?", (hash_token(token),)
         ) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
@@ -303,6 +352,34 @@ async def list_sessions() -> list[dict]:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM device_sessions") as cur:
             return [dict(row) async for row in cur]
+
+
+async def set_phone_number(device_unique_id: str, phone: str | None) -> None:
+    async with _connect() as db:
+        await db.execute(
+            "UPDATE device_sessions SET phone = ? WHERE device_unique_id = ?", (phone, device_unique_id)
+        )
+        await db.commit()
+
+
+async def revoke_device(traccar_device_id: int) -> int:
+    """Cut a phone off: its token, circle memberships and transfer codes go.
+
+    Returns how many enrolments were removed (a device enrolled once, normally).
+    """
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT device_unique_id FROM device_sessions WHERE traccar_device_id = ?",
+            (traccar_device_id,),
+        ) as cur:
+            unique_ids = [row[0] async for row in cur]
+        for uid in unique_ids:
+            await db.execute("DELETE FROM device_groups WHERE device_unique_id = ?", (uid,))
+            await db.execute("UPDATE groups SET owner_unique_id = NULL WHERE owner_unique_id = ?", (uid,))
+        await db.execute("DELETE FROM transfer_codes WHERE traccar_device_id = ?", (traccar_device_id,))
+        await db.execute("DELETE FROM device_sessions WHERE traccar_device_id = ?", (traccar_device_id,))
+        await db.commit()
+        return len(unique_ids)
 
 
 async def delete_session_for_unique_id(device_unique_id: str) -> None:
@@ -758,3 +835,71 @@ def load_status(raw: str | None) -> dict:
 
 def expiry(minutes: int) -> datetime:
     return utcnow() + timedelta(minutes=minutes)
+
+
+# ------------------------------------------------------------------
+# Traccar outbox
+# ------------------------------------------------------------------
+
+async def outbox_add(device_id: int, unique_id: str, pos: dict, backfill: bool) -> bool:
+    """Queue a position for Traccar. False if this exact fix was queued before."""
+    payload = json.dumps({k: v for k, v in pos.items() if k != "fix_time"})
+    async with _connect() as db:
+        cur = await db.execute(
+            "INSERT OR IGNORE INTO traccar_outbox"
+            " (device_id, unique_id, timestamp, latitude, longitude, payload, backfill, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (device_id, unique_id, int(pos["timestamp"]), pos["latitude"], pos["longitude"],
+             payload, int(backfill), iso(utcnow())),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def outbox_pending(limit: int) -> list[dict]:
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM traccar_outbox WHERE forwarded_at IS NULL ORDER BY id LIMIT ?", (limit,)
+        ) as cur:
+            return [dict(row) async for row in cur]
+
+
+async def outbox_mark_forwarded(ids: list[int]) -> None:
+    if not ids:
+        return
+    async with _connect() as db:
+        await db.execute(
+            f"UPDATE traccar_outbox SET forwarded_at = ? WHERE id IN ({','.join('?' for _ in ids)})",
+            (iso(utcnow()), *ids),
+        )
+        await db.commit()
+
+
+async def outbox_count() -> int:
+    async with _connect() as db:
+        async with db.execute("SELECT COUNT(*) FROM traccar_outbox WHERE forwarded_at IS NULL") as cur:
+            return (await cur.fetchone())[0]
+
+
+async def outbox_prune(older_than: datetime) -> None:
+    async with _connect() as db:
+        await db.execute(
+            "DELETE FROM traccar_outbox WHERE forwarded_at IS NOT NULL AND forwarded_at < ?",
+            (iso(older_than),),
+        )
+        await db.commit()
+
+
+async def list_memberships() -> list[dict]:
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT device_unique_id, group_id FROM device_groups") as cur:
+            return [dict(row) async for row in cur]
+
+
+async def recent_alerts(limit: int) -> list[dict]:
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)) as cur:
+            return [dict(row) async for row in cur]

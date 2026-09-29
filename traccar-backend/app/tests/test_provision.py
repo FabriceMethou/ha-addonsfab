@@ -34,7 +34,7 @@ async def test_provision_new_device(client):
     assert resp.status_code == 201
     body = resp.json()
     assert body["device_id"] == 5
-    assert body["tracking_url"] == "http://traccar.test"
+    assert body["tracking_url"] == ""
     assert json.loads(create.calls[0].request.read())["name"] == "Alice's phone"
     assert (await get_session(body["device_token"]))["traccar_device_id"] == 5
 
