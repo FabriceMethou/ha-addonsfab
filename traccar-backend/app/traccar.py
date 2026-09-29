@@ -12,6 +12,10 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(10.0)
+# Reports are computed from raw history on request; a week of positions can
+# take Traccar well past the ordinary timeout. Kept under the app's own
+# 30-second limit, so the phone always gets an answer.
+_REPORT_TIMEOUT = httpx.Timeout(25.0)
 _KNOTS_PER_KMH = 1 / 1.852
 
 
@@ -97,9 +101,16 @@ class TraccarClient:
             "/api/reports/trips",
             params={"deviceId": device_id, "from": from_dt, "to": to_dt},
             headers={"Accept": "application/json"},
+            timeout=_REPORT_TIMEOUT,
         )
         _raise_for_traccar(resp)
-        return resp.json()
+        try:
+            trips = resp.json()
+        except ValueError as exc:
+            raise TraccarError(f"Traccar trip report was not JSON: {exc}") from exc
+        if not isinstance(trips, list):
+            raise TraccarError("Traccar trip report was not a list")
+        return trips
 
     # ------------------------------------------------------------------
     # Write operations

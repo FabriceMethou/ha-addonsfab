@@ -73,3 +73,28 @@ async def test_app_update_endpoints(client, tmp_path, monkeypatch):
     assert download.content == b"APK!"
     assert download.headers["content-type"] == "application/vnd.android.package-archive"
     assert (await client.get("/app/apk")).status_code == 401
+
+
+@respx.mock
+@pytest.mark.parametrize("failure", [
+    httpx.ReadTimeout("Traccar took too long"),
+    httpx.Response(200, text="<html>not json</html>"),
+])
+async def test_driving_report_survives_a_slow_or_odd_traccar(client, failure):
+    """Regression: a slow trip report escaped as a 500 and hid the whole card."""
+    token = await seed_session(device_unique_id="ml360-alice", traccar_device_id=1)
+    mock_admin_session()
+    route = respx.get(f"{TRACCAR}/api/reports/trips")
+    if isinstance(failure, Exception):
+        route.mock(side_effect=failure)
+    else:
+        route.mock(return_value=failure)
+    await insert_driving_event({"device_id": 1, "kind": "hard_brake",
+                                "event_time": "2099-01-01T08:20:00+00:00", "value": 4.0})
+
+    resp = await client.get("/driving?device_id=1", headers=auth(token))
+    assert resp.status_code == 200
+    report = resp.json()
+    assert report["trips"] == []
+    assert report["trips_error"]
+    assert report["totals"]["hard_brakes"] == 1

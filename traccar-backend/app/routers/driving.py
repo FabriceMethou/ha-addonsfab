@@ -1,6 +1,8 @@
 """Driving reports: Traccar's trips, annotated with our driving events."""
+import logging
 from datetime import timedelta
 
+import httpx
 from fastapi import APIRouter, Depends, Query
 
 from app.auth import require_session
@@ -8,9 +10,9 @@ from app.authz import require_visible_device
 from app.config import settings
 from app.database import iso, list_driving_events, utcnow
 from app.engine import parse_time
-from app.errors import http_error_from_traccar
 from app.traccar import TraccarError, traccar
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _KMH_PER_KNOT = 1.852
@@ -27,14 +29,22 @@ async def get_driving(
     await require_visible_device(session, device_id)
     now = utcnow()
     since = now - timedelta(days=days)
+    # Without Traccar's trips the week's speeding and braking counts are
+    # still worth showing, so a failure degrades the report instead of
+    # failing it.
+    trips_error = None
     try:
         client = await traccar.admin_session()
         try:
             raw_trips = await traccar.get_trips(client, device_id, iso(since), iso(now))
         finally:
             await client.aclose()
-    except TraccarError as exc:
-        http_error_from_traccar(exc)
+    except (TraccarError, httpx.HTTPError) as exc:
+        logger.warning("Trip report for device %s unavailable: %r", device_id, exc)
+        raw_trips = []
+        trips_error = ("Traccar took too long to compute the trips"
+                       if isinstance(exc, httpx.TimeoutException)
+                       else "Traccar could not compute the trips right now")
 
     events = await list_driving_events(device_id, since)
     trips = []
@@ -65,6 +75,7 @@ async def get_driving(
     return {
         "days": days,
         "speeding_limit_kmh": settings.speeding_limit_kmh,
+        "trips_error": trips_error,
         "totals": {
             "trips": len(trips),
             "distance_km": round(sum(t["distance_km"] for t in trips), 1),

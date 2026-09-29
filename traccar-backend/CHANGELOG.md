@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1
+
+- The driving report no longer fails with a server error when Traccar is
+  slow to compute trips: reports get 25 seconds instead of 10, and if
+  Traccar still cannot answer, the week's speeding and braking counts are
+  shown with a note instead of an error.
+
 ## 1.2.0
 
 Requires MyLife360 app 1.2.0.
