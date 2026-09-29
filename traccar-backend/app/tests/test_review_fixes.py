@@ -214,3 +214,76 @@ async def test_a_wifi_mapping_needs_a_place_the_caller_can_see(client):
     resp = await client.post("/wifi-mappings", headers=auth(alice),
                              json={"ssid": "Livebox-1234", "place_id": 99})
     assert resp.status_code == 404
+
+
+# --- S-08: one-time enrolment codes -----------------------------------------
+
+def _ingress():
+    return AsyncClient(transport=ASGITransport(app=app, client=("172.30.32.2", 40000)),
+                       base_url="http://test")
+
+
+async def _make_code(label: str = "Grandma") -> str:
+    async with _ingress() as ha:
+        page = await ha.post("/admin/enrolment-codes", content=f"label={label}",
+                             headers={"Content-Type": "application/x-www-form-urlencoded"})
+    assert page.status_code == 200
+    import re
+    return re.search(r'class="code">([A-Z0-9 ]+)<', page.text).group(1).replace(" ", "")
+
+
+@respx.mock
+async def test_a_one_time_code_enrols_one_phone_only(client):
+    code = await _make_code()
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=httpx.Response(200, json={"id": 1}))
+    respx.get(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(200, json=[]))
+    respx.post(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(
+        201, json={"id": 20, "name": "Grandma's phone", "uniqueId": "ml360-gm"}))
+
+    first = await client.post("/provision", json={
+        "display_name": "Grandma", "device_unique_id": "ml360-gm", "enrolment_code": code.lower()})
+    assert first.status_code == 201
+    again = await client.post("/provision", json={
+        "display_name": "Other", "device_unique_id": "ml360-x", "enrolment_code": code})
+    assert again.status_code == 403
+
+    async with _ingress() as ha:
+        page = (await ha.get("/")).text
+    assert "Grandma" in page and "used" in page
+    assert code not in page                       # only a hash is kept
+
+
+@respx.mock
+async def test_a_one_time_code_survives_a_failed_enrolment(client):
+    code = await _make_code()
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=httpx.Response(500))
+    failed = await client.post("/provision", json={
+        "display_name": "Grandma", "device_unique_id": "ml360-gm", "enrolment_code": code})
+    assert failed.status_code == 503
+    assert await database.consume_enrolment_code(code, "ml360-gm") is True
+
+
+async def test_an_expired_one_time_code_is_refused(client):
+    await database.create_enrolment_code("OLDCODE123", "", utcnow() - timedelta(minutes=1))
+    resp = await client.post("/provision", json={
+        "display_name": "X", "device_unique_id": "ml360-x", "enrolment_code": "OLDCODE123"})
+    assert resp.status_code == 403
+
+
+async def test_one_time_codes_are_made_only_through_home_assistant(client):
+    assert (await client.post("/admin/enrolment-codes")).status_code == 404
+
+
+# --- L-07: crash-check events -----------------------------------------------
+
+async def test_crash_check_events_are_kept_for_tuning(client):
+    alice, _, _ = await _family()
+    resp = await client.post("/crash-events", headers=auth(alice),
+                             json={"kind": "near_miss", "peak_g": 5.2, "speed_kmh": 72})
+    assert resp.status_code == 204
+    assert (await client.post("/crash-events", json={"kind": "near_miss"})).status_code == 401
+    assert (await client.post("/crash-events", headers=auth(alice),
+                              json={"kind": "whatever"})).status_code == 422
+    async with _ingress() as ha:
+        page = (await ha.get("/")).text
+    assert "Hard knock" in page and "5.2 g" in page and "72 km/h" in page

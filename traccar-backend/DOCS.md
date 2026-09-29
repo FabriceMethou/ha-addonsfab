@@ -42,6 +42,13 @@ out, removed from every circle and can no longer see anyone. Its history
 stays in Traccar. To use MyLife360 again it has to enrol with the enrolment
 code.
 
+**New phone:** *Make a one-time code* gives a code that works once, for 7
+days, in place of the enrolment code. Send it to the person joining; it is
+shown only once. The family code in the configuration keeps working too.
+
+**Crash checks:** what the phones' crash check felt while driving: hard knocks
+that stayed below the thresholds, and each "Are you OK?" with its answer.
+
 The panel is only reachable through Home Assistant; the same pages do not
 exist on the add-on's public address.
 

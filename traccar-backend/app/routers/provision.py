@@ -10,7 +10,9 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.database import (
+    consume_enrolment_code,
     consume_transfer_code,
+    release_enrolment_code,
     delete_session_for_unique_id,
     rename_device_in_groups,
     upsert_session,
@@ -57,24 +59,31 @@ class ProvisionRequest(BaseModel):
     transfer_code: str = ""
 
 
-def _check_enrolment_code(supplied: str) -> None:
-    """Refuse enrolment unless the caller knows the configured code.
+async def _check_enrolment_code(supplied: str, device_unique_id: str) -> str | None:
+    """Refuse enrolment unless the caller knows the configured code or holds
+    a one-time code from the admin page (finding S-08).
 
-    Fails closed: an unconfigured backend enrols nobody, because an open
+    Returns the one-time code taken, so a failed enrolment can give it back.
+    Fails closed: with neither kind of code, nobody enrols, because an open
     /provision hands out a token that can read every family's location.
     """
     expected = settings.enrolment_code
+    if expected and secrets.compare_digest(supplied, expected):
+        return None
+    one_time = normalise_code(supplied)
+    if one_time and await consume_enrolment_code(one_time, device_unique_id):
+        return one_time
     if not expected:
+        _note_failure()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Enrolment is not configured on this server",
         )
-    if not secrets.compare_digest(supplied, expected):
-        _note_failure()
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid enrolment code",
-        )
+    _note_failure()
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Invalid enrolment code",
+    )
 
 
 class ProvisionResponse(BaseModel):
@@ -88,6 +97,7 @@ async def provision(req: ProvisionRequest, request: Request) -> ProvisionRespons
     client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
     _check_failure_brake()
     transfer = None
+    one_time = None
     if req.transfer_code:
         transfer = await consume_transfer_code(normalise_code(req.transfer_code))
         if transfer is None:
@@ -97,7 +107,7 @@ async def provision(req: ProvisionRequest, request: Request) -> ProvisionRespons
                 detail="This transfer code is not valid or has expired",
             )
     else:
-        _check_enrolment_code(req.enrolment_code)
+        one_time = await _check_enrolment_code(req.enrolment_code, req.device_unique_id)
     logger.info(
         "PROVISION REQUEST — name=%r  device_id=%r  ip=%s  transfer=%s",
         req.display_name, req.device_unique_id, client_ip, transfer is not None,
@@ -110,6 +120,8 @@ async def provision(req: ProvisionRequest, request: Request) -> ProvisionRespons
         )
         return response
     except TraccarError as exc:
+        if one_time:
+            await release_enrolment_code(one_time)
         logger.warning(
             "PROVISION FAILED — name=%r  device_id=%r  ip=%s  error=%s",
             req.display_name, req.device_unique_id, client_ip, exc,

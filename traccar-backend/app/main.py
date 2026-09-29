@@ -10,7 +10,7 @@ from app import engine, forwarder
 from app.database import init_db, prune_alerts, utcnow
 from app.versions import require_supported_app
 from app.routers import (
-    admin, alerts, app_update, crash_report, devices, driving, family, groups, places, positions,
+    admin, alerts, app_update, crash_events, crash_report, devices, driving, family, groups, places, positions,
     provision, route, stream, wifi_mappings,
 )
 from app.routers.stream import ws_reader_loop
@@ -71,7 +71,7 @@ app = FastAPI(title="MyLife360 Backend", lifespan=lifespan)
 app.middleware("http")(require_supported_app)
 
 for module in (
-    provision, family, places, route, stream, groups, wifi_mappings, crash_report,
+    provision, family, places, route, stream, groups, wifi_mappings, crash_report, crash_events,
     positions, alerts, driving, devices, app_update, admin,
 ):
     app.include_router(module.router)

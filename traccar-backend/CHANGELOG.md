@@ -16,6 +16,10 @@ Best with MyLife360 app 1.2.1.
   alert.
 - A phone whose clock is days ahead no longer freezes on the map.
 - Positions from simulated-location apps are flagged to the family.
+- **One-time enrolment codes** from the panel: each works once, for 7 days,
+  so the family code no longer has to travel through chats.
+- The panel lists what the phones' crash check felt (near misses and checks
+  started), to tune its thresholds.
 - Optional phone number per member for a *Call* button.
 - The driving report lists each speeding and hard-braking event.
 - Device tokens are stored hashed; existing phones keep working.

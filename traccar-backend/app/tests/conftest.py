@@ -24,6 +24,7 @@ from app import places as place_cache
 from app.broadcast import bus
 from app.routers.positions import positions_limiter
 from app import forwarder
+from app.routers.crash_events import crash_events_limiter
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ async def _fresh_db():
     for table in (
         "wifi_mappings", "device_groups", "groups", "device_sessions", "group_invites",
         "place_groups", "transfer_codes", "device_state", "place_presence", "alerts",
-        "driving_events", "traccar_outbox",
+        "driving_events", "traccar_outbox", "enrolment_codes", "crash_events",
     ):
         await hold.execute(f"DELETE FROM {table}")
     await hold.commit()
@@ -60,6 +61,7 @@ async def _fresh_db():
     bus._subs.clear()
     positions_limiter.reset()
     forwarder.state.__init__()
+    crash_events_limiter.reset()
 
 
 @pytest_asyncio.fixture

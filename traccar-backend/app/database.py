@@ -85,6 +85,31 @@ CREATE TABLE IF NOT EXISTS transfer_codes (
 );
 """
 
+# One-time enrolment codes made on the admin page (finding S-08). Only a
+# hash is kept; the code is shown once, when it is made.
+CREATE_ENROLMENT_CODES = """
+CREATE TABLE IF NOT EXISTS enrolment_codes (
+    code_hash  TEXT PRIMARY KEY,
+    label      TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at    TEXT,
+    used_by    TEXT
+);
+"""
+
+# What the crash check saw, to tune its thresholds (finding L-07).
+CREATE_CRASH_EVENTS = """
+CREATE TABLE IF NOT EXISTS crash_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id  INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    peak_g     REAL,
+    speed_kmh  REAL
+);
+"""
+
 # group_id 0 means "legacy, unscoped": rows that predate circle scoping.
 # They stay visible to everyone rather than vanishing on upgrade.
 CREATE_WIFI_MAPPINGS = """
@@ -264,6 +289,8 @@ async def init_db() -> None:
             CREATE_ALERTS,
             CREATE_DRIVING_EVENTS,
             CREATE_TRACCAR_OUTBOX,
+            CREATE_ENROLMENT_CODES,
+            CREATE_CRASH_EVENTS,
         ):
             await db.execute(ddl)
         await db.execute(
@@ -782,6 +809,10 @@ async def prune_alerts(older_than: datetime) -> None:
     async with _connect() as db:
         await db.execute("DELETE FROM alerts WHERE created_at < ?", (iso(older_than),))
         await db.execute("DELETE FROM driving_events WHERE event_time < ?", (iso(older_than),))
+        await db.execute("DELETE FROM crash_events WHERE created_at < ?", (iso(older_than),))
+        await db.execute(
+            "DELETE FROM enrolment_codes WHERE expires_at < ? AND used_at IS NULL", (iso(older_than),)
+        )
         await db.commit()
 
 
@@ -902,4 +933,71 @@ async def recent_alerts(limit: int) -> list[dict]:
     async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)) as cur:
+            return [dict(row) async for row in cur]
+
+
+# ------------------------------------------------------------------
+# One-time enrolment codes (S-08)
+# ------------------------------------------------------------------
+
+
+async def create_enrolment_code(code: str, label: str, expires_at: datetime) -> None:
+    async with _connect() as db:
+        await db.execute(
+            "INSERT INTO enrolment_codes (code_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (hash_token(code), label, iso(utcnow()), iso(expires_at)),
+        )
+        await db.commit()
+
+
+async def consume_enrolment_code(code: str, used_by: str) -> bool:
+    """Mark a live, unused code as used. True if it was one; single use."""
+    async with _connect() as db:
+        cur = await db.execute(
+            "UPDATE enrolment_codes SET used_at = ?, used_by = ?"
+            " WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?",
+            (iso(utcnow()), used_by, hash_token(code), iso(utcnow())),
+        )
+        await db.commit()
+        return cur.rowcount == 1
+
+
+async def release_enrolment_code(code: str) -> None:
+    """Enrolment failed after the code was taken: let it be used again."""
+    async with _connect() as db:
+        await db.execute(
+            "UPDATE enrolment_codes SET used_at = NULL, used_by = NULL WHERE code_hash = ?",
+            (hash_token(code),),
+        )
+        await db.commit()
+
+
+async def list_enrolment_codes(limit: int = 20) -> list[dict]:
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT label, created_at, expires_at, used_at, used_by FROM enrolment_codes"
+            " ORDER BY created_at DESC LIMIT ?", (limit,),
+        ) as cur:
+            return [dict(row) async for row in cur]
+
+
+# ------------------------------------------------------------------
+# Crash-check events (L-07)
+# ------------------------------------------------------------------
+
+
+async def insert_crash_event(device_id: int, kind: str, peak_g: float | None, speed_kmh: float | None) -> None:
+    async with _connect() as db:
+        await db.execute(
+            "INSERT INTO crash_events (device_id, created_at, kind, peak_g, speed_kmh) VALUES (?, ?, ?, ?, ?)",
+            (device_id, iso(utcnow()), kind, peak_g, speed_kmh),
+        )
+        await db.commit()
+
+
+async def recent_crash_events(limit: int) -> list[dict]:
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM crash_events ORDER BY id DESC LIMIT ?", (limit,)) as cur:
             return [dict(row) async for row in cur]
