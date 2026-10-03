@@ -21,7 +21,7 @@ def test_position_message_has_exactly_the_contract_fields():
         "fix_time": datetime(2026, 9, 27, 18, tzinfo=timezone.utc),
         "latitude": 48.8566, "longitude": 2.3522, "speed_kmh": 42.5, "course": 90.0,
         "altitude": 35.0, "accuracy": 8.0, "address": "1 Rue de Rivoli", "battery": 64.0,
-        "charging": True, "alarm": "sos",
+        "charging": True, "alarm": "sos", "activity": "in_vehicle",
     })
     assert message == FIXTURE["position"]
 

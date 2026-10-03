@@ -287,3 +287,59 @@ async def test_crash_check_events_are_kept_for_tuning(client):
     async with _ingress() as ha:
         page = (await ha.get("/")).text
     assert "Hard knock" in page and "5.2 g" in page and "72 km/h" in page
+
+
+# --- Day timeline: addresses on request, finer routes, activity -----------
+
+@respx.mock
+async def test_addresses_are_looked_up_once_per_place(client):
+    alice, _, _ = await _family()
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=httpx.Response(200, json={"id": 1}))
+    geocoder = respx.get(f"{TRACCAR}/api/server/geocode").mock(
+        return_value=httpx.Response(200, text="12 Rue de la Paix, Paris"))
+    first = await client.get("/geocode", headers=auth(alice), params={"latitude": 48.86901, "longitude": 2.33098})
+    again = await client.get("/geocode", headers=auth(alice), params={"latitude": 48.86899, "longitude": 2.33101})
+    assert first.json() == again.json() == {"address": "12 Rue de la Paix, Paris"}
+    assert geocoder.call_count == 1
+
+
+@respx.mock
+async def test_no_geocoder_means_no_address(client):
+    alice, _, _ = await _family()
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=httpx.Response(200, json={"id": 1}))
+    respx.get(f"{TRACCAR}/api/server/geocode").mock(return_value=httpx.Response(404))
+    resp = await client.get("/geocode", headers=auth(alice), params={"latitude": 1.0, "longitude": 2.0})
+    assert resp.json() == {"address": None}
+
+
+@respx.mock
+async def test_a_day_route_can_ask_for_more_points(client):
+    alice, _, _ = await _family()
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=httpx.Response(200, json={"id": 1}))
+    respx.get(f"{TRACCAR}/api/positions").mock(return_value=httpx.Response(200, json=[
+        {"latitude": 48.0, "longitude": 2.0, "speed": 0, "fixTime": f"2026-10-03T08:{i // 60:02d}:{i % 60:02d}Z",
+         "attributes": {"activity": "in_vehicle"}} for i in range(1500)
+    ]))
+    default = await client.get("/route", headers=auth(alice), params={"device_id": 1, "from": "a", "to": "b"})
+    finer = await client.get("/route", headers=auth(alice),
+                             params={"device_id": 1, "from": "a", "to": "b", "max_points": 2000})
+    assert len(default.json()) == 500
+    assert len(finer.json()) == 1500
+    assert finer.json()[0]["activity"] == "in_vehicle"
+
+
+async def test_the_activity_reaches_the_family_and_traccar(client):
+    alice, _, _ = await _family()
+    bob = await bus.subscribe(device_id=2, visible={1, 2})
+    with respx.mock:
+        respx.get(f"{TRACCAR}/api/session").mock(return_value=httpx.Response(200, json={"id": 1}))
+        respx.get(f"{TRACCAR}/api/geofences").mock(return_value=httpx.Response(200, json=[]))
+        osmand = respx.get("http://traccar.test:5055/").mock(return_value=httpx.Response(200))
+        now_ms = int(utcnow().timestamp() * 1000)
+        await client.post("/positions", headers=auth(alice), json={"positions": [
+            {"time": now_ms, "latitude": 48.0, "longitude": 2.0, "speed": 20.0, "activity": "in_vehicle"}]})
+        from app import forwarder
+        await forwarder.forward_once()
+    live = [m for m in _drain(bob) if m["type"] == "position"]
+    assert live[0]["activity"] == "in_vehicle"
+    assert dict(osmand.calls[0].request.url.params)["activity"] == "in_vehicle"

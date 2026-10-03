@@ -21,6 +21,10 @@ Best with MyLife360 app 1.2.1.
 - The panel lists what the phones' crash check felt (near misses and checks
   started), to tune its thresholds.
 - Optional phone number per member for a *Call* button.
+- For the app's day timeline: addresses on request (`/geocode`, through
+  Traccar's geocoder, remembered per place) and finer day routes.
+- Positions carry what Android says the person is doing (driving, walking,
+  cycling, still); it is shown live and kept in Traccar.
 - The driving report lists each speeding and hard-braking event.
 - Device tokens are stored hashed; existing phones keep working.
 - Limits on uploads, live connections and crash reports per phone.

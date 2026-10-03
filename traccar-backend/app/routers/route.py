@@ -17,6 +17,8 @@ async def get_route(
     device_id: int = Query(...),
     from_dt: str = Query(..., alias="from"),
     to_dt: str = Query(..., alias="to"),
+    # A day's timeline asks for more detail than the 7-day trip list.
+    max_points: int = Query(500, ge=50, le=3000),
     session: dict = Depends(require_session),
 ) -> list[dict[str, Any]]:
     await require_visible_device(session, device_id)
@@ -29,8 +31,6 @@ async def get_route(
     except TraccarError as exc:
         http_error_from_traccar(exc)
 
-    _MAX_POINTS = 500
-
     raw = []
     for pos in positions:
         attrs = pos.get("attributes") or {}
@@ -42,13 +42,14 @@ async def get_route(
             "course": pos.get("course", 0.0),
             "fix_time": pos.get("fixTime"),
             "battery_level": attrs.get("batteryLevel"),
+            "activity": attrs.get("activity"),
         })
 
     # Downsample evenly if the trip has more points than the display limit.
     # Always keep the first and last point so the route start/end are exact.
-    if len(raw) > _MAX_POINTS:
-        step = len(raw) / _MAX_POINTS
-        result = [raw[int(i * step)] for i in range(_MAX_POINTS - 1)]
+    if len(raw) > max_points:
+        step = len(raw) / max_points
+        result = [raw[int(i * step)] for i in range(max_points - 1)]
         result.append(raw[-1])
     else:
         result = raw

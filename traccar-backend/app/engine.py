@@ -81,6 +81,7 @@ def live_message(device_id: int, pos: dict) -> dict:
         "battery_level": pos.get("battery"),
         "is_charging": bool(pos.get("charging")),
         "alarm": pos.get("alarm"),
+        "activity": pos.get("activity"),
         "fix_time": iso(pos["fix_time"]),
     }
 

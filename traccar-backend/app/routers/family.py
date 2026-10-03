@@ -56,6 +56,7 @@ async def get_family(session: dict = Depends(require_session)) -> list[dict[str,
             "battery_level": _attr(pos, "batteryLevel") if pos else None,
             "is_charging": _attr(pos, "charge") if pos else None,
             "fix_time": pos.get("fixTime") if pos else None,
+            "activity": _attr(pos, "activity") if pos else None,
         }
         result.append(entry)
 

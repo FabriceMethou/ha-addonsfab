@@ -37,6 +37,8 @@ class PositionIn(BaseModel):
     charging: bool = False
     mock: bool = False
     alarm: str | None = None
+    # What Android's activity recognition says the person is doing.
+    activity: Literal["still", "walking", "running", "on_bicycle", "in_vehicle"] | None = None
 
 
 class StatusIn(BaseModel):
@@ -77,6 +79,7 @@ def _normalise(p: PositionIn, now: datetime | None = None) -> dict:
         "charging": p.charging,
         "mock": p.mock,
         "alarm": p.alarm,
+        "activity": p.activity,
     }
 
 

@@ -73,6 +73,16 @@ class TraccarClient:
         _raise_for_traccar(resp)
         return resp.json()
 
+    async def geocode(self, client: httpx.AsyncClient, latitude: float, longitude: float) -> str | None:
+        """Traccar's address for a point, if its geocoder is on. None otherwise."""
+        resp = await client.get(
+            "/api/server/geocode", params={"latitude": latitude, "longitude": longitude},
+        )
+        if not resp.is_success:
+            return None
+        text = resp.text.strip().strip('"')
+        return text or None
+
     async def get_positions_history(
         self,
         client: httpx.AsyncClient,
@@ -214,6 +224,8 @@ class TraccarClient:
             params["charge"] = "true"
         if pos.get("alarm"):
             params["alarm"] = pos["alarm"]
+        if pos.get("activity"):
+            params["activity"] = pos["activity"]  # kept by Traccar as an attribute
         try:
             resp = await http.get(f"{settings.traccar_osmand_lan_url}/", params=params)
         except httpx.HTTPError as exc:

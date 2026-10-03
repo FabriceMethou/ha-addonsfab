@@ -25,6 +25,7 @@ from app.broadcast import bus
 from app.routers.positions import positions_limiter
 from app import forwarder
 from app.routers.crash_events import crash_events_limiter
+from app.routers import geocode as geocode_router
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +63,8 @@ async def _fresh_db():
     positions_limiter.reset()
     forwarder.state.__init__()
     crash_events_limiter.reset()
+    geocode_router.geocode_limiter.reset()
+    geocode_router.clear_cache()
 
 
 @pytest_asyncio.fixture

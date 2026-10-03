@@ -104,6 +104,7 @@ def normalise_traccar_position(pos: dict) -> dict | None:
         "battery": battery if isinstance(battery, (int, float)) else None,
         "charging": bool(attrs.get("charge")),
         "alarm": attrs.get("alarm"),
+        "activity": attrs.get("activity"),
     }
 
 
