@@ -1,4 +1,5 @@
 """Driving reports: Traccar's trips, annotated with our driving events."""
+import asyncio
 import logging
 from datetime import timedelta
 
@@ -20,6 +21,31 @@ _KMH_PER_KNOT = 1.852
 MIN_TRIP_METRES = 500
 
 
+async def _fill_top_speeds(client, device_id: int, raw_trips: list[dict]) -> None:
+    """Traccar's week-long trip report has no top speeds (it shows 0); ask
+    for each drive's own, shorter, window. A drive whose top speed cannot be
+    read keeps 0 rather than failing the report."""
+    gate = asyncio.Semaphore(3)
+
+    async def fill(trip: dict) -> None:
+        start, end = parse_time(trip.get("startTime")), parse_time(trip.get("endTime"))
+        if not start or not end:
+            return
+        async with gate:
+            try:
+                top = await traccar.get_max_speed(client, device_id, start, end)
+            except (TraccarError, httpx.HTTPError) as exc:
+                logger.info("Top speed for a trip of device %s unavailable: %r", device_id, exc)
+                return
+        if top:
+            trip["maxSpeed"] = top
+
+    await asyncio.gather(*(
+        fill(t) for t in raw_trips
+        if not t.get("maxSpeed") and (t.get("distance") or 0) >= MIN_TRIP_METRES
+    ))
+
+
 @router.get("/driving")
 async def get_driving(
     device_id: int = Query(...),
@@ -37,6 +63,7 @@ async def get_driving(
         client = await traccar.admin_session()
         try:
             raw_trips = await traccar.get_trips(client, device_id, iso(since), iso(now))
+            await _fill_top_speeds(client, device_id, raw_trips)
         finally:
             await client.aclose()
     except (TraccarError, httpx.HTTPError) as exc:

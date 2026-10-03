@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.5
+
+- The driving report's top speed was always 0. For any period longer than a
+  day, Traccar's trip report leaves the top speed out; it is now read for
+  each drive over that drive's own time.
+
 ## 1.2.4
 
 Best with MyLife360 app 1.2.1.

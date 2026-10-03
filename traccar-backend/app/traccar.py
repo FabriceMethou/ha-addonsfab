@@ -14,6 +14,12 @@ _TIMEOUT = httpx.Timeout(10.0)
 # take Traccar well past the ordinary timeout. Kept under the app's own
 # 30-second limit, so the phone always gets an answer.
 _REPORT_TIMEOUT = httpx.Timeout(25.0)
+# Traccar computes reports from positions only up to a day; see get_max_speed.
+_SLOW_REPORT_SPAN = timedelta(hours=24)
+
+
+def _iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 _KNOTS_PER_KMH = 1 / 1.852
 
 
@@ -119,6 +125,38 @@ class TraccarClient:
         if not isinstance(trips, list):
             raise TraccarError("Traccar trip report was not a list")
         return trips
+
+    async def get_max_speed(
+        self, client: httpx.AsyncClient, device_id: int, start: datetime, end: datetime,
+    ) -> float | None:
+        """Top speed between two times, in knots; None if Traccar cannot say.
+
+        Traccar leaves the top speed at 0 in reports longer than its
+        `report.fastThreshold` (a day by default): it then works from motion
+        events instead of positions. Asked a day or less at a time, it reads
+        the positions and the top speed is real.
+        """
+        top: float | None = None
+        piece = start
+        while piece < end:
+            piece_end = min(piece + _SLOW_REPORT_SPAN, end)
+            resp = await client.get(
+                "/api/reports/summary",
+                params={"deviceId": device_id, "from": _iso_z(piece), "to": _iso_z(piece_end)},
+                headers={"Accept": "application/json"},
+                timeout=_REPORT_TIMEOUT,
+            )
+            _raise_for_traccar(resp)
+            try:
+                rows = resp.json()
+            except ValueError as exc:
+                raise TraccarError(f"Traccar summary was not JSON: {exc}") from exc
+            for row in rows if isinstance(rows, list) else []:
+                speed = row.get("maxSpeed") if isinstance(row, dict) else None
+                if isinstance(speed, (int, float)):
+                    top = max(top or 0.0, float(speed))
+            piece = piece_end
+        return top
 
     # ------------------------------------------------------------------
     # Write operations

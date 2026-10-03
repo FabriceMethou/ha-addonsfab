@@ -98,3 +98,37 @@ async def test_driving_report_survives_a_slow_or_odd_traccar(client, failure):
     assert report["trips"] == []
     assert report["trips_error"]
     assert report["totals"]["hard_brakes"] == 1
+
+
+@respx.mock
+async def test_top_speed_is_read_per_drive_when_the_week_report_has_none(client):
+    """Traccar leaves maxSpeed at 0 in reports longer than a day."""
+    token = await seed_session(device_unique_id="ml360-alice", traccar_device_id=1)
+    mock_admin_session()
+    respx.get(f"{TRACCAR}/api/reports/trips").mock(return_value=httpx.Response(200, json=[
+        _trip("2099-01-01T08:00:00+00:00", "2099-01-01T10:00:00+00:00", 180_000, max_knots=0),
+        _trip("2099-01-02T08:00:00+00:00", "2099-01-03T14:00:00+00:00", 900_000, max_knots=0),
+    ]))
+    summary = respx.get(f"{TRACCAR}/api/reports/summary").mock(side_effect=[
+        httpx.Response(200, json=[{"maxSpeed": 75.6}]),     # 140 km/h
+        httpx.Response(200, json=[{"maxSpeed": 81.0}]),     # 150 km/h, first day of the long drive
+        httpx.Response(200, json=[{"maxSpeed": 64.8}]),     # rest of it
+    ])
+    report = (await client.get("/driving?device_id=1&days=7", headers=auth(token))).json()
+    assert sorted(t["max_speed_kmh"] for t in report["trips"]) == [140, 150]
+    assert report["totals"]["max_speed_kmh"] == 150
+    windows = [(c.request.url.params["from"], c.request.url.params["to"]) for c in summary.calls]
+    assert ("2099-01-02T08:00:00Z", "2099-01-03T08:00:00Z") in windows   # never more than a day
+
+
+@respx.mock
+async def test_a_top_speed_traccar_cannot_give_stays_zero(client):
+    token = await seed_session(device_unique_id="ml360-alice", traccar_device_id=1)
+    mock_admin_session()
+    respx.get(f"{TRACCAR}/api/reports/trips").mock(return_value=httpx.Response(200, json=[
+        _trip("2099-01-01T08:00:00+00:00", "2099-01-01T10:00:00+00:00", 180_000, max_knots=0),
+    ]))
+    respx.get(f"{TRACCAR}/api/reports/summary").mock(return_value=httpx.Response(500))
+    report = (await client.get("/driving?device_id=1&days=7", headers=auth(token))).json()
+    assert report["trips_error"] is None
+    assert report["totals"]["max_speed_kmh"] == 0
