@@ -19,6 +19,11 @@ logging.basicConfig(
     level=settings.log_level.upper(),
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
+# httpx logs every request URL at INFO, and Traccar's session URL carries
+# the admin token: those lines put the token in the add-on log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 

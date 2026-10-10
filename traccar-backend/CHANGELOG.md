@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.6
+
+Best with MyLife360 app 1.2.2.
+
+- The Traccar admin token no longer appears in the add-on log (each request
+  URL was logged, and Traccar's session URL carries the token).
+- Faster fresh positions when someone opens the app:
+  - a phone whose connection was down when the request was sent is asked
+    again as soon as it reconnects (within 2 minutes);
+  - the family list uses the backend's newest position when Traccar's copy
+    is behind.
+
 ## 1.2.5
 
 - The driving report's top speed was always 0. For any period longer than a

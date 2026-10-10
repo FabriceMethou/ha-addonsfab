@@ -9,7 +9,7 @@ import websockets.exceptions
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
-from app import engine
+from app import engine, status_requests
 from app.auth import require_session
 from app.authz import visible_device_ids
 from app.broadcast import bus
@@ -117,6 +117,7 @@ async def request_status(session: dict = Depends(require_session)) -> None:
     """
     recipients = await visible_device_ids(session)
     recipients.discard(session["traccar_device_id"])
+    status_requests.requested(recipients)
     await bus.publish_to({"type": "status_request"}, recipients)
 
 
@@ -137,6 +138,9 @@ async def stream(
         unique_id=session["device_unique_id"],
         visible=await visible_device_ids(session),
     )
+    if status_requests.take(device_id):
+        # Asked while this phone's connection was down: ask again now.
+        await bus.publish_to({"type": "status_request"}, {device_id})
     return EventSourceResponse(
         _client_generator(request, sub),
         headers={"X-Accel-Buffering": "no"},

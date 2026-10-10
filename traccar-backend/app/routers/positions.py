@@ -12,7 +12,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app import engine, forwarder
+from app import engine, forwarder, status_requests
 from app.alerts import SEVERITY_INFO, display_name, public_alert, raise_alert
 from app.auth import require_session
 from app.database import get_device_state, outbox_add
@@ -100,6 +100,8 @@ async def post_positions(body: PositionsIn, session: dict = Depends(require_sess
     """
     device_id = session["traccar_device_id"]
     positions_limiter.check(device_id)
+    if body.positions:
+        status_requests.answered(device_id)
     unique_id = session["device_unique_id"]
     batch = sorted((_normalise(p) for p in body.positions), key=lambda p: p["timestamp"])
     newest = batch[-1]["timestamp"] if batch else None

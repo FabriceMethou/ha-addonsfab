@@ -63,6 +63,8 @@ async def _fresh_db():
     positions_limiter.reset()
     forwarder.state.__init__()
     crash_events_limiter.reset()
+    from app import status_requests
+    status_requests.clear()
     geocode_router.geocode_limiter.reset()
     geocode_router.clear_cache()
 

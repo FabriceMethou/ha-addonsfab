@@ -343,3 +343,47 @@ async def test_the_activity_reaches_the_family_and_traccar(client):
     live = [m for m in _drain(bob) if m["type"] == "position"]
     assert live[0]["activity"] == "in_vehicle"
     assert dict(osmand.calls[0].request.url.params)["activity"] == "in_vehicle"
+
+
+# --- Faster refresh when someone opens the app ---------------------------
+
+async def test_a_phone_that_missed_a_status_request_is_asked_when_it_reconnects(client):
+    from app import status_requests
+    alice, bob, _ = await _family()
+    resp = await client.post("/request-status", headers=auth(alice))
+    assert resp.status_code == 204            # Bob is not connected: he hears nothing
+    assert status_requests.take(2) is True     # ...but it is remembered for him
+    assert status_requests.take(2) is False    # and only once
+
+
+async def test_answering_clears_the_missed_request(client):
+    from app import status_requests
+    alice, bob, _ = await _family()
+    await client.post("/request-status", headers=auth(alice))
+    with respx.mock:
+        respx.get(f"{TRACCAR}/api/session").mock(return_value=httpx.Response(200, json={"id": 1}))
+        respx.get(f"{TRACCAR}/api/geofences").mock(return_value=httpx.Response(200, json=[]))
+        await client.post("/positions", headers=auth(bob), json={"positions": [
+            {"time": int(utcnow().timestamp() * 1000), "latitude": 48.0, "longitude": 2.0}]})
+    assert status_requests.take(2) is False
+
+
+@respx.mock
+async def test_the_family_list_shows_the_backends_newer_position(client):
+    """Traccar gets positions through the outbox, later; the list must not lag."""
+    alice, bob, _ = await _family()
+    respx.get(f"{TRACCAR}/api/session").mock(return_value=httpx.Response(200, json={"id": 1}))
+    respx.get(f"{TRACCAR}/api/geofences").mock(return_value=httpx.Response(200, json=[]))
+    now_ms = int(utcnow().timestamp() * 1000)
+    await client.post("/positions", headers=auth(alice), json={"positions": [
+        {"time": now_ms, "latitude": 48.5, "longitude": 2.5, "speed": 10.0, "battery": 55}]})
+    respx.get(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(200, json=[
+        {"id": 1, "name": "Alice's phone"}, {"id": 2, "name": "Bob's phone"}]))
+    respx.get(f"{TRACCAR}/api/positions").mock(return_value=httpx.Response(200, json=[
+        {"deviceId": 1, "latitude": 40.0, "longitude": 1.0, "speed": 0, "fixTime": "2020-01-01T00:00:00Z",
+         "attributes": {"batteryLevel": 90}}]))
+    family = {m["name"]: m for m in (await client.get("/family", headers=auth(bob))).json()}
+    alice_entry = family["Alice"]
+    assert (alice_entry["latitude"], alice_entry["longitude"]) == (48.5, 2.5)
+    assert alice_entry["battery_level"] == 55
+    assert alice_entry["speed_kmh"] == pytest.approx(36.0, abs=0.1)

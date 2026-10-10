@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
+from app import engine
 from app.auth import require_session
 from app.authz import visible_device_ids
 from app.database import list_device_states, list_sessions, load_status
@@ -35,8 +36,10 @@ async def get_family(session: dict = Depends(require_session)) -> list[dict[str,
         did = device["id"]
         if did not in allowed:
             continue
-        pos = pos_by_device.get(did)
         state = states.get(did) or {}
+        # Traccar receives positions through the outbox, a little later (or
+        # much later while it is down); the backend's own latest is fresher.
+        pos = _freshest(pos_by_device.get(did), state)
         entry: dict[str, Any] = {
             "device_id": did,
             "name": (sessions.get(did) or {}).get("display_name") or device.get("name"),
@@ -68,6 +71,28 @@ async def _fetch_devices_and_positions(client):
         traccar.get_devices(client),
         traccar.get_positions(client),
     )
+
+
+def _freshest(pos: dict | None, state: dict) -> dict | None:
+    """Traccar's latest position, or the backend's when that one is newer."""
+    mine = engine.parse_time(state.get("last_fix_time"))
+    if mine is None or state.get("last_latitude") is None:
+        return pos
+    theirs = engine.parse_time(pos.get("fixTime")) if pos else None
+    if theirs is not None and theirs >= mine:
+        return pos
+    attributes = {}
+    if state.get("last_battery") is not None:
+        attributes["batteryLevel"] = state["last_battery"]
+    if state.get("last_charging") is not None:
+        attributes["charge"] = bool(state["last_charging"])
+    return {
+        "latitude": state["last_latitude"],
+        "longitude": state["last_longitude"],
+        "speed": (state.get("last_speed_kmh") or 0.0) / 1.852,
+        "fixTime": state["last_fix_time"],
+        "attributes": attributes,
+    }
 
 
 def _attr(pos: dict, key: str) -> Any:
