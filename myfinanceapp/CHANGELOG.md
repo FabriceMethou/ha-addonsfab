@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.7.1
+
+**Net worth change shows the right period**
+- The % on the Net Worth card was the change since the 1st of the current month, labelled "vs last month", and it was the same on every page and every month you looked at
+- **Dashboard:** the card follows the month shown. Net worth at the end of that month (today for the current month), compared with the end of the month before. Going back to September shows September's figure and its change over September
+- **Reports:** Net Worth and Total Assets follow the selected period and owner, as the change from the start of the period to its end ("since 1 Jan 2026"). A period that is over shows the figure at its end
+- Transactions dated the 1st now count in their own month, not the month before
+
 ## 2.7.0
 
 **Investments: fixes that affect your numbers**

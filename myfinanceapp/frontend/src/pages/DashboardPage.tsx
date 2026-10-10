@@ -181,12 +181,19 @@ export default function DashboardPage() {
     },
   });
 
-  // Fetch net worth trend for delta
-  const { data: netWorthTrend } = useQuery({
-    queryKey: ["net-worth-trend"],
+  // Net worth at the end of the month shown (today for this month) against
+  // the end of the month before.
+  const netWorthAsOf = isCurrentMonth
+    ? format(today, "yyyy-MM-dd")
+    : currentMonthEnd;
+  const { data: netWorthMonth, isLoading: netWorthMonthLoading } = useQuery({
+    queryKey: ["net-worth-change", previousMonthEnd, netWorthAsOf],
     queryFn: async () => {
-      const response = await reportsAPI.getNetWorthTrend({ months: 2 });
-      return response.data.trend;
+      const response = await reportsAPI.getNetWorthChange({
+        start_date: previousMonthEnd,
+        end_date: netWorthAsOf,
+      });
+      return response.data;
     },
   });
 
@@ -412,7 +419,10 @@ export default function DashboardPage() {
   }
 
   // Calculate KPIs using precise decimal arithmetic
-  const netWorth = netWorthData?.net_worth ?? 0;
+  // This month shows the live figure; a past month shows where it ended.
+  const netWorth = isCurrentMonth
+    ? (netWorthData?.net_worth ?? 0)
+    : (netWorthMonth?.end_net_worth ?? 0);
   const monthlyIncome = transactionsSummary?.total_income ?? 0;
   const monthlyExpenses = absMoney(transactionsSummary?.total_expense ?? 0);
   // Savings are income minus expenses. Investing is one use of what was saved
@@ -437,13 +447,8 @@ export default function DashboardPage() {
   const previousInvested = previousMonthlyInvestments?.total_invested ?? 0;
 
   // Calculate deltas with safe percentage calculation
-  const netWorthChange =
-    netWorthTrend && netWorthTrend.length >= 2
-      ? calculatePercentageChange(
-          netWorthTrend[netWorthTrend.length - 1].net_worth,
-          netWorthTrend[netWorthTrend.length - 2].net_worth,
-        )
-      : 0;
+  const netWorthChange: number | undefined =
+    netWorthMonth?.change_percent ?? undefined;
 
   const incomeChange = calculatePercentageChange(monthlyIncome, previousIncome);
   const expensesChange = calculatePercentageChange(
@@ -497,10 +502,12 @@ export default function DashboardPage() {
           title="Net Worth"
           value={formatCurrency(netWorth)}
           change={netWorthChange}
-          changeLabel="vs last month"
+          changeLabel={`vs end of ${format(previousMonth, "MMMM")}`}
           icon={<Wallet size={24} className="text-blue-500" />}
           iconColor="bg-blue-500"
-          loading={netWorthLoading}
+          loading={
+            isCurrentMonth ? netWorthLoading : netWorthMonthLoading
+          }
           primary
           onClick={() => navigate("/accounts")}
           actionLabel="Show accounts"

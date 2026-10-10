@@ -5360,141 +5360,14 @@ class FinanceDatabase:
         # Calculate net worth at each date
         trend_data = []
         accounts = self.get_accounts(owner_id=owner_id)
+        debts = self._debts_of_owner(owner_id)
         with self.db_connection(commit=False) as conn:
             cursor = conn.cursor()
-
             for calc_date in calculation_dates:
-                total_assets = 0
-
-                # Calculate balance for each account at this date
-                for account in accounts:
-                    opening_date = account.get('opening_date')
-                    opening_balance = account.get('opening_balance', 0) or 0
-
-                    # If account was opened after calc_date, skip it
-                    if opening_date and opening_date > calc_date:
-                        continue
-
-                    # An investment account carries no transactions of its own —
-                    # its worth is the portfolio. Replaying the ledger would show
-                    # it as empty, which is why the trend disagreed with current
-                    # net worth by exactly the value of the holdings.
-                    #
-                    # Quantity is reconstructed from the trades up to this date,
-                    # so what you had then is right. The price is today's: no
-                    # price history is kept, so past points value old positions
-                    # at current quotes.
-                    if account.get('account_type') == 'investment':
-                        cursor.execute("""
-                            SELECT COALESCE(SUM(
-                                       CASE WHEN it.transaction_type = 'buy'  THEN it.shares
-                                            WHEN it.transaction_type = 'sell' THEN -it.shares
-                                            ELSE 0 END), 0) AS quantity,
-                                   -- Same fallback as _sync_investment_account_balance:
-                                   -- an unquoted holding is worth what it cost, not zero.
-                                   -- Life insurance and similar have no market price, and
-                                   -- treating them as worthless made the trend disagree
-                                   -- with current net worth by tens of thousands.
-                                   CASE WHEN h.current_price > 0 THEN h.current_price
-                                        WHEN SUM(CASE WHEN it.transaction_type = 'buy'
-                                                      THEN it.shares ELSE 0 END) > 0
-                                        THEN SUM(CASE WHEN it.transaction_type = 'buy'
-                                                      THEN it.total_amount ELSE 0 END)
-                                             / SUM(CASE WHEN it.transaction_type = 'buy'
-                                                        THEN it.shares ELSE 0 END)
-                                        ELSE COALESCE(h.average_cost, 0)
-                                   END AS price,
-                                   COALESCE(h.currency, s.currency) AS currency
-                              FROM investment_holdings h
-                              JOIN securities s ON h.security_id = s.id
-                              LEFT JOIN investment_transactions it
-                                     ON it.holding_id = h.id AND it.transaction_date <= ?
-                             WHERE h.account_id = ?
-                             GROUP BY h.id
-                        """, (calc_date, account['id']))
-                        for holding in cursor.fetchall():
-                            held = (holding['quantity'] or 0) * (holding['price'] or 0)
-                            if held:
-                                total_assets += self.convert_currency(
-                                    held, holding['currency'], display_currency)
-                        continue
-
-                    # Start with opening balance
-                    balance = opening_balance
-
-                    # Add all confirmed transactions up to this date
-                    if opening_date:
-                        # If we have an opening date, only count transactions after it
-                        cursor.execute("""
-                            SELECT amount
-                            FROM transactions
-                            WHERE account_id = ?
-                              AND transaction_date <= ?
-                              AND transaction_date >= ?
-                              AND confirmed = 1
-                            ORDER BY transaction_date
-                        """, (account['id'], calc_date, opening_date))
-                    else:
-                        # No opening date: count all transactions up to calc_date
-                        cursor.execute("""
-                            SELECT amount
-                            FROM transactions
-                            WHERE account_id = ?
-                              AND transaction_date <= ?
-                              AND confirmed = 1
-                            ORDER BY transaction_date
-                        """, (account['id'], calc_date))
-
-                    transactions = cursor.fetchall()
-                    for txn in transactions:
-                        balance += txn[0]
-
-                    # Convert to display currency
-                    converted_balance = self.convert_currency(balance, account['currency'], display_currency)
-                    total_assets += converted_balance
-
-                # Get historical debt balances at this snapshot date
-                # Balance at date = principal_amount - sum of principal reductions up to that date
-                total_debts = 0
-                debts = self.get_debts(include_inactive=True)
-                # Filter debts by owner if specified
-                if owner_id:
-                    debts = [d for d in debts if d.get('owner_id') == owner_id]
-                for debt in debts:
-                    # You owe the money from the day you borrow it, not from the
-                    # day the instalments begin. start_date is the first payment
-                    # date — using it here hid a loan contracted in January whose
-                    # repayments only start in October, so the chart and the
-                    # net worth card disagreed by the whole principal.
-                    #
-                    # created_at is when the debt entered the books, which is the
-                    # closest thing to a contract date the table records.
-                    appeared = (debt.get('created_at') or debt.get('start_date') or '')[:10]
-                    if appeared and appeared > calc_date:
-                        continue
-                    principal_amount = debt.get('principal_amount', 0) or 0
-                    # Sum all principal reductions (principal_paid + extra_payment) up to calc_date
-                    cursor.execute("""
-                        SELECT COALESCE(SUM(principal_paid + extra_payment), 0)
-                        FROM debt_payments
-                        WHERE debt_id = ? AND payment_date <= ?
-                    """, (debt['id'], calc_date))
-                    total_principal_paid = cursor.fetchone()[0] or 0
-                    debt_balance = max(0, principal_amount - total_principal_paid)
-                    if debt_balance > 0:
-                        debt_currency = debt.get('currency', 'EUR')
-                        converted_debt = self.convert_currency(debt_balance, debt_currency, display_currency)
-                        total_debts += converted_debt
-
-                net_worth = total_assets - total_debts
-
                 trend_data.append({
                     'date': calc_date,
-                    'assets': total_assets,
-                    'debts': total_debts,
-                    'net_worth': net_worth
+                    **self._net_worth_on(cursor, calc_date, accounts, debts, display_currency),
                 })
-
 
         return {
             'start_date': start_date,
@@ -5502,6 +5375,147 @@ class FinanceDatabase:
             'frequency': frequency,
             'currency': display_currency,
             'data': trend_data
+        }
+
+    def get_net_worth_at(self, as_of: str, owner_id: int = None) -> Dict[str, Any]:
+        """Net worth at the end of the day `as_of` (ISO date), rebuilt from the
+        ledger the same way as each point of get_net_worth_trend."""
+        display_currency = self.get_preference('display_currency', 'EUR')
+        accounts = self.get_accounts(owner_id=owner_id)
+        debts = self._debts_of_owner(owner_id)
+        with self.db_connection(commit=False) as conn:
+            return self._net_worth_on(conn.cursor(), as_of, accounts, debts, display_currency)
+
+    def _debts_of_owner(self, owner_id: int = None) -> List[Dict]:
+        debts = self.get_debts(include_inactive=True)
+        if owner_id:
+            debts = [d for d in debts if d.get('owner_id') == owner_id]
+        return debts
+
+    def _net_worth_on(self, cursor, calc_date: str, accounts, debts, display_currency: str) -> Dict[str, float]:
+        """Assets, debts and net worth at the end of `calc_date`."""
+        total_assets = 0
+
+        # Calculate balance for each account at this date
+        for account in accounts:
+            opening_date = account.get('opening_date')
+            opening_balance = account.get('opening_balance', 0) or 0
+
+            # If account was opened after calc_date, skip it
+            if opening_date and opening_date > calc_date:
+                continue
+
+            # An investment account carries no transactions of its own —
+            # its worth is the portfolio. Replaying the ledger would show
+            # it as empty, which is why the trend disagreed with current
+            # net worth by exactly the value of the holdings.
+            #
+            # Quantity is reconstructed from the trades up to this date,
+            # so what you had then is right. The price is today's: no
+            # price history is kept, so past points value old positions
+            # at current quotes.
+            if account.get('account_type') == 'investment':
+                cursor.execute("""
+                    SELECT COALESCE(SUM(
+                               CASE WHEN it.transaction_type = 'buy'  THEN it.shares
+                                    WHEN it.transaction_type = 'sell' THEN -it.shares
+                                    ELSE 0 END), 0) AS quantity,
+                           -- Same fallback as _sync_investment_account_balance:
+                           -- an unquoted holding is worth what it cost, not zero.
+                           -- Life insurance and similar have no market price, and
+                           -- treating them as worthless made the trend disagree
+                           -- with current net worth by tens of thousands.
+                           CASE WHEN h.current_price > 0 THEN h.current_price
+                                WHEN SUM(CASE WHEN it.transaction_type = 'buy'
+                                              THEN it.shares ELSE 0 END) > 0
+                                THEN SUM(CASE WHEN it.transaction_type = 'buy'
+                                              THEN it.total_amount ELSE 0 END)
+                                     / SUM(CASE WHEN it.transaction_type = 'buy'
+                                                THEN it.shares ELSE 0 END)
+                                ELSE COALESCE(h.average_cost, 0)
+                           END AS price,
+                           COALESCE(h.currency, s.currency) AS currency
+                      FROM investment_holdings h
+                      JOIN securities s ON h.security_id = s.id
+                      LEFT JOIN investment_transactions it
+                             ON it.holding_id = h.id AND it.transaction_date <= ?
+                     WHERE h.account_id = ?
+                     GROUP BY h.id
+                """, (calc_date, account['id']))
+                for holding in cursor.fetchall():
+                    held = (holding['quantity'] or 0) * (holding['price'] or 0)
+                    if held:
+                        total_assets += self.convert_currency(
+                            held, holding['currency'], display_currency)
+                continue
+
+            # Start with opening balance
+            balance = opening_balance
+
+            # Add all confirmed transactions up to this date
+            if opening_date:
+                # If we have an opening date, only count transactions after it
+                cursor.execute("""
+                    SELECT amount
+                    FROM transactions
+                    WHERE account_id = ?
+                      AND transaction_date <= ?
+                      AND transaction_date >= ?
+                      AND confirmed = 1
+                    ORDER BY transaction_date
+                """, (account['id'], calc_date, opening_date))
+            else:
+                # No opening date: count all transactions up to calc_date
+                cursor.execute("""
+                    SELECT amount
+                    FROM transactions
+                    WHERE account_id = ?
+                      AND transaction_date <= ?
+                      AND confirmed = 1
+                    ORDER BY transaction_date
+                """, (account['id'], calc_date))
+
+            transactions = cursor.fetchall()
+            for txn in transactions:
+                balance += txn[0]
+
+            # Convert to display currency
+            converted_balance = self.convert_currency(balance, account['currency'], display_currency)
+            total_assets += converted_balance
+
+        # Get historical debt balances at this snapshot date
+        # Balance at date = principal_amount - sum of principal reductions up to that date
+        total_debts = 0
+        for debt in debts:
+            # You owe the money from the day you borrow it, not from the
+            # day the instalments begin. start_date is the first payment
+            # date — using it here hid a loan contracted in January whose
+            # repayments only start in October, so the chart and the
+            # net worth card disagreed by the whole principal.
+            #
+            # created_at is when the debt entered the books, which is the
+            # closest thing to a contract date the table records.
+            appeared = (debt.get('created_at') or debt.get('start_date') or '')[:10]
+            if appeared and appeared > calc_date:
+                continue
+            principal_amount = debt.get('principal_amount', 0) or 0
+            # Sum all principal reductions (principal_paid + extra_payment) up to calc_date
+            cursor.execute("""
+                SELECT COALESCE(SUM(principal_paid + extra_payment), 0)
+                FROM debt_payments
+                WHERE debt_id = ? AND payment_date <= ?
+            """, (debt['id'], calc_date))
+            total_principal_paid = cursor.fetchone()[0] or 0
+            debt_balance = max(0, principal_amount - total_principal_paid)
+            if debt_balance > 0:
+                debt_currency = debt.get('currency', 'EUR')
+                converted_debt = self.convert_currency(debt_balance, debt_currency, display_currency)
+                total_debts += converted_debt
+
+        return {
+            'assets': total_assets,
+            'debts': total_debts,
+            'net_worth': total_assets - total_debts,
         }
 
     # ==================== INVESTMENTS ====================

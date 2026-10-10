@@ -68,7 +68,14 @@ import {
   accountsAPI,
   categoriesAPI,
 } from "../services/api";
-import { format, subMonths, startOfMonth, endOfMonth } from "date-fns";
+import {
+  format,
+  subMonths,
+  subDays,
+  startOfMonth,
+  endOfMonth,
+  parseISO,
+} from "date-fns";
 import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
 import {
   absMoney,
@@ -610,14 +617,33 @@ export default function ReportsPage() {
     },
   });
 
-  // Fetch previous net worth for comparison
-  const { data: netWorthTrendForComparison } = useQuery({
-    queryKey: ["net-worth-trend-comparison"],
+  // Net worth change over the selected period: from the end of the day before
+  // it starts to its end, or today when the period runs into the future.
+  const todayStr = format(new Date(), "yyyy-MM-dd");
+  const netWorthPeriodEnd = endDate < todayStr ? endDate : todayStr;
+  const netWorthPeriodStart = isCompleteDate(startDate)
+    ? format(subDays(parseISO(startDate), 1), "yyyy-MM-dd")
+    : "";
+  const { data: netWorthPeriodChange } = useQuery({
+    queryKey: [
+      "net-worth-change",
+      netWorthPeriodStart,
+      netWorthPeriodEnd,
+      selectedOwner,
+    ],
     queryFn: async () => {
-      const response = await reportsAPI.getNetWorthTrend({ months: 2 });
-      return response.data.trend;
+      const response = await reportsAPI.getNetWorthChange({
+        start_date: netWorthPeriodStart,
+        end_date: netWorthPeriodEnd,
+        owner_id: ownerIdParam,
+      });
+      return response.data;
     },
+    enabled:
+      netWorthPeriodStart !== "" && netWorthPeriodStart <= netWorthPeriodEnd,
   });
+  // A period that is over shows where net worth ended, not today's figure.
+  const periodIsPast = endDate < todayStr;
 
   // Fetch user settings for display currency
   const { data: settingsData } = useQuery({
@@ -987,42 +1013,41 @@ export default function ReportsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <KPICard
                 title="Net Worth"
-                value={formatCurrency(netWorthData?.net_worth || 0)}
-                change={
-                  netWorthTrendForComparison &&
-                  netWorthTrendForComparison.length >= 2
-                    ? calculatePercentageChange(
-                        netWorthTrendForComparison[
-                          netWorthTrendForComparison.length - 1
-                        ].net_worth,
-                        netWorthTrendForComparison[
-                          netWorthTrendForComparison.length - 2
-                        ].net_worth,
-                      )
+                value={formatCurrency(
+                  (periodIsPast
+                    ? netWorthPeriodChange?.end_net_worth
+                    : netWorthData?.net_worth) || 0,
+                )}
+                change={netWorthPeriodChange?.change_percent ?? undefined}
+                changeLabel={
+                  isCompleteDate(startDate)
+                    ? `since ${format(parseISO(startDate), "d MMM yyyy")}`
                     : undefined
                 }
-                changeLabel="vs last month"
                 icon={<Wallet size={24} className="text-blue-500" />}
                 iconColor="bg-blue-500"
                 colorClass="text-foreground"
               />
               <KPICard
                 title="Total Assets"
-                value={formatCurrency(netWorthData?.total_assets || 0)}
+                value={formatCurrency(
+                  (periodIsPast
+                    ? netWorthPeriodChange?.end_assets
+                    : netWorthData?.total_assets) || 0,
+                )}
                 change={
-                  netWorthTrendForComparison &&
-                  netWorthTrendForComparison.length >= 2
+                  netWorthPeriodChange
                     ? calculatePercentageChange(
-                        netWorthTrendForComparison[
-                          netWorthTrendForComparison.length - 1
-                        ].assets,
-                        netWorthTrendForComparison[
-                          netWorthTrendForComparison.length - 2
-                        ].assets,
+                        netWorthPeriodChange.end_assets,
+                        netWorthPeriodChange.start_assets,
                       )
                     : undefined
                 }
-                changeLabel="vs last month"
+                changeLabel={
+                  isCompleteDate(startDate)
+                    ? `since ${format(parseISO(startDate), "d MMM yyyy")}`
+                    : undefined
+                }
                 icon={<ArrowUpCircle size={24} className="text-emerald-500" />}
                 iconColor="bg-emerald-500"
                 colorClass="text-foreground"

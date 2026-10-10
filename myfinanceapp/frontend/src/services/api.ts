@@ -511,6 +511,13 @@ export const reportsAPI = {
     api.get("/api/reports/net-worth", { params }),
   getNetWorthTrend: (params: ReportPeriodParams = { months: 12 }) =>
     api.get("/api/reports/net-worth/trend", { params }),
+  /** Net worth at the end of each date and the change between (change_percent
+   *  is null when the start is 0). */
+  getNetWorthChange: (params: {
+    start_date: string;
+    end_date: string;
+    owner_id?: number;
+  }) => api.get("/api/reports/net-worth/change", { params }),
   getSpendingByCategory: (params?: Record<string, unknown>) =>
     api.get("/api/reports/spending-by-category", { params }),
   getIncomeVsExpenses: (params?: Record<string, unknown>) =>

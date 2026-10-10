@@ -333,6 +333,45 @@ def net_worth_trend(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trend calculation failed: {str(e)}")
 
+
+@router.get("/net-worth/change")
+def net_worth_change(
+    start_date: str,
+    end_date: str,
+    owner_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Net worth at the end of start_date and of end_date, and the change between.
+
+    The KPI cards used to take the last two points of a two-month trend, which
+    are the 1st of this month and today — the same month-to-date figure on
+    every page, whatever month or period was on screen.
+    """
+    try:
+        start = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end = datetime.strptime(end_date, '%Y-%m-%d').date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Dates must be YYYY-MM-DD")
+    if start > end:
+        raise HTTPException(status_code=400, detail="start_date must not be after end_date")
+
+    start_point = db.get_net_worth_at(start.isoformat(), owner_id=owner_id)
+    end_point = db.get_net_worth_at(end.isoformat(), owner_id=owner_id)
+    before, after = start_point['net_worth'], end_point['net_worth']
+    change = after - before
+    return {
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "start_assets": start_point['assets'],
+        "end_assets": end_point['assets'],
+        "start_net_worth": before,
+        "end_net_worth": after,
+        "change": change,
+        # Against the magnitude, so going from -1000 to -500 reads as a gain.
+        "change_percent": round(change / abs(before) * 100, 1) if before else None,
+        "currency": db.get_preference('display_currency', 'EUR'),
+    }
+
 @router.get("/monthly-summary")
 def monthly_summary(
     year: Optional[int] = None,
