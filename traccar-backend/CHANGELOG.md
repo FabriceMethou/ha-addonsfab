@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.9
+
+- Ships MyLife360 app 1.2.3: phones offer it on their next start.
+
 ## 1.2.8
 
 - Moving to a new phone works when the new app was already joined on that
