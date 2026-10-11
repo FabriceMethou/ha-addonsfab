@@ -7,6 +7,8 @@ os.environ.setdefault("DB_PATH", "file:testdb?mode=memory&cache=shared")
 os.environ.setdefault("TRACCAR_URL", "http://traccar.test")
 os.environ.setdefault("TRACCAR_ADMIN_TOKEN", "admintoken")
 os.environ.setdefault("ENROLMENT_CODE", "test-enrolment-code")
+# The real APK shipped in app/apk must not leak into the update tests.
+os.environ.setdefault("BUNDLED_APK_DIR", "/nonexistent/bundled-apk")
 
 import aiosqlite
 import pytest

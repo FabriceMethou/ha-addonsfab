@@ -132,3 +132,13 @@ async def test_a_top_speed_traccar_cannot_give_stays_zero(client):
     report = (await client.get("/driving?device_id=1&days=7", headers=auth(token))).json()
     assert report["trips_error"] is None
     assert report["totals"]["max_speed_kmh"] == 0
+
+
+def test_the_newest_of_share_and_bundled_release_wins(tmp_path):
+    share, bundled = tmp_path / "share", tmp_path / "bundled"
+    share.mkdir(); bundled.mkdir()
+    (share / "mylife360-1.2.1-4-prod-release.apk").write_bytes(b"old")
+    (bundled / "mylife360-1.2.2-5-prod-release.apk").write_bytes(b"new!")
+    assert latest_apk(str(share), str(bundled))["version_code"] == 5
+    (share / "mylife360-1.3.0-6-prod-release.apk").write_bytes(b"newer")
+    assert latest_apk(str(share), str(bundled))["version_code"] == 6

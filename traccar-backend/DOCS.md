@@ -68,11 +68,14 @@ takes over the same history and circles; the old phone is signed out.
 
 ## App updates
 
-1. Build a release APK in Android Studio (the file name carries the version,
-   e.g. `mylife360-1.2.0-3-prod-release.apk`).
-2. Copy it into Home Assistant's `share` folder, under `mylife360/`
-   (Samba or the File editor add-on).
-3. Each phone shows *Update available* the next time the app opens.
+The add-on ships the latest app. When an add-on update says it ships a new
+MyLife360 app, install it: each phone then shows *Update available* the next
+time the app opens.
+
+You can also drop a release APK into Home Assistant's `share` folder, under
+`mylife360/` (Samba share or Studio Code Server add-on). The newest version,
+there or in the add-on, is the one offered. The file name carries the
+version, e.g. `mylife360-1.2.2-5-prod-release.apk`; keep it as built.
 
 Phones older than 1.2.0 that send their version are asked to update instead
 of failing in ways nobody can explain.

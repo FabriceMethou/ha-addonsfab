@@ -38,6 +38,11 @@ class Settings:
     low_battery_percent: int = _env_int("LOW_BATTERY_PERCENT", 15)
     # Where the add-on reads app updates from (the HA "share" folder).
     apk_dir: str = os.environ.get("APK_DIR", "/share/mylife360")
+    # The app release shipped inside the add-on (app/apk in the repository),
+    # so updating the add-on also delivers the new app.
+    bundled_apk_dir: str = os.environ.get(
+        "BUNDLED_APK_DIR", os.path.join(os.path.dirname(__file__), "apk"),
+    )
 
 
 settings = Settings()
