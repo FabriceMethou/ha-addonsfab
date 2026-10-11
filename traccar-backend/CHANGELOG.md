@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.8
+
+- Moving to a new phone works when the new app was already joined on that
+  phone (for example with the family code): the transfer code used to be
+  refused with "already enrolled as someone else". The stray earlier entry
+  is set aside (kept in Traccar as "… (replaced)").
+- With a transfer code, the new phone keeps the old phone's name; there is
+  no need to type it again.
+
 ## 1.2.7
 
 - Ships MyLife360 app 1.2.2: phones offer it on their next start.

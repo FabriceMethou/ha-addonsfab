@@ -180,8 +180,11 @@ class TraccarClient:
         client: httpx.AsyncClient,
         device: dict,
         unique_id: str,
+        name: str | None = None,
     ) -> dict:
         updated = {**device, "uniqueId": unique_id}
+        if name is not None:
+            updated["name"] = name
         resp = await client.put(f"/api/devices/{device['id']}", json=updated)
         _raise_for_traccar(resp)
         return resp.json()

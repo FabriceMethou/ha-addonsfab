@@ -148,3 +148,50 @@ async def test_provision_traccar_5xx_returns_503(client):
     resp = await client.post("/provision", json=_enrol("Frank", "ml360-fail",
                                                         enrolment_code=PROVISION_CODE))
     assert resp.status_code == 503
+
+
+@respx.mock
+async def test_moving_into_an_app_already_joined_on_this_phone(client):
+    """The new app was joined with the family code first, then given the old
+    app's transfer code: it used to fail with "already enrolled as someone else"."""
+    old_token = await seed_session(device_unique_id="ml360-old", traccar_device_id=11, display_name="Fab")
+    fam = await create_group("Family", "#4CAF50", owner_unique_id="ml360-old")
+    await seed_session(device_unique_id="ml360-newapp", traccar_device_id=12, display_name="Fab")
+    code = (await client.post("/devices/me/transfer-code", headers=auth(old_token))).json()["code"]
+
+    mock_admin_session()
+    respx.get(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(200, json=[
+        _device(11, "Fab's phone", "ml360-old"), _device(12, "Fab's phone", "ml360-newapp")]))
+    retired = respx.put(f"{TRACCAR}/api/devices/12").mock(
+        return_value=httpx.Response(200, json=_device(12, "Fab's phone (replaced)", "x")))
+    moved = respx.put(f"{TRACCAR}/api/devices/11").mock(
+        return_value=httpx.Response(200, json=_device(11, "Fab's phone", "ml360-newapp")))
+
+    resp = await client.post("/provision", json=_enrol("Fab", "ml360-newapp", transfer_code=code))
+    assert resp.status_code == 201
+    assert resp.json()["device_id"] == 11                       # history kept
+    assert json.loads(retired.calls[0].request.read())["uniqueId"] == "ml360-newapp-replaced-12"
+    assert json.loads(moved.calls[0].request.read())["uniqueId"] == "ml360-newapp"
+    assert await get_groups_for_device("ml360-newapp") == [fam["id"]]
+    assert (await get_session(resp.json()["device_token"]))["traccar_device_id"] == 11
+
+
+@respx.mock
+async def test_moving_phones_keeps_the_name(client):
+    old_token = await seed_session(device_unique_id="ml360-old", traccar_device_id=11, display_name="Fab")
+    code = (await client.post("/devices/me/transfer-code", headers=auth(old_token))).json()["code"]
+    mock_admin_session()
+    respx.get(f"{TRACCAR}/api/devices").mock(return_value=httpx.Response(200, json=[
+        _device(11, "Fab's phone", "ml360-old")]))
+    respx.put(f"{TRACCAR}/api/devices/11").mock(
+        return_value=httpx.Response(200, json=_device(11, "Fab's phone", "ml360-new")))
+    resp = await client.post("/provision", json={"device_unique_id": "ml360-new", "transfer_code": code})
+    assert resp.status_code == 201
+    assert resp.json()["display_name"] == "Fab"
+    assert (await get_session(resp.json()["device_token"]))["display_name"] == "Fab"
+
+
+async def test_joining_with_the_family_code_needs_a_name(client):
+    resp = await client.post("/provision", json={"device_unique_id": "ml360-x", "display_name": " ",
+                                                 "enrolment_code": PROVISION_CODE})
+    assert resp.status_code == 422

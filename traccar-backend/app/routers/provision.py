@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.database import (
+    get_session_by_device_id,
     consume_enrolment_code,
     consume_transfer_code,
     release_enrolment_code,
@@ -52,7 +53,8 @@ def reset_failure_brake() -> None:
 
 
 class ProvisionRequest(BaseModel):
-    display_name: str
+    # Optional with a transfer code: the old phone's name is kept.
+    display_name: str = ""
     device_unique_id: str
     enrolment_code: str = ""
     # From "Move to a new phone" on the old phone. Replaces the enrolment code.
@@ -90,6 +92,7 @@ class ProvisionResponse(BaseModel):
     device_token: str
     tracking_url: str
     device_id: int
+    display_name: str
 
 
 @router.post("/provision", response_model=ProvisionResponse, status_code=201, dependencies=[Depends(provision_limiter)])
@@ -107,6 +110,8 @@ async def provision(req: ProvisionRequest, request: Request) -> ProvisionRespons
                 detail="This transfer code is not valid or has expired",
             )
     else:
+        if not req.display_name.strip():
+            raise HTTPException(status_code=422, detail="Type your name")
         one_time = await _check_enrolment_code(req.enrolment_code, req.device_unique_id)
     logger.info(
         "PROVISION REQUEST — name=%r  device_id=%r  ip=%s  transfer=%s",
@@ -145,6 +150,10 @@ async def _run_provision(
 ) -> ProvisionResponse:
     all_devices = await traccar.get_devices(admin)
 
+    if transfer is not None and not display_name.strip():
+        previous = await get_session_by_device_id(transfer["traccar_device_id"])
+        display_name = previous["display_name"] if previous else "Me"
+
     if transfer is not None:
         # Take over the old phone's device: same history, same circles.
         device = next((d for d in all_devices if d["id"] == transfer["traccar_device_id"]), None)
@@ -152,9 +161,16 @@ async def _run_provision(
             raise TraccarError("Traccar client error 404: transferred device no longer exists")
         clash = _find_by_unique_id(all_devices, device_unique_id)
         if clash is not None and clash["id"] != device["id"]:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This phone is already enrolled as someone else",
+            # This phone joined before, in another install of the app (the
+            # family code, then a transfer code from the old app). The
+            # transfer code proves the old device is theirs, and the phone's
+            # own identifier is random and never shown, so the earlier entry
+            # is this phone's: retire it (kept in Traccar, renamed) and move
+            # on, instead of refusing as before.
+            logger.info("Transfer: retiring device %s, an earlier enrolment of this phone", clash["id"])
+            await traccar.update_device(
+                admin, clash, f"{device_unique_id}-replaced-{clash['id']}",
+                name=f"{clash.get('name') or 'Phone'} (replaced)",
             )
         if device.get("uniqueId") != device_unique_id:
             device = await traccar.update_device(admin, device, device_unique_id)
@@ -179,7 +195,9 @@ async def _run_provision(
 
     # tracking_url is kept empty for app builds that still read it; positions
     # go to POST /positions.
-    return ProvisionResponse(device_token=token, tracking_url="", device_id=device["id"])
+    return ProvisionResponse(
+        device_token=token, tracking_url="", device_id=device["id"], display_name=display_name,
+    )
 
 
 def _find_by_unique_id(devices: list[dict], unique_id: str) -> dict | None:
