@@ -236,6 +236,11 @@ def create_transaction(
             account_id=transaction.account_id, date=transaction.date, amount=transaction.amount,
             destinataire=transaction.destinataire, description=transaction.description,
             tags=transaction.tags, owner_id=transaction.owner_id), current_user)
+    # Every transaction has a subcategory (the column is NOT NULL): say so
+    # instead of failing on the database.
+    if not transaction.subtype_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Choose a subcategory")
     try:
         # Get transaction type category from database directly
         conn = db._get_connection()
@@ -424,6 +429,9 @@ def create_transactions_bulk(
     errors = []
 
     for idx, transaction in enumerate(transactions):
+        if not transaction.subtype_id:
+            errors.append({"index": idx, "error": "Choose a subcategory"})
+            continue
         try:
             # Get transaction type category from database directly
             conn = db._get_connection()

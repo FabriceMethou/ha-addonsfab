@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.10.1
+
+**A subcategory is required**
+- Saving a transaction without a subcategory always failed with a database error ("NOT NULL constraint failed"), although the form called it optional. The field is now marked required: picking a category says "Choose a subcategory" and "Add" stays off until one is chosen
+- A category with no subcategory says so: "This category has no subcategory yet: add one on the Categories page"
+- The refund and loan choices say what they need: "Choose refund or reimbursement", "Choose the loan"
+- The server answers "Choose a subcategory" instead of the database error
+
 ## 2.10.0
 
 **One "Add Transaction" window everywhere**

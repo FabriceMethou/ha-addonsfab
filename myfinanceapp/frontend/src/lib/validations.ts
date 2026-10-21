@@ -11,7 +11,9 @@ export const transactionSchema = z.object({
     .refine((val) => !isNaN(parseFloat(val)), 'Amount must be a valid number')
     .refine((val) => parseFloat(val) !== 0, 'Amount cannot be zero'),
   type_id: z.string().min(1, 'Category is required'),
-  subtype_id: z.string().optional(),
+  // Required: every transaction has a subcategory (also the kind of refund,
+  // or the loan, for those form-only categories).
+  subtype_id: z.string().min(1, 'Choose a subcategory'),
   description: z.string().optional(),
   recipient: z.string().optional(),
   transfer_account_id: z.string().optional(),

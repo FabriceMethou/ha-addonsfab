@@ -699,9 +699,10 @@ function TransactionDialog({
                     disabled={!!editingTransaction?.refund_of}
                     onValueChange={(value) => {
                       field.onChange(value);
-                      setValue("subtype_id", ""); // Reset subcategory when category changes
+                      // A new category needs its own subcategory: checked
+                      // now, so "Add" stays off and the field says why.
+                      setValue("subtype_id", "", { shouldValidate: true });
                       setRefundOf(null);
-                      clearErrors("subtype_id");
                     }}
                   >
                     <SelectTrigger
@@ -734,7 +735,7 @@ function TransactionDialog({
               <FormField
                 label="Refund or reimbursement"
                 required
-                error={errors.subtype_id?.message}
+                error={errors.subtype_id && "Choose refund or reimbursement"}
               >
                 <Controller
                   name="subtype_id"
@@ -779,7 +780,7 @@ function TransactionDialog({
               <FormField
                 label="Loan"
                 required
-                error={errors.subtype_id?.message}
+                error={errors.subtype_id && "Choose the loan"}
               >
                 <Controller
                   name="subtype_id"
@@ -849,9 +850,17 @@ function TransactionDialog({
               </p>
             )}
 
-            {/* Subcategory Field */}
+            {/* Subcategory Field (required: every transaction has one) */}
             {formData.type_id && !mode && (
-              <FormField label="Subcategory (Optional)">
+              <FormField
+                label="Subcategory"
+                required
+                error={
+                  selectedType && !selectedType.subtypes?.length
+                    ? "This category has no subcategory yet: add one on the Categories page"
+                    : errors.subtype_id?.message
+                }
+              >
                 <Controller
                   name="subtype_id"
                   control={control}
@@ -860,15 +869,13 @@ function TransactionDialog({
                       value={field.value || ""}
                       onValueChange={field.onChange}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger
+                        className={errors.subtype_id ? "border-error" : ""}
+                      >
                         <SelectValue placeholder="Select subcategory" />
                       </SelectTrigger>
                       <SelectContent>
-                        {categoriesData
-                          ?.find(
-                            (c: any) => c.id === parseInt(formData.type_id),
-                          )
-                          ?.subtypes?.map((subtype: any) => (
+                        {selectedType?.subtypes?.map((subtype: any) => (
                             <SelectItem
                               key={subtype.id}
                               value={subtype.id.toString()}
