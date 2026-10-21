@@ -18,6 +18,7 @@ alert_manager = AlertManager()
 
 # Resolved centrally so every module reads and writes the same database.
 from deps import DB_PATH
+from utils import income_and_expense
 db = lazy_db   # built on first use; see backend/deps.py
 
 class EmailSettings(BaseModel):
@@ -170,9 +171,8 @@ def run_alert_checks(current_user: User = Depends(get_current_user)):
         }
         daily_transactions = db.get_transactions(filters=today_filters)
         daily_total = sum(
-            abs(t['amount'])
+            income_and_expense(t.get('category'), t['amount'])[1]
             for t in daily_transactions
-            if t['amount'] < 0 and t.get('category') != 'transfer'
         )
 
         daily_alert = alert_manager.check_daily_spending(daily_total)

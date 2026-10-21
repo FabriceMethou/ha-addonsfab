@@ -115,12 +115,14 @@ def summary(api, **params):
 
 # ── each card lists what it adds up ──────────────────────────────────────────
 
-def test_income_lists_the_positive_non_transfer_rows(db, month):
-    assert listed(db, "income") == [("Employer", 2000.0), ("Lidl refund", 10.0)]
+def test_income_lists_the_income_category_rows(db, month):
+    assert listed(db, "income") == [("Employer", 2000.0)]
 
 
-def test_expenses_list_the_negative_non_transfer_rows(db, month):
-    assert listed(db, "expense") == [("Lidl", -50.0)]
+def test_expenses_list_the_expense_category_rows_refunds_included(db, month):
+    """A refund in an expense category lowers expenses: it is listed with them,
+    so the list still adds up to the card (2.8.0; it used to count as income)."""
+    assert listed(db, "expense") == [("Lidl", -50.0), ("Lidl refund", 10.0)]
 
 
 def test_investing_is_never_an_expense(db, month):

@@ -89,3 +89,23 @@ def normalise_recipient(value) -> str:
     if not text:
         return ""
     return text[0].upper() + text[1:]
+
+
+def income_and_expense(category, amount) -> tuple:
+    """What a transaction adds to income and to expenses: (income, expense).
+
+    Decided by its category, each signed by its own amount. An income row adds
+    to income; an expense row adds to expenses, so a refund (a positive amount
+    in an expense category) lowers them in the month it arrives. Likewise a
+    negative income row (a realised loss, a salary correction) lowers income.
+    Transfers, investment moves and envelopes count as neither.
+
+    Every income/expense total in the app goes through this, so a refund
+    reduces spending on every screen at once.
+    """
+    amount = amount or 0.0
+    if category == 'income':
+        return amount, 0.0
+    if category == 'expense':
+        return 0.0, -amount
+    return 0.0, 0.0

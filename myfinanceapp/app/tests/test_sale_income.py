@@ -112,12 +112,16 @@ def test_the_capital_half_is_not_income(portfolio, db):
 
 # ── losses ───────────────────────────────────────────────────────────────────
 
-def test_selling_at_a_loss_produces_no_income(portfolio, db):
+def test_selling_at_a_loss_lowers_income_and_is_not_an_expense(portfolio, db):
+    """Income and expenses go by category (utils.income_and_expense): the loss
+    sits in an income category, so it lowers income. Counting it as spending
+    would put investment money in Monthly Expenses."""
     buy(db, portfolio["holding"], 10, 100.0)
     sell(db, portfolio["holding"], 10, 70.0)
 
     summary = month(db)
-    assert round(summary["total_income"], 2) == 0.0
+    assert round(summary["total_income"], 2) == -300.0
+    assert round(summary["total_expenses"], 2) == 0.0
     assert balance(db, portfolio["cash"]) == 9700.0
 
 

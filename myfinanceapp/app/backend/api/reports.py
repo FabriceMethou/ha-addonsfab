@@ -10,6 +10,7 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from deps import lazy_db
+from utils import income_and_expense
 from api.auth import get_current_user, User
 from predictions import SpendingPredictor
 
@@ -93,6 +94,20 @@ def _format_breakdown(breakdown: Dict[str, Any], amount_key: str = 'total') -> L
     )
 
 
+
+
+def _totals(transactions, display_currency):
+    """Income and expenses of a list of transactions, in the display currency,
+    by category and signed (see utils.income_and_expense)."""
+    income = expenses = 0.0
+    for t in transactions:
+        inc, exp = income_and_expense(t.get('category'), t['amount'])
+        if inc or exp:
+            currency = t.get('account_currency', 'EUR')
+            income += db.convert_currency(inc, currency, display_currency)
+            expenses += db.convert_currency(exp, currency, display_currency)
+    return income, expenses
+
 @router.get("/net-worth")
 def net_worth(
     owner_id: Optional[int] = None,
@@ -154,10 +169,11 @@ def spending_by_category(
     # Group by category and subcategory (exclude transfers)
     category_spending = {}
     for t in transactions:
-        if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
+        if t.get('category') == 'expense':  # refunds included: they lower their category
             # Convert transaction amount to display currency
             account_currency = t.get('account_currency', 'EUR')
-            converted_amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
+            spent = income_and_expense('expense', t['amount'])[1]
+            converted_amount = db.convert_currency(spent, account_currency, display_currency)
             _accumulate_category(category_spending, t, converted_amount)
 
     return {
@@ -189,19 +205,12 @@ def income_vs_expenses(
 
     # Convert all transactions to display currency
     # Exclude transfers from income/expense calculations
-    income = sum(
-        db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
-        for t in transactions if t['amount'] > 0 and t.get('category') != 'transfer'
-    )
-    expenses = sum(
-        db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
-        for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
-    )
+    income, expenses = _totals(transactions, display_currency)
 
     # Also group income by category and subcategory
     income_categories = {}
     for t in transactions:
-        if t['amount'] > 0 and t.get('category') != 'transfer':  # Only income, exclude transfers
+        if t.get('category') == 'income':
             account_currency = t.get('account_currency', 'EUR')
             converted_amount = db.convert_currency(t['amount'], account_currency, display_currency)
             _accumulate_category(income_categories, t, converted_amount)
@@ -416,20 +425,13 @@ def monthly_summary(
         transactions = db.get_transactions(filters=filters)
 
         # Calculate totals with currency conversion (exclude transfers)
-        income = sum(
-            db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
-            for t in transactions if t['amount'] > 0 and t.get('category') != 'transfer'
-        )
-        expenses = sum(
-            db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
-            for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
-        )
+        income, expenses = _totals(transactions, display_currency)
 
-        # Spending by category and subcategory with currency conversion (exclude transfers)
+        # Spending by category and subcategory, refunds lowering their category
         category_spending = {}
         for t in transactions:
-            if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
-                converted_amount = db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+            if t.get('category') == 'expense':
+                converted_amount = db.convert_currency(-t['amount'], t.get('account_currency', 'EUR'), display_currency)
                 _accumulate_category(category_spending, t, converted_amount)
 
         return {
@@ -493,20 +495,13 @@ def tag_report(
             }
 
         # Calculate summary metrics with currency conversion (exclude transfers)
-        total_income = sum(
-            db.convert_currency(t['amount'], t.get('account_currency', 'EUR'), display_currency)
-            for t in tagged_transactions if t['amount'] > 0 and t.get('category') != 'transfer'
-        )
-        total_expenses = sum(
-            db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
-            for t in tagged_transactions if t['amount'] < 0 and t.get('category') != 'transfer'
-        )
+        total_income, total_expenses = _totals(tagged_transactions, display_currency)
 
-        # Spending by category and subcategory with currency conversion (exclude transfers)
+        # Spending by category and subcategory, refunds lowering their category
         category_spending = {}
         for t in tagged_transactions:
-            if t['amount'] < 0 and t.get('category') != 'transfer':  # Only expenses, exclude transfers
-                converted_amount = db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
+            if t.get('category') == 'expense':
+                converted_amount = db.convert_currency(-t['amount'], t.get('account_currency', 'EUR'), display_currency)
                 _accumulate_category(category_spending, t, converted_amount)
 
         # Distribution by account with currency conversion
@@ -522,14 +517,13 @@ def tag_report(
         from collections import defaultdict
         monthly_data = defaultdict(lambda: {'income': 0, 'expenses': 0})
         for t in tagged_transactions:
-            if t.get('category') == 'transfer':
+            income, expense = income_and_expense(t.get('category'), t['amount'])
+            if not (income or expense):
                 continue
             month_key = t['transaction_date'][:7]  # YYYY-MM
-            converted_amount = db.convert_currency(abs(t['amount']), t.get('account_currency', 'EUR'), display_currency)
-            if t['amount'] > 0:
-                monthly_data[month_key]['income'] += converted_amount
-            else:
-                monthly_data[month_key]['expenses'] += converted_amount
+            currency = t.get('account_currency', 'EUR')
+            monthly_data[month_key]['income'] += db.convert_currency(income, currency, display_currency)
+            monthly_data[month_key]['expenses'] += db.convert_currency(expense, currency, display_currency)
 
         monthly_trend = [
             {
@@ -607,8 +601,8 @@ def spending_trends(
             total_income = 0
             for t in transactions:
                 account_currency = t.get('account_currency', 'EUR')
-                # Calculate expenses (exclude transfers)
-                if t['amount'] < 0 and t.get('category') != 'transfer':
+                # Calculate expenses; a refund lowers its category
+                if t.get('category') == 'expense':
                     cat = t.get('type_name') or UNCATEGORIZED
                     subcat = t.get('subtype_name') or NO_SUBCATEGORY
                     categories_set.add(cat)
@@ -618,14 +612,14 @@ def spending_trends(
                     if category and cat != category:
                         continue
 
-                    converted_amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
+                    converted_amount = db.convert_currency(-t['amount'], account_currency, display_currency)
                     month_data["categories"][cat] = month_data["categories"].get(cat, 0) + converted_amount
                     month_subcats = month_data["subcategories"].setdefault(cat, {})
                     month_subcats[subcat] = month_subcats.get(subcat, 0) + converted_amount
                     total_expenses += converted_amount
 
-                # Calculate income (exclude transfers)
-                elif t['amount'] > 0 and t.get('category') != 'transfer':
+                # Calculate income
+                elif t.get('category') == 'income':
                     converted_amount = db.convert_currency(t['amount'], account_currency, display_currency)
                     total_income += converted_amount
 
@@ -720,15 +714,18 @@ def category_breakdown(
             filters['owner_id'] = owner_id
         transactions = db.get_transactions(filters=filters)
 
-        # Aggregate by subcategory and by month. Amounts are absolute so income
-        # and expense categories both read as a positive magnitude.
+        # Aggregate by subcategory and by month. Income and expense categories
+        # both read as a positive magnitude, and a refund lowers its expense
+        # category (see utils.income_and_expense).
         subcategory_totals = {}
         monthly = {key: {'total': 0, 'subcategories': {}} for key in month_keys}
         total = 0
 
         for t in transactions:
+            income_part, expense_part = income_and_expense(t.get('category'), t['amount'])
             amount = db.convert_currency(
-                abs(t['amount']), t.get('account_currency', 'EUR'), display_currency
+                income_part or expense_part or abs(t['amount']),
+                t.get('account_currency', 'EUR'), display_currency
             )
             subcategory = t.get('subtype_name') or NO_SUBCATEGORY
 
@@ -860,9 +857,11 @@ def year_by_year_stats(
             if t.get('category') == 'transfer':
                 continue
 
-            # Currency conversion
+            # Currency conversion. Signed by category: a refund lowers its
+            # expense category instead of adding to it.
             account_currency = t.get('account_currency', 'EUR')
-            amount = db.convert_currency(abs(t['amount']), account_currency, display_currency)
+            income_part, expense_part = income_and_expense(t.get('category'), t['amount'])
+            amount = db.convert_currency(income_part or expense_part, account_currency, display_currency)
 
             category_name = t.get('type_name', 'Uncategorized')
             category_id = t.get('type_id')

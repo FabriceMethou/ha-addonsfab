@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from deps import lazy_db
 from database import FLOW_CLAUSES
+from utils import income_and_expense
 from api.auth import get_current_user, User
 from categorizer import TransactionCategorizer
 
@@ -70,6 +71,19 @@ class TransactionCreate(BaseModel):
     tags: Optional[str] = None
     owner_id: Optional[int] = None  # Override owner; None = inherit from account
     debt_id: Optional[int] = None  # Link transaction to a debt payment
+    # The expense this pays back (a refund or reimbursement): it then takes that
+    # expense's category, with a positive amount. See database.add_refund.
+    refund_of_id: Optional[int] = None
+
+
+class RefundCreate(BaseModel):
+    account_id: int
+    date: str
+    amount: float
+    destinataire: Optional[str] = None  # defaults to the expense's recipient
+    description: Optional[str] = None
+    tags: Optional[str] = None
+    owner_id: Optional[int] = None
 
 class TransactionUpdate(BaseModel):
     account_id: Optional[int] = None
@@ -167,7 +181,24 @@ def get_transactions(
             transaction['date'] = transaction['transaction_date']
             # Keep transaction_date for backward compatibility
 
+    # Refunds: what each expense has had paid back (refunded_amount,
+    # refund_count) and which expense each refund pays back (refund_of).
+    refund_info = db.get_refund_info([t['id'] for t in transactions])
+    for transaction in transactions:
+        transaction.update(refund_info.get(transaction['id'], {}))
+
     return {"transactions": transactions, "count": len(transactions), "total": total}
+
+@router.get("/refundable")
+def list_refundable_expenses(
+    q: str = '',
+    limit: int = Query(20, le=100),
+    current_user: User = Depends(get_current_user),
+):
+    """Recent expenses that can still take a refund, searched by recipient,
+    description or amount, with what is left to refund on each."""
+    return {"expenses": db.get_refundable_expenses(q, limit)}
+
 
 @router.get("/{transaction_id}")
 def get_transaction(
@@ -194,6 +225,11 @@ def create_transaction(
     current_user: User = Depends(get_current_user)
 ):
     """Create new transaction"""
+    if transaction.refund_of_id:
+        return create_refund(transaction.refund_of_id, RefundCreate(
+            account_id=transaction.account_id, date=transaction.date, amount=transaction.amount,
+            destinataire=transaction.destinataire, description=transaction.description,
+            tags=transaction.tags, owner_id=transaction.owner_id), current_user)
     try:
         # Get transaction type category from database directly
         conn = db._get_connection()
@@ -340,13 +376,12 @@ def create_transaction(
                 _exchange_rates = db.get_exchange_rates_map()
                 daily_total = sum(
                     db.convert_with_rates(
-                        abs(t['amount']),
+                        income_and_expense(t.get('category'), t['amount'])[1],
                         t.get('account_currency', 'EUR'),
                         _display_currency,
                         _exchange_rates,
                     )
                     for t in daily_transactions
-                    if t['amount'] < 0 and t.get('category') != 'transfer'
                 )
 
                 daily_alert = alert_mgr.check_daily_spending(daily_total)
@@ -515,7 +550,9 @@ def update_transaction(
     # Adjust amount sign based on category if amount is being updated
     if 'amount' in update_data:
         amount = update_data['amount']
-        if category == 'expense':
+        if existing.get('refund_of_id'):
+            update_data['amount'] = abs(amount)  # a refund is money coming back
+        elif category == 'expense':
             update_data['amount'] = -abs(amount)  # Expenses are negative
         elif category == 'income':
             update_data['amount'] = abs(amount)  # Income is positive
@@ -554,12 +591,18 @@ def update_transaction(
                         (transfer_account_id,)).fetchone()
                 if account_result:
                     update_data['destinataire'] = account_result['name']
-        elif 'description' in update_data and update_data['description']:
-            # For non-transfers, use description as destinataire
+        elif (update_data.get('description') and not update_data.get('destinataire')
+              and not existing.get('destinataire')):
+            # The description stands in only when there is no recipient at all.
+            # It used to replace the recipient on every edit that carried a
+            # description, so editing "Lidl / weekly shop" renamed it "Weekly shop".
             update_data['destinataire'] = update_data['description']
 
     if update_data:
-        success = db.update_transaction(transaction_id, update_data)
+        try:
+            success = db.update_transaction(transaction_id, update_data)
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -568,13 +611,43 @@ def update_transaction(
 
     return {"message": "Transaction updated successfully"}
 
+@router.post("/{transaction_id}/refunds")
+def create_refund(
+    transaction_id: int,
+    refund: RefundCreate,
+    current_user: User = Depends(get_current_user),
+):
+    """Record a refund or reimbursement of an expense.
+
+    It lands on whichever account received it, on its own date, and takes the
+    expense's category so it lowers that category's spending in the month it
+    arrives. Partial refunds are fine; together they cannot exceed the expense.
+    """
+    try:
+        refund_id = db.add_refund(transaction_id, {
+            'account_id': refund.account_id,
+            'transaction_date': refund.date,
+            'amount': refund.amount,
+            'destinataire': refund.destinataire,
+            'description': refund.description,
+            'tags': refund.tags,
+            'owner_id': refund.owner_id,
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"message": "Refund recorded", "transaction_id": refund_id}
+
+
 @router.delete("/{transaction_id}")
 def delete_transaction(
     transaction_id: int,
     current_user: User = Depends(get_current_user)
 ):
     """Delete transaction"""
-    success = db.delete_transaction(transaction_id)
+    try:
+        success = db.delete_transaction(transaction_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     if not success:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -655,17 +728,15 @@ def get_transaction_summary(
     # Load every exchange rate once instead of hitting the DB per transaction
     rates = db.get_exchange_rates_map()
 
-    # Exclude transfers from income/expense calculations
-    total_income = sum(
-        db.convert_with_rates(t['amount'], t.get('account_currency', 'EUR'),
-                              display_currency, rates)
-        for t in transactions if t['amount'] > 0 and t.get('category') != 'transfer'
-    )
-    total_expense = sum(
-        db.convert_with_rates(abs(t['amount']), t.get('account_currency', 'EUR'),
-                              display_currency, rates)
-        for t in transactions if t['amount'] < 0 and t.get('category') != 'transfer'
-    )
+    # By category, signed: a refund lowers expenses; transfers count as neither.
+    total_income = total_expense = 0.0
+    for t in transactions:
+        income, expense = income_and_expense(t.get('category'), t['amount'])
+        if income or expense:
+            total_income += db.convert_with_rates(
+                income, t.get('account_currency', 'EUR'), display_currency, rates)
+            total_expense += db.convert_with_rates(
+                expense, t.get('account_currency', 'EUR'), display_currency, rates)
     net_change = total_income - total_expense
     # Every matching row, transfers included: the only total that means
     # anything for a list of transfers such as the investment views.
@@ -702,8 +773,9 @@ def get_transaction_summary_by_owner(
             o.id as owner_id,
             o.name as owner_name,
             a.currency as account_currency,
-            SUM(CASE WHEN t.amount > 0 AND tt.category != 'transfer' THEN t.amount ELSE 0 END) as income,
-            SUM(CASE WHEN t.amount < 0 AND tt.category != 'transfer' THEN ABS(t.amount) ELSE 0 END) as expense
+            -- By category, signed: a refund lowers expenses (see utils.income_and_expense)
+            SUM(CASE WHEN tt.category = 'income' THEN t.amount ELSE 0 END) as income,
+            SUM(CASE WHEN tt.category = 'expense' THEN -t.amount ELSE 0 END) as expense
         FROM transactions t
         JOIN accounts a ON t.account_id = a.id
         JOIN owners o ON COALESCE(t.owner_id, a.owner_id) = o.id

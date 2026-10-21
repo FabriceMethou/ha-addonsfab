@@ -308,6 +308,12 @@ export const transactionsAPI = {
     api.post("/api/transactions/auto-categorize", { recipient, description }),
   getAllTags: () => api.get("/api/transactions/tags/all"),
   getAllRecipients: () => api.get("/api/transactions/recipients/all"),
+  /** Record a refund or reimbursement of an expense (positive, same category). */
+  createRefund: (expenseId: number, data: Record<string, unknown>) =>
+    api.post(`/api/transactions/${expenseId}/refunds`, data),
+  /** Recent expenses that can still take a refund, searched by text or amount. */
+  getRefundable: (q: string = "", limit: number = 8) =>
+    api.get("/api/transactions/refundable", { params: { q, limit } }),
   getCategorizerStatus: () => api.get("/api/transactions/categorizer/status"),
   exportCsv: (params?: Record<string, unknown>) =>
     api.get("/api/transactions/export/csv", { params, responseType: "blob" }),

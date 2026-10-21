@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.8.0
+
+**Refunds and reimbursements**
+- A refund is now recorded against the expense it pays back, instead of as "Other Income › Refund". It takes that expense's category and lowers its spending (and its budget) in the month the money arrives, on whichever account it arrives
+- **Record refund** on an expense in the Transactions list: amount (what is left to refund), date, account and who paid back are filled in
+- **"This is a refund or reimbursement"** in the Add Transaction form and on the Reconcile page: search the expense (last 12 months), and the category and amount follow it
+- Several partial refunds may cover one expense, never more than its amount (compared in the expense's currency when the refund arrives in another)
+- The list shows **Refund**, **Refunded €X** or **Fully refunded**; the expanded row links the refund and its expense
+- An expense with refunds cannot be deleted until its refunds are; editing a refund keeps it within the expense and in its category, and moving the expense to another category moves its refunds too
+- **"Refund or reimbursement?"** next to the fields explains the difference, on demand. Both are recorded the same way
+- Your existing "Other Income › Refund/Reimbursement" entries stay as they are
+
+**Income and expenses are counted by category everywhere**
+- The dashboard, reports, budgets, predictions and alerts now count income and expenses by their category instead of by the amount's sign. So a refund lowers expenses instead of adding to income, and a sale of an investment at a loss lowers income instead of counting as an expense
+
+**Fix**
+- Editing a transaction with a description replaced its recipient with the description
+
 ## 2.7.1
 
 **Net worth change shows the right period**

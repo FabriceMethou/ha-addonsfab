@@ -61,6 +61,7 @@ import {
   ChevronUp,
   Link2,
 } from 'lucide-react';
+import { RefundOfField, type RefundableExpense } from "../components/Refunds";
 
 // Types for reconciliation data
 interface CSVTransaction {
@@ -168,6 +169,8 @@ export default function ReconcilePage() {
 
   // Add transaction dialog state
   const [addTransactionDialog, setAddTransactionDialog] = useState(false);
+  // A bank line that is a refund: the expense it pays back.
+  const [refundOf, setRefundOf] = useState<RefundableExpense | null>(null);
   const [prefilledCsvIndex, setPrefilledCsvIndex] = useState<number | null>(null);
   const [autoCategorizingDescription, setAutoCategorizingDescription] = useState(false);
 
@@ -459,6 +462,19 @@ export default function ReconcilePage() {
     });
   };
 
+  useEffect(() => {
+    if (!addTransactionDialog) setRefundOf(null);
+  }, [addTransactionDialog]);
+
+  // Picking the expense a refund pays back: it gives the category.
+  const handleRefundOf = (expense: RefundableExpense | null) => {
+    setRefundOf(expense);
+    if (!expense) return;
+    setValue('type_id', String(expense.type_id), { shouldValidate: true });
+    setValue('subtype_id', expense.subtype_id ? String(expense.subtype_id) : '', { shouldValidate: true });
+    if (!formData.recipient) setValue('recipient', expense.destinataire || '', { shouldValidate: true });
+  };
+
   // Handle form submission for adding transaction
   const onSubmitTransaction = (data: TransactionFormData) => {
     const submitData = {
@@ -474,6 +490,8 @@ export default function ReconcilePage() {
       transfer_amount: null,
       is_pending: false,
       tags: data.tags || null,
+      // A refund takes its category from the expense (the server enforces it).
+      refund_of_id: refundOf ? refundOf.id : undefined,
     };
 
     createTransactionMutation.mutate(submitData);
@@ -1125,31 +1143,36 @@ export default function ReconcilePage() {
                 />
               </FormField>
 
+              {/* Refund of an expense: takes the expense's category */}
+              <RefundOfField value={refundOf} onChange={handleRefundOf} />
+
               {/* Category */}
-              <FormField label="Category" error={errors.type_id?.message}>
-                <Controller
-                  name="type_id"
-                  control={control}
-                  render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {categoriesData?.map((type: any) => (
-                          <SelectItem key={type.id} value={type.id.toString()}>
-                            {type.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </FormField>
+              {!refundOf && (
+                <FormField label="Category" error={errors.type_id?.message}>
+                  <Controller
+                    name="type_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categoriesData?.map((type: any) => (
+                            <SelectItem key={type.id} value={type.id.toString()}>
+                              {type.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+              )}
             </div>
 
             {/* Subcategory */}
-            {subtypesForSelectedType.length > 0 && (
+            {subtypesForSelectedType.length > 0 && !refundOf && (
               <FormField label="Subcategory" error={errors.subtype_id?.message}>
                 <Controller
                   name="subtype_id"

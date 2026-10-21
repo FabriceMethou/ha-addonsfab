@@ -60,7 +60,14 @@ import {
   Wallet,
   ArrowUpCircle,
   ArrowDownCircle,
+  RotateCcw,
 } from "lucide-react";
+import {
+  RefundDialog,
+  RefundOfField,
+  expenseLabel,
+  type RefundableExpense,
+} from "../components/Refunds";
 
 // KPI Card Component
 interface KPICardProps {
@@ -207,6 +214,12 @@ export default function TransactionsPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
   const [selectedFormOwner, setSelectedFormOwner] = useState<string>("");
+  // The expense the transaction in the form pays back, when it is a refund.
+  const [refundOf, setRefundOf] = useState<RefundableExpense | null>(null);
+  // Remounts the refund field, switched off, for the next transaction.
+  const [refundFieldKey, setRefundFieldKey] = useState(0);
+  // The expense whose "Record refund" dialog is open.
+  const [refundingExpense, setRefundingExpense] = useState<any>(null);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -522,9 +535,9 @@ export default function TransactionsPage() {
         type_name: category?.name || "",
         subtype_name: subtype?.name || "",
         category: category?.category || "",
-        // Amount sign based on category
+        // Amount sign based on category; a refund is positive
         amount:
-          category?.category === "expense"
+          category?.category === "expense" && !newData.refund_of_id
             ? -Math.abs(newData.amount)
             : Math.abs(newData.amount),
         _optimistic: true, // Flag for visual indication
@@ -571,6 +584,8 @@ export default function TransactionsPage() {
       queryClient.invalidateQueries({ queryKey: ["debts"] });
       queryClient.invalidateQueries({ queryKey: ["debts-summary"] });
       queryClient.invalidateQueries({ queryKey: ["debt-payments"] });
+      queryClient.invalidateQueries({ queryKey: ["refundable"] });
+      queryClient.invalidateQueries({ queryKey: ["budgets-vs-actual"] });
     },
   });
 
@@ -735,6 +750,8 @@ export default function TransactionsPage() {
       debt_id: "",
     });
     setAutoCategorizerConfidence(null);
+    setRefundOf(null);
+    setRefundFieldKey((k) => k + 1);
   };
 
   const resetFormCompletely = () => {
@@ -777,7 +794,42 @@ export default function TransactionsPage() {
     Object.values(appliedFilters).some((v) => v) ||
     Object.values(pendingFilters).some((v) => v);
 
+  useEffect(() => {
+    if (!openDialog) setRefundOf(null);
+  }, [openDialog]);
+
+  const refreshAfterRefund = () => {
+    for (const key of [
+      "transactions",
+      "accounts-summary",
+      "transactions-summary",
+      "recipients",
+      "spending-prediction",
+      "budgets-vs-actual",
+      "refundable",
+    ]) {
+      queryClient.invalidateQueries({ queryKey: [key] });
+    }
+  };
+
+  // Picking the expense a refund pays back: its category, and sensible defaults.
+  const handleRefundOf = (expense: RefundableExpense | null) => {
+    setRefundOf(expense);
+    if (!expense) return;
+    setValue("type_id", String(expense.type_id));
+    setValue("subtype_id", expense.subtype_id ? String(expense.subtype_id) : "");
+    if (!formData.recipient) setValue("recipient", expense.destinataire || "");
+    if (!formData.amount && expense.remaining != null)
+      setValue("amount", expense.remaining.toFixed(2));
+    trigger(["type_id", "subtype_id", "recipient", "amount"]);
+  };
+
   const handleEdit = (transaction: any) => {
+    setRefundOf(
+      transaction.refund_of
+        ? { ...transaction.refund_of, type_id: transaction.type_id }
+        : null,
+    );
     setEditingTransaction(transaction);
     // Pre-select the owner: prefer explicit transaction owner_id, fall back to account's owner
     const effectiveOwnerId =
@@ -820,6 +872,7 @@ export default function TransactionsPage() {
     sourceAccount.currency !== destinationAccount.currency;
 
   const handleAutoCategorize = async () => {
+    if (refundOf) return;
     const recipient = formData.recipient?.trim();
     const description = formData.description?.trim();
 
@@ -882,6 +935,8 @@ export default function TransactionsPage() {
         !editingTransaction && formValues.debt_id
           ? parseInt(formValues.debt_id)
           : null,
+      // A refund takes its category from the expense (the server enforces it).
+      refund_of_id: !editingTransaction && refundOf ? refundOf.id : undefined,
     };
 
     if (editingTransaction) {
@@ -1408,6 +1463,21 @@ export default function TransactionsPage() {
                         {transferLabel}
                       </span>
                     )}
+                    {transaction.refund_of && (
+                      <Badge variant="info" size="sm" className="ml-2">
+                        Refund
+                      </Badge>
+                    )}
+                    {transaction.refunded_amount > 0 && (
+                      <Badge variant="success" size="sm" className="ml-2">
+                        {transaction.refunded_amount >= Math.abs(transaction.amount) - 0.005
+                          ? "Fully refunded"
+                          : `Refunded ${formatCurrency(
+                              transaction.refunded_amount,
+                              transaction.account_currency || "EUR",
+                            )}`}
+                      </Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-3 flex-shrink-0">
                     <span className={`font-bold ${amountColor}`}>
@@ -1557,8 +1627,36 @@ export default function TransactionsPage() {
                     )}
                   </div>
 
+                  {/* Refund link, either side */}
+                  {transaction.refund_of && (
+                    <p className="text-sm text-foreground-muted mb-3">
+                      Refund of:{" "}
+                      <span className="text-foreground">
+                        {expenseLabel(transaction.refund_of)}
+                      </span>
+                    </p>
+                  )}
+                  {transaction.refunded_amount > 0 && (
+                    <p className="text-sm text-foreground-muted mb-3">
+                      Refunded{" "}
+                      <span className="text-foreground">
+                        {formatCurrency(
+                          transaction.refunded_amount,
+                          transaction.account_currency || "EUR",
+                        )}
+                      </span>{" "}
+                      of{" "}
+                      {formatCurrency(
+                        transaction.amount,
+                        transaction.account_currency || "EUR",
+                      )}{" "}
+                      ({transaction.refund_count} refund
+                      {transaction.refund_count !== 1 ? "s" : ""})
+                    </p>
+                  )}
+
                   {/* Actions */}
-                  <div className="flex gap-2 pt-3 border-t border-border">
+                  <div className="flex flex-wrap gap-2 pt-3 border-t border-border">
                     <Button
                       size="sm"
                       variant="outline"
@@ -1576,6 +1674,20 @@ export default function TransactionsPage() {
                       <Trash2 className="w-4 h-4 mr-2" />
                       Delete
                     </Button>
+                    {transaction.category === "expense" &&
+                      transaction.amount < 0 &&
+                      !transaction.refund_of &&
+                      (transaction.refunded_amount || 0) <
+                        Math.abs(transaction.amount) - 0.005 && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setRefundingExpense(transaction)}
+                        >
+                          <RotateCcw className="w-4 h-4 mr-2" />
+                          Record refund
+                        </Button>
+                      )}
                   </div>
                 </div>
               )}
@@ -1757,45 +1869,57 @@ export default function TransactionsPage() {
                 />
               </FormField>
 
-              {/* Category Field */}
-              <FormField
-                label="Category"
-                required
-                error={errors.type_id?.message}
-              >
-                <Controller
-                  name="type_id"
-                  control={control}
-                  render={({ field }) => (
-                    <Select
-                      value={field.value}
-                      onValueChange={(value) => {
-                        field.onChange(value);
-                        setValue("subtype_id", ""); // Reset subcategory when category changes
-                      }}
-                    >
-                      <SelectTrigger
-                        className={errors.type_id ? "border-error" : ""}
-                      >
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {categoriesData?.map((category: any) => (
-                          <SelectItem
-                            key={category.id}
-                            value={category.id.toString()}
-                          >
-                            {category.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
+              {/* Refund of an expense: takes the expense's category */}
+              {!isTransfer && (!editingTransaction || refundOf) && (
+                <RefundOfField
+                  key={refundFieldKey}
+                  value={refundOf}
+                  onChange={handleRefundOf}
+                  editing={!!editingTransaction}
                 />
-              </FormField>
+              )}
+
+              {/* Category Field */}
+              {!refundOf && (
+                <FormField
+                  label="Category"
+                  required
+                  error={errors.type_id?.message}
+                >
+                  <Controller
+                    name="type_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select
+                        value={field.value}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          setValue("subtype_id", ""); // Reset subcategory when category changes
+                        }}
+                      >
+                        <SelectTrigger
+                          className={errors.type_id ? "border-error" : ""}
+                        >
+                          <SelectValue placeholder="Select category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categoriesData?.map((category: any) => (
+                            <SelectItem
+                              key={category.id}
+                              value={category.id.toString()}
+                            >
+                              {category.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </FormField>
+              )}
 
               {/* Subcategory Field */}
-              {formData.type_id && (
+              {formData.type_id && !refundOf && (
                 <FormField label="Subcategory (Optional)">
                   <Controller
                     name="subtype_id"
@@ -2055,6 +2179,14 @@ export default function TransactionsPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Record a refund of an expense */}
+      <RefundDialog
+        expense={refundingExpense}
+        accounts={accountsData || []}
+        onClose={() => setRefundingExpense(null)}
+        onRecorded={refreshAfterRefund}
+      />
 
       {/* Delete Confirmation Dialog */}
       <Dialog

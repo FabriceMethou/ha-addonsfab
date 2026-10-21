@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 #: Schema revision, written to PRAGMA user_version after _init_database() runs.
 #: Bump it when adding a migration so a database can report what it has applied.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 #: Ledger rows whose payee the app writes rather than a person: the cash legs of
 #: investment trades and both legs of a debt payment. Their "payee" is a holding
@@ -71,14 +71,15 @@ _DIVESTED_TRANSFER = f"""(t.transfer_account_id IS NOT NULL
     AND t.transfer_account_id NOT IN (SELECT id FROM accounts WHERE account_type = 'investment'))"""
 
 #: Which transactions `t` each dashboard card counts, so a click on a card can
-#: list exactly them. Income and expenses go by sign and leave transfers out,
-#: as the dashboard summary does, so investing is never an expense.
+#: list exactly them. Income and expenses go by category, as every total in the
+#: app (utils.income_and_expense): a refund is listed with the expenses it
+#: lowers, and investing is never an expense.
 FLOW_CLAUSES = {
-    'income': f"t.amount > 0 AND {_CATEGORY_OF_T} != 'transfer'",
-    'expense': f"t.amount < 0 AND {_CATEGORY_OF_T} != 'transfer'",
+    'income': f"{_CATEGORY_OF_T} = 'income'",
+    'expense': f"{_CATEGORY_OF_T} = 'expense'",
     # Savings are income minus expenses. Investing is one use of what was
     # saved, not something taken out of it: it leaves net worth unchanged.
-    'savings': f"{_CATEGORY_OF_T} != 'transfer'",
+    'savings': f"{_CATEGORY_OF_T} IN ('income', 'expense')",
     'invested': _INVESTED,
     # Taken back out of investments; with sales, what makes investing net.
     'divested': _DIVESTED_TRANSFER,
@@ -1074,6 +1075,14 @@ class FinanceDatabase:
             if 'owner_id' not in t_columns:
                 cursor.execute("ALTER TABLE transactions ADD COLUMN owner_id INTEGER REFERENCES owners(id)")
                 logger.info("Added owner_id column to transactions table")
+
+            # Schema 4: a refund points at the expense it pays back. It is a
+            # positive amount in that expense's category, so it lowers spending
+            # in the month it arrives.
+            if 'refund_of_id' not in t_columns:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN refund_of_id INTEGER REFERENCES transactions(id)")
+                logger.info("Added refund_of_id column to transactions table")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_refund_of ON transactions(refund_of_id)")
 
             # Migration: Reclassify 'Investments' transaction type from 'expense' to 'transfer'.
             # Investment purchases are wealth conversion (cash → securities), not consumption.
@@ -2864,8 +2873,9 @@ class FinanceDatabase:
                 _conv(t['amount'], t.get('currency', 'EUR'))
                 for t in transactions if t['category'] == 'income'
             )
+            # Signed: a refund lowers expenses (see utils.income_and_expense)
             total_expenses = sum(
-                _conv(abs(t['amount']), t.get('currency', 'EUR'))
+                _conv(-t['amount'], t.get('currency', 'EUR'))
                 for t in transactions if t['category'] == 'expense'
             )
 
@@ -2907,7 +2917,7 @@ class FinanceDatabase:
                 if t['category'] == 'income':
                     by_month[month_key]['income'] += converted
                 elif t['category'] == 'expense':
-                    by_month[month_key]['expenses'] += converted_abs
+                    by_month[month_key]['expenses'] -= converted
 
             # Process envelope transactions
             for et in envelope_transactions:
@@ -3318,8 +3328,9 @@ class FinanceDatabase:
             INSERT INTO transactions
             (account_id, transaction_date, due_date, amount, currency, description,
              destinataire, type_id, subtype_id, tags, transfer_account_id,
-             is_transfer, linked_transfer_id, is_duplicate_flag, recurring_template_id, confirmed, is_historical, transfer_amount, owner_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             is_transfer, linked_transfer_id, is_duplicate_flag, recurring_template_id, confirmed, is_historical, transfer_amount, owner_id,
+             refund_of_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             transaction_data['account_id'],
             transaction_data['transaction_date'],
@@ -3339,7 +3350,8 @@ class FinanceDatabase:
             transaction_data.get('confirmed', True),
             is_historical,
             transaction_data.get('transfer_amount'),
-            transaction_data.get('owner_id')
+            transaction_data.get('owner_id'),
+            transaction_data.get('refund_of_id')
         ))
 
         transaction_id = cursor.lastrowid
@@ -3617,7 +3629,8 @@ class FinanceDatabase:
             'account_id', 'transaction_date', 'due_date', 'amount', 'type_id', 'subtype_id',
             'description', 'destinataire', 'tags', 'confirmed', 'is_transfer',
             'transfer_account_id', 'transfer_amount', 'linked_transfer_id', 'is_historical', 'notes',
-            'currency', 'original_amount', 'original_currency', 'exchange_rate', 'owner_id'
+            'currency', 'original_amount', 'original_currency', 'exchange_rate', 'owner_id',
+            'refund_of_id'
         }
         updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
         if not updates:
@@ -3633,6 +3646,27 @@ class FinanceDatabase:
                 updates['destinataire'] = normalise_recipient(updates['destinataire'])
             else:
                 updates['destinataire'] = self._recipient_spelling(cursor, updates['destinataire'])
+
+        # Refunds: a refund keeps the category of the expense it pays back and
+        # stays within it; an expense keeps covering the refunds made on it.
+        refund_of = updates.get('refund_of_id', old_transaction.get('refund_of_id'))
+        if refund_of:
+            original = self._check_refund(
+                cursor, refund_of, updates.get('amount', old_transaction['amount']),
+                updates.get('account_id', old_transaction['account_id']),
+                refund_id=transaction_id)
+            updates['type_id'], updates['subtype_id'] = original['type_id'], original['subtype_id']
+        else:
+            refunded = self._refunded_total(cursor, transaction_id)
+            if refunded:
+                if 'amount' in updates and abs(updates['amount']) < refunded - 0.005:
+                    raise ValueError(
+                        f"This expense has {refunded:.2f} refunded; it cannot become smaller than that")
+                new_type = updates.get('type_id', old_transaction['type_id'])
+                category = cursor.execute(
+                    "SELECT category FROM transaction_types WHERE id = ?", (new_type,)).fetchone()
+                if not category or category['category'] != 'expense':
+                    raise ValueError("This expense has refunds: it has to stay an expense")
 
         linked_transfer_id = old_transaction.get('linked_transfer_id')
 
@@ -3737,8 +3771,182 @@ class FinanceDatabase:
                 f"Transaction {transaction_id} vanished during update; rolled back"
             )
 
+        # An expense that changed category takes its refunds along.
+        if 'type_id' in updates or 'subtype_id' in updates:
+            cursor.execute("""
+                UPDATE transactions SET type_id = ?, subtype_id = ?
+                 WHERE refund_of_id = ?
+            """, (updates.get('type_id', old_transaction['type_id']),
+                  updates.get('subtype_id', old_transaction['subtype_id']), transaction_id))
+
         logger.info(f"Updated transaction {transaction_id}")
         return success
+
+    # ==================== REFUNDS ====================
+    #
+    # A refund is a positive transaction in the category of the expense it pays
+    # back, pointing at it through refund_of_id. It lowers that category's
+    # spending in the month it arrives, on whatever account it arrives. Several
+    # partial refunds may cover one expense, never more than its amount.
+    # Refunds and reimbursements (a third party paying back) are the same thing
+    # here; the refund's own recipient says who paid.
+
+    def _to_currency(self, amount: float, from_currency: str, to_currency: str,
+                     rates: Dict[str, float]) -> float:
+        if not from_currency or from_currency == to_currency:
+            return amount
+        return self.convert_with_rates(amount, from_currency, to_currency, rates)
+
+    def _refunded_total(self, cursor, expense_id: int, exclude_id: Optional[int] = None,
+                        rates: Optional[Dict[str, float]] = None) -> float:
+        """What has been refunded on an expense, in the expense's currency."""
+        rows = cursor.execute("""
+            SELECT r.amount, ra.currency AS refund_currency, ea.currency AS expense_currency
+              FROM transactions r
+              JOIN accounts ra ON ra.id = r.account_id
+              JOIN transactions e ON e.id = r.refund_of_id
+              JOIN accounts ea ON ea.id = e.account_id
+             WHERE r.refund_of_id = ? AND (? IS NULL OR r.id != ?)
+        """, (expense_id, exclude_id, exclude_id)).fetchall()
+        if not rows:
+            return 0.0
+        rates = rates or self.get_exchange_rates_map()
+        return sum(self._to_currency(r['amount'], r['refund_currency'], r['expense_currency'], rates)
+                   for r in rows)
+
+    def _check_refund(self, cursor, expense_id: int, amount: float, account_id: int,
+                      refund_id: Optional[int] = None):
+        """The expense a refund pays back, once the refund is known to fit it.
+
+        Only an expense can be refunded, a refund cannot be, the amount is
+        positive, and all refunds together stay within the expense (compared in
+        the expense's currency when the refund lands on another account).
+        """
+        expense = cursor.execute("""
+            SELECT t.*, tt.category, a.currency AS account_currency
+              FROM transactions t
+              JOIN transaction_types tt ON tt.id = t.type_id
+              JOIN accounts a ON a.id = t.account_id
+             WHERE t.id = ?
+        """, (expense_id,)).fetchone()
+        if not expense:
+            raise ValueError("The expense being refunded does not exist")
+        if expense['refund_of_id']:
+            raise ValueError("A refund cannot itself be refunded")
+        if expense['category'] != 'expense' or expense['amount'] >= 0:
+            raise ValueError("Only an expense can be refunded")
+        if amount is None or amount <= 0:
+            raise ValueError("A refund is a positive amount")
+        account = cursor.execute("SELECT currency FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        if not account:
+            raise ValueError("Invalid account for the refund")
+
+        rates = self.get_exchange_rates_map()
+        currency = expense['account_currency']
+        remaining = -expense['amount'] - self._refunded_total(cursor, expense_id, refund_id, rates)
+        if self._to_currency(amount, account['currency'], currency, rates) > remaining + 0.005:
+            raise ValueError(
+                f"Only {max(0.0, remaining):.2f} {currency} of this expense is left to refund")
+        return expense
+
+    def add_refund(self, expense_id: int, refund: Dict[str, Any]) -> int:
+        """Record a refund of an expense: positive, in the expense's category.
+
+        `refund` holds account_id, transaction_date and amount, and optionally
+        destinataire (default: the expense's), description, tags and owner_id.
+        """
+        with self.db_connection(commit=True) as conn:
+            cursor = conn.cursor()
+            amount = abs(refund.get('amount') or 0)
+            expense = self._check_refund(cursor, expense_id, amount, refund['account_id'])
+            currency = cursor.execute("SELECT currency FROM accounts WHERE id = ?",
+                                      (refund['account_id'],)).fetchone()['currency']
+            return self._add_transaction(conn, {
+                'account_id': refund['account_id'],
+                'transaction_date': refund['transaction_date'],
+                'amount': amount,
+                'currency': currency,
+                'description': refund.get('description') or '',
+                'destinataire': refund.get('destinataire') or expense['destinataire'],
+                'type_id': expense['type_id'],
+                'subtype_id': expense['subtype_id'],
+                'tags': refund.get('tags') or '',
+                'owner_id': refund.get('owner_id'),
+                'confirmed': refund.get('confirmed', True),
+                'refund_of_id': expense_id,
+            })
+
+    def get_refund_info(self, transaction_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """For a page of transactions: what each expense has had refunded, and
+        which expense each refund pays back."""
+        if not transaction_ids:
+            return {}
+        marks = ','.join('?' * len(transaction_ids))
+        info: Dict[int, Dict[str, Any]] = {}
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            rates = self.get_exchange_rates_map()
+            for row in cursor.execute(f"""
+                SELECT DISTINCT refund_of_id FROM transactions WHERE refund_of_id IN ({marks})
+            """, transaction_ids).fetchall():
+                expense_id = row['refund_of_id']
+                count = cursor.execute("SELECT COUNT(*) FROM transactions WHERE refund_of_id = ?",
+                                       (expense_id,)).fetchone()[0]
+                info[expense_id] = {'refunded_amount': round(self._refunded_total(cursor, expense_id, rates=rates), 2),
+                                    'refund_count': count}
+            for row in cursor.execute(f"""
+                SELECT r.id, e.id AS expense_id, e.transaction_date, e.amount, e.destinataire,
+                       e.description, ea.name AS account_name, ea.currency
+                  FROM transactions r
+                  JOIN transactions e ON e.id = r.refund_of_id
+                  JOIN accounts ea ON ea.id = e.account_id
+                 WHERE r.id IN ({marks})
+            """, transaction_ids).fetchall():
+                info.setdefault(row['id'], {})['refund_of'] = {
+                    'id': row['expense_id'], 'transaction_date': row['transaction_date'],
+                    'amount': row['amount'], 'destinataire': row['destinataire'],
+                    'description': row['description'], 'account_name': row['account_name'],
+                    'currency': row['currency'],
+                }
+        return info
+
+    def get_refundable_expenses(self, search: str = '', limit: int = 20) -> List[Dict[str, Any]]:
+        """Recent expenses that can still take a refund, for "this is a refund of…".
+
+        Searched by recipient, description or amount; newest first, over the
+        last year.
+        """
+        like = f"%{(search or '').strip()}%"
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            rows = cursor.execute("""
+                SELECT t.id, t.transaction_date, t.amount, t.destinataire, t.description,
+                       t.type_id, t.subtype_id, t.account_id,
+                       tt.name AS type_name, ts.name AS subtype_name,
+                       a.name AS account_name, a.currency
+                  FROM transactions t
+                  JOIN transaction_types tt ON tt.id = t.type_id
+                  LEFT JOIN transaction_subtypes ts ON ts.id = t.subtype_id
+                  JOIN accounts a ON a.id = t.account_id
+                 WHERE tt.category = 'expense' AND t.amount < 0 AND t.refund_of_id IS NULL
+                   AND t.transaction_date >= date('now', '-12 months')
+                   AND (? = '%%' OR LOWER(COALESCE(t.destinataire, '')) LIKE LOWER(?)
+                        OR LOWER(COALESCE(t.description, '')) LIKE LOWER(?)
+                        OR CAST(ABS(t.amount) AS TEXT) LIKE ?)
+                 ORDER BY t.transaction_date DESC, t.id DESC
+                 LIMIT ?
+            """, (like, like, like, like, limit * 3)).fetchall()
+            rates = self.get_exchange_rates_map()
+            result = []
+            for row in rows:
+                refunded = self._refunded_total(cursor, row['id'], rates=rates)
+                remaining = round(-row['amount'] - refunded, 2)
+                if remaining > 0.005:
+                    result.append({**dict(row), 'refunded_amount': round(refunded, 2),
+                                   'remaining': remaining})
+                if len(result) >= limit:
+                    break
+        return result
 
     def delete_transaction(self, transaction_id: int) -> bool:
         """Delete a transaction. If it's a transfer with a linked mirror, delete both sides."""
@@ -3765,6 +3973,13 @@ class FinanceDatabase:
 
         if not transaction:
             return False
+
+        refunds = cursor.execute(
+            "SELECT COUNT(*) FROM transactions WHERE refund_of_id = ?", (transaction_id,)).fetchone()[0]
+        if refunds:
+            raise ValueError(
+                f"This expense has {refunds} refund{'s' if refunds != 1 else ''}: delete "
+                f"{'them' if refunds != 1 else 'it'} first")
 
         transaction = dict(transaction)
         linked_transfer_id = transaction.get('linked_transfer_id')
@@ -4937,18 +5152,17 @@ class FinanceDatabase:
                 return raw_amount
             return self.convert_with_rates(raw_amount, acct_currency, display_currency, exchange_rates)
 
-        # Bucketing follows the sign, not just the category — the same rule the
-        # by-owner summary already used, so the two agree. A negative row in an
-        # income category is money going out (a realised loss, a refunded
-        # salary) and belongs on the expense side, not as negative income.
+        # By category, signed, as every income/expense total in the app (see
+        # utils.income_and_expense): a refund lowers its expense category in the
+        # month it arrives, a negative income row lowers income.
         def is_money_in(t):
-            return t['amount'] > 0 and t['category'] != 'transfer'
+            return t['category'] == 'income'
 
         def is_money_out(t):
-            return t['amount'] < 0 and t['category'] != 'transfer'
+            return t['category'] == 'expense'
 
         income = sum(convert(t, t['amount']) for t in transactions if is_money_in(t))
-        expenses = sum(convert(t, abs(t['amount'])) for t in transactions if is_money_out(t))
+        expenses = sum(convert(t, -t['amount']) for t in transactions if is_money_out(t))
 
         income_by_cat = {}
         expense_by_cat = {}
@@ -4959,7 +5173,7 @@ class FinanceDatabase:
                 amt = convert(t, t['amount'])
                 income_by_cat[t['type_name']] = income_by_cat.get(t['type_name'], 0) + amt
             elif is_money_out(t):
-                amt = convert(t, abs(t['amount']))
+                amt = convert(t, -t['amount'])
                 expense_by_cat[t['type_name']] = expense_by_cat.get(t['type_name'], 0) + amt
 
                 type_name = t['type_name']
@@ -5209,7 +5423,8 @@ class FinanceDatabase:
 
             # Convert amount to display currency
             account_currency = t.get('account_currency', 'EUR')
-            amount = t['amount'] if t['category'] == 'income' else abs(t['amount'])
+            # Signed by category: a refund lowers expenses
+            amount = t['amount'] if t['category'] == 'income' else -t['amount']
 
             if account_currency != display_currency:
                 amount = self.convert_with_rates(amount, account_currency, display_currency, exchange_rates)
