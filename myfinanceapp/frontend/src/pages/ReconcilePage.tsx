@@ -1,9 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useForm, Controller } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
 import { format } from 'date-fns';
-import { transactionSchema, type TransactionFormData } from '../lib/validations';
 import { formatCurrency as formatCurrencyUtil } from '../lib/utils';
 import { useToast } from '../contexts/ToastContext';
 import { useIsMobile } from '../hooks/useBreakpoint';
@@ -12,8 +9,6 @@ import ColumnMappingDialog, {
 } from '../components/ColumnMappingDialog';
 import {
   accountsAPI,
-  transactionsAPI,
-  categoriesAPI,
   reconciliationAPI,
   settingsAPI,
 } from '../services/api';
@@ -24,7 +19,6 @@ import {
   Input,
   Label,
   Spinner,
-  Autocomplete,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -36,7 +30,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  FormField,
   Table,
   TableBody,
   TableCell,
@@ -56,22 +49,11 @@ import {
   ArrowRight,
   Check,
   X,
-  Sparkles,
   ChevronDown,
   ChevronUp,
   Link2,
 } from 'lucide-react';
-import {
-  REFUND_CATEGORY,
-  RefundExpensePicker,
-  RefundExplainer,
-  RefundKindItems,
-  SpecialCategoryItems,
-  refundAmountError,
-  refundMaxLabel,
-  type RefundKind,
-  type RefundableExpense,
-} from "../components/Refunds";
+import { useTransactionDialog } from '../components/TransactionDialog';
 
 // Types for reconciliation data
 interface CSVTransaction {
@@ -177,13 +159,6 @@ export default function ReconcilePage() {
   const [linkDialogCsvIndex, setLinkDialogCsvIndex] = useState<number | null>(null);
   const [linkSearch, setLinkSearch] = useState('');
 
-  // Add transaction dialog state
-  const [addTransactionDialog, setAddTransactionDialog] = useState(false);
-  // A bank line that is a refund: the expense it pays back.
-  const [refundOf, setRefundOf] = useState<RefundableExpense | null>(null);
-  const [prefilledCsvIndex, setPrefilledCsvIndex] = useState<number | null>(null);
-  const [autoCategorizingDescription, setAutoCategorizingDescription] = useState(false);
-
   // Complete dialog state
   const [completeDialog, setCompleteDialog] = useState(false);
 
@@ -193,33 +168,6 @@ export default function ReconcilePage() {
     queryFn: async () => {
       const response = await accountsAPI.getAll();
       return response.data.accounts;
-    },
-    staleTime: 30 * 60 * 1000,
-  });
-
-  const { data: categoriesData } = useQuery({
-    queryKey: ['categories-hierarchy'],
-    queryFn: async () => {
-      const response = await categoriesAPI.getHierarchy();
-      return response.data.categories;
-    },
-    staleTime: 30 * 60 * 1000,
-  });
-
-  const { data: tagsData } = useQuery({
-    queryKey: ['tags'],
-    queryFn: async () => {
-      const response = await transactionsAPI.getAllTags();
-      return response.data.tags;
-    },
-    staleTime: 30 * 60 * 1000,
-  });
-
-  const { data: recipientsData } = useQuery({
-    queryKey: ['recipients'],
-    queryFn: async () => {
-      const response = await transactionsAPI.getAllRecipients();
-      return response.data.recipients;
     },
     staleTime: 30 * 60 * 1000,
   });
@@ -252,36 +200,7 @@ export default function ReconcilePage() {
     }
   }, [selectedAccountId]);
 
-  // Form for adding transaction
-  const {
-    control,
-    register,
-    handleSubmit: handleFormSubmit,
-    formState: { errors, isValid },
-    reset: resetForm,
-    watch,
-    setValue,
-    setError,
-    clearErrors,
-  } = useForm<TransactionFormData>({
-    resolver: zodResolver(transactionSchema),
-    mode: 'onChange',
-    defaultValues: {
-      account_id: '',
-      date: '',
-      due_date: '',
-      amount: '',
-      type_id: '',
-      subtype_id: '',
-      description: '',
-      recipient: '',
-      transfer_account_id: '',
-      transfer_amount: '',
-      tags: '',
-    },
-  });
-
-  const formData = watch();
+  const { openAdd } = useTransactionDialog();
 
   /** Ask the server what this file looks like before importing it. */
   const inspectMutation = useMutation({
@@ -365,25 +284,6 @@ export default function ReconcilePage() {
     },
   });
 
-  // Create transaction mutation
-  const createTransactionMutation = useMutation({
-    mutationFn: (data: any) => transactionsAPI.create(data),
-    onSuccess: () => {
-      if (prefilledCsvIndex !== null) {
-        setAddedCsvIndices((prev) => new Set(prev).add(prefilledCsvIndex));
-      }
-      setAddTransactionDialog(false);
-      setPrefilledCsvIndex(null);
-      resetForm();
-      toast.success('Transaction created successfully!');
-      queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['accounts'] });
-    },
-    onError: (error: any) => {
-      toast.error(`Failed to create: ${error.response?.data?.detail || error.message}`);
-    },
-  });
-
   // Complete reconciliation mutation
   const completeMutation = useMutation({
     mutationFn: () => {
@@ -424,24 +324,24 @@ export default function ReconcilePage() {
     }
   };
 
-  // Handle "Add" action
+  // Handle "Add" action: the app's transaction window, filled from the bank
+  // line, on the account being reconciled.
   const handleAddTransaction = (csvIndex: number) => {
     if (!reconciliationData) return;
     const csvTx = reconciliationData.csv_transactions[csvIndex];
-
-    setPrefilledCsvIndex(csvIndex);
-
-    // Prefill form
-    setValue('account_id', selectedAccountId);
-    setValue('date', csvTx.date);
-    setValue('amount', Math.abs(csvTx.amount).toString());
-    setValue('recipient', csvTx.suggested_recipient || '');
-    setValue('description', csvTx.description || '');
-    setValue('tags', '');
-    setValue('type_id', '');
-    setValue('subtype_id', '');
-
-    setAddTransactionDialog(true);
+    openAdd({
+      preset: {
+        account_id: selectedAccountId,
+        date: csvTx.date,
+        amount: Math.abs(csvTx.amount).toString(),
+        recipient: csvTx.suggested_recipient || '',
+        description: csvTx.description || '',
+      },
+      lockAccount: true,
+      closeOnSave: true,
+      description: 'Add the missing transaction to your system.',
+      onSaved: () => setAddedCsvIndices((prev) => new Set(prev).add(csvIndex)),
+    });
   };
 
   // Handle ignore actions
@@ -472,108 +372,6 @@ export default function ReconcilePage() {
       next.delete(csvIndex);
       return next;
     });
-  };
-
-  useEffect(() => {
-    if (!addTransactionDialog) setRefundOf(null);
-  }, [addTransactionDialog]);
-
-  // A bank line that is a refund or a reimbursement: "Refund /
-  // Reimbursement" in the category list, then the expense it pays back.
-  const refundKind: RefundKind | null =
-    formData.type_id === REFUND_CATEGORY &&
-    (formData.subtype_id === 'refund' || formData.subtype_id === 'reimbursement')
-      ? formData.subtype_id
-      : null;
-  const refundTooMuch = refundOf
-    ? refundAmountError(
-        Math.abs(parseFloat(formData.amount || '')),
-        refundOf.remaining,
-        refundOf.currency,
-        selectedAccount?.currency,
-      )
-    : null;
-
-  // Picking the expense a refund pays back. A refund comes from the
-  // expense's recipient; a reimbursement asks who paid it.
-  const handleRefundOf = (expense: RefundableExpense | null) => {
-    setRefundOf(expense);
-    clearErrors('recipient');
-    if (expense && refundKind === 'refund')
-      setValue('recipient', expense.destinataire || '', { shouldValidate: true });
-  };
-
-  // Handle form submission for adding transaction
-  const onSubmitTransaction = (data: TransactionFormData) => {
-    if (data.type_id === REFUND_CATEGORY) {
-      if (!refundKind) {
-        setError('subtype_id', { message: 'Choose refund or reimbursement' });
-        return;
-      }
-      if (!refundOf) {
-        toast.error('Choose the expense being paid back');
-        return;
-      }
-      if (refundTooMuch) return;
-      if (refundKind === 'reimbursement' && !data.recipient?.trim()) {
-        setError('recipient', { message: 'Who reimbursed you?' });
-        return;
-      }
-      createTransactionMutation.mutate({
-        account_id: parseInt(data.account_id),
-        date: data.date,
-        due_date: null,
-        amount: Math.abs(parseFloat(data.amount)),
-        // The expense's category; the server enforces it anyway.
-        type_id: refundOf.type_id,
-        subtype_id: refundOf.subtype_id ?? null,
-        description: data.description || null,
-        destinataire:
-          refundKind === 'refund' ? refundOf.destinataire || null : data.recipient || null,
-        transfer_account_id: null,
-        transfer_amount: null,
-        is_pending: false,
-        tags: data.tags || null,
-        refund_of_id: refundOf.id,
-      });
-      return;
-    }
-    const submitData = {
-      account_id: parseInt(data.account_id),
-      date: data.date,
-      due_date: data.due_date || null,
-      amount: parseFloat(data.amount),
-      type_id: parseInt(data.type_id),
-      subtype_id: data.subtype_id ? parseInt(data.subtype_id) : null,
-      description: data.description || null,
-      destinataire: data.recipient || null,
-      transfer_account_id: null,
-      transfer_amount: null,
-      is_pending: false,
-      tags: data.tags || null,
-    };
-
-    createTransactionMutation.mutate(submitData);
-  };
-
-  // Auto-categorize
-  const handleAutoCategorize = async (description: string) => {
-    if (!description.trim() || formData.type_id === REFUND_CATEGORY) return;
-    setAutoCategorizingDescription(true);
-    try {
-      const response = await transactionsAPI.autoCategorize(description);
-      if (response.data.category_id) {
-        setValue('type_id', response.data.category_id.toString());
-        if (response.data.subcategory_id) {
-          setValue('subtype_id', response.data.subcategory_id.toString());
-        }
-        toast.success('Category suggested!');
-      }
-    } catch {
-      // Silent fail for auto-categorize
-    } finally {
-      setAutoCategorizingDescription(false);
-    }
   };
 
   // Get filtered lists for display
@@ -639,14 +437,6 @@ export default function ReconcilePage() {
       })
       .sort((a, b) => a.amountDelta - b.amountDelta || a.dateDelta - b.dateDelta);
   }, [linkCsvTx, reconciliationData, linkedSystemIds, matchedSystemIds, linkSearch]);
-
-  // Get subtypes for selected type
-  const selectedTypeId = watch('type_id');
-  const subtypesForSelectedType = useMemo(() => {
-    if (!categoriesData || !selectedTypeId) return [];
-    const type = categoriesData?.find((t: any) => t.id.toString() === selectedTypeId);
-    return type?.subtypes || [];
-  }, [categoriesData, selectedTypeId]);
 
   return (
     <div className="space-y-6">
@@ -1150,248 +940,6 @@ export default function ReconcilePage() {
           </Card>
         </>
       )}
-
-      {/* Add Transaction Dialog */}
-      <Dialog open={addTransactionDialog} onOpenChange={setAddTransactionDialog}>
-        <DialogContent size="lg">
-          <DialogHeader>
-            <DialogTitle>Add Transaction</DialogTitle>
-            <DialogDescription>
-              Add the missing transaction to your system.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleFormSubmit(onSubmitTransaction)} className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* Account (read-only) */}
-              <FormField label="Account" error={errors.account_id?.message}>
-                <Controller
-                  name="account_id"
-                  control={control}
-                  render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange} disabled>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select account" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {accountsData?.map((account: any) => (
-                          <SelectItem key={account.id} value={account.id.toString()}>
-                            {account.bank_name} - {account.name || account.account_type} ({account.currency})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </FormField>
-
-              {/* Date */}
-              <FormField label="Date" error={errors.date?.message}>
-                <Input type="date" {...register('date')} />
-              </FormField>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* Amount */}
-              <FormField
-                label={refundOf ? 'Amount received' : 'Amount'}
-                error={refundTooMuch || errors.amount?.message}
-                helperText={
-                  refundOf?.remaining != null
-                    ? `${refundMaxLabel(refundOf.remaining, refundOf.currency)} on this expense`
-                    : undefined
-                }
-              >
-                <Input
-                  type="number"
-                  step="0.01"
-                  {...register('amount')}
-                  placeholder={
-                    refundOf?.remaining != null
-                      ? refundMaxLabel(refundOf.remaining, refundOf.currency)
-                      : '0.00'
-                  }
-                />
-              </FormField>
-
-              {/* Category; "Refund / Reimbursement" is at the bottom */}
-              <FormField label="Category" error={errors.type_id?.message}>
-                <Controller
-                  name="type_id"
-                  control={control}
-                  render={({ field }) => (
-                    <Select
-                      value={field.value}
-                      onValueChange={(value) => {
-                        field.onChange(value);
-                        setValue('subtype_id', '');
-                        setRefundOf(null);
-                        clearErrors('subtype_id');
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {categoriesData?.map((type: any) => (
-                          <SelectItem key={type.id} value={type.id.toString()}>
-                            {type.name}
-                          </SelectItem>
-                        ))}
-                        <SpecialCategoryItems />
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </FormField>
-            </div>
-
-            {/* Refund or reimbursement: which one, then the expense */}
-            {formData.type_id === REFUND_CATEGORY && (
-              <FormField label="Refund or reimbursement" error={errors.subtype_id?.message}>
-                <Controller
-                  name="subtype_id"
-                  control={control}
-                  render={({ field }) => (
-                    <Select
-                      value={field.value || ''}
-                      onValueChange={(value) => {
-                        field.onChange(value);
-                        setRefundOf(null);
-                        clearErrors('subtype_id');
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Choose one" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <RefundKindItems />
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-                <div className="mt-1.5">
-                  <RefundExplainer />
-                </div>
-              </FormField>
-            )}
-            {refundKind && (
-              <RefundExpensePicker
-                key={refundKind}
-                kind={refundKind}
-                value={refundOf}
-                onChange={handleRefundOf}
-              />
-            )}
-
-            {/* Subcategory */}
-            {subtypesForSelectedType.length > 0 && (
-              <FormField label="Subcategory" error={errors.subtype_id?.message}>
-                <Controller
-                  name="subtype_id"
-                  control={control}
-                  render={({ field }) => (
-                    <Select value={field.value || ''} onValueChange={field.onChange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select subcategory (optional)" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {subtypesForSelectedType.map((subtype: any) => (
-                          <SelectItem key={subtype.id} value={subtype.id.toString()}>
-                            {subtype.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </FormField>
-            )}
-
-            {/* Recipient. A refund comes from the expense's recipient; a
-                reimbursement from whoever paid it. */}
-            {(formData.type_id !== REFUND_CATEGORY ||
-              (refundKind === 'reimbursement' && refundOf)) && (
-              <FormField
-                label={refundKind ? 'Reimbursed by' : 'Recipient'}
-                error={errors.recipient?.message}
-              >
-                <Controller
-                  name="recipient"
-                  control={control}
-                  render={({ field }) => (
-                    <Autocomplete
-                      options={recipientsData || []}
-                      value={field.value || ''}
-                      onChange={field.onChange}
-                      placeholder={
-                        refundKind
-                          ? 'The insurer, employer… who paid you back'
-                          : 'Enter recipient'
-                      }
-                      freeSolo
-                    />
-                  )}
-                />
-              </FormField>
-            )}
-
-            {/* Description with auto-categorize */}
-            <FormField label="Description" error={errors.description?.message}>
-              <div className="flex gap-2">
-                <Input {...register('description')} placeholder="Transaction description" className="flex-1" />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => handleAutoCategorize(formData.description || '')}
-                  disabled={autoCategorizingDescription || !formData.description}
-                  title="Auto-categorize"
-                >
-                  {autoCategorizingDescription ? <Spinner className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
-                </Button>
-              </div>
-            </FormField>
-
-            {/* Tags */}
-            <FormField label="Tags" error={errors.tags?.message}>
-              <Controller
-                name="tags"
-                control={control}
-                render={({ field }) => (
-                  <Autocomplete
-                    options={tagsData || []}
-                    value={field.value || ''}
-                    onChange={field.onChange}
-                    placeholder="Enter tags (comma-separated)"
-                    freeSolo
-                  />
-                )}
-              />
-            </FormField>
-
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setAddTransactionDialog(false)}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={!isValid || !!refundTooMuch || createTransactionMutation.isPending}
-              >
-                {createTransactionMutation.isPending ? (
-                  <>
-                    <Spinner className="w-4 h-4 mr-2" /> Creating...
-                  </>
-                ) : (
-                  <>
-                    <Plus className="w-4 h-4 mr-2" /> Add Transaction
-                  </>
-                )}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       {/* Link Dialog */}
       <Dialog open={linkDialogCsvIndex !== null} onOpenChange={(open) => { if (!open) { setLinkDialogCsvIndex(null); setLinkSearch(''); } }}>

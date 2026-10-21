@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.10.0
+
+**One "Add Transaction" window everywhere**
+- The **Add** button in the top bar, the Transactions page (Add and Edit) and the Reconcile page now open the same window, with the same fields and rules: recipient, owner, tags, auto-categorize, transfers, refund/reimbursement and loan payment
+- **Top bar:** the "Quick Add" window is gone. It had no Recipient field (transactions were saved without one), no transfers, refunds or loan payments, and did not refresh the dashboard. Like the Transactions page, the window now stays open after saving for the next entry, keeping the account, date and tags
+- **Reconcile:** "Add" on a bank line opens the window filled in from the line (date, amount, recipient, description) on the account being reconciled, which cannot be changed there. It closes after saving and the line is marked as added. Transfers now ask for the destination account (before, a transfer could be saved with no other side), and loan payments are possible
+- After any save, everything shown on screen is refreshed: balances, dashboard cards, budgets, prediction, debts
+- An error always says why (for example a refund above what is left)
+
 ## 2.9.0
 
 **Refunds, reimbursements and loan payments are chosen in the category list**
