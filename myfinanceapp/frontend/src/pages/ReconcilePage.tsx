@@ -61,7 +61,17 @@ import {
   ChevronUp,
   Link2,
 } from 'lucide-react';
-import { RefundOfField, type RefundableExpense } from "../components/Refunds";
+import {
+  REFUND_CATEGORY,
+  RefundExpensePicker,
+  RefundExplainer,
+  RefundKindItems,
+  SpecialCategoryItems,
+  refundAmountError,
+  refundMaxLabel,
+  type RefundKind,
+  type RefundableExpense,
+} from "../components/Refunds";
 
 // Types for reconciliation data
 interface CSVTransaction {
@@ -251,6 +261,8 @@ export default function ReconcilePage() {
     reset: resetForm,
     watch,
     setValue,
+    setError,
+    clearErrors,
   } = useForm<TransactionFormData>({
     resolver: zodResolver(transactionSchema),
     mode: 'onChange',
@@ -466,17 +478,66 @@ export default function ReconcilePage() {
     if (!addTransactionDialog) setRefundOf(null);
   }, [addTransactionDialog]);
 
-  // Picking the expense a refund pays back: it gives the category.
+  // A bank line that is a refund or a reimbursement: "Refund /
+  // Reimbursement" in the category list, then the expense it pays back.
+  const refundKind: RefundKind | null =
+    formData.type_id === REFUND_CATEGORY &&
+    (formData.subtype_id === 'refund' || formData.subtype_id === 'reimbursement')
+      ? formData.subtype_id
+      : null;
+  const refundTooMuch = refundOf
+    ? refundAmountError(
+        Math.abs(parseFloat(formData.amount || '')),
+        refundOf.remaining,
+        refundOf.currency,
+        selectedAccount?.currency,
+      )
+    : null;
+
+  // Picking the expense a refund pays back. A refund comes from the
+  // expense's recipient; a reimbursement asks who paid it.
   const handleRefundOf = (expense: RefundableExpense | null) => {
     setRefundOf(expense);
-    if (!expense) return;
-    setValue('type_id', String(expense.type_id), { shouldValidate: true });
-    setValue('subtype_id', expense.subtype_id ? String(expense.subtype_id) : '', { shouldValidate: true });
-    if (!formData.recipient) setValue('recipient', expense.destinataire || '', { shouldValidate: true });
+    clearErrors('recipient');
+    if (expense && refundKind === 'refund')
+      setValue('recipient', expense.destinataire || '', { shouldValidate: true });
   };
 
   // Handle form submission for adding transaction
   const onSubmitTransaction = (data: TransactionFormData) => {
+    if (data.type_id === REFUND_CATEGORY) {
+      if (!refundKind) {
+        setError('subtype_id', { message: 'Choose refund or reimbursement' });
+        return;
+      }
+      if (!refundOf) {
+        toast.error('Choose the expense being paid back');
+        return;
+      }
+      if (refundTooMuch) return;
+      if (refundKind === 'reimbursement' && !data.recipient?.trim()) {
+        setError('recipient', { message: 'Who reimbursed you?' });
+        return;
+      }
+      createTransactionMutation.mutate({
+        account_id: parseInt(data.account_id),
+        date: data.date,
+        due_date: null,
+        amount: Math.abs(parseFloat(data.amount)),
+        // The expense's category; the server enforces it anyway.
+        type_id: refundOf.type_id,
+        subtype_id: refundOf.subtype_id ?? null,
+        description: data.description || null,
+        destinataire:
+          refundKind === 'refund' ? refundOf.destinataire || null : data.recipient || null,
+        transfer_account_id: null,
+        transfer_amount: null,
+        is_pending: false,
+        tags: data.tags || null,
+        refund_of_id: refundOf.id,
+      });
+      return;
+    }
     const submitData = {
       account_id: parseInt(data.account_id),
       date: data.date,
@@ -490,8 +551,6 @@ export default function ReconcilePage() {
       transfer_amount: null,
       is_pending: false,
       tags: data.tags || null,
-      // A refund takes its category from the expense (the server enforces it).
-      refund_of_id: refundOf ? refundOf.id : undefined,
     };
 
     createTransactionMutation.mutate(submitData);
@@ -499,7 +558,7 @@ export default function ReconcilePage() {
 
   // Auto-categorize
   const handleAutoCategorize = async (description: string) => {
-    if (!description.trim()) return;
+    if (!description.trim() || formData.type_id === REFUND_CATEGORY) return;
     setAutoCategorizingDescription(true);
     try {
       const response = await transactionsAPI.autoCategorize(description);
@@ -1134,45 +1193,99 @@ export default function ReconcilePage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Amount */}
-              <FormField label="Amount" error={errors.amount?.message}>
+              <FormField
+                label={refundOf ? 'Amount received' : 'Amount'}
+                error={refundTooMuch || errors.amount?.message}
+                helperText={
+                  refundOf?.remaining != null
+                    ? `${refundMaxLabel(refundOf.remaining, refundOf.currency)} on this expense`
+                    : undefined
+                }
+              >
                 <Input
                   type="number"
                   step="0.01"
                   {...register('amount')}
-                  placeholder="0.00"
+                  placeholder={
+                    refundOf?.remaining != null
+                      ? refundMaxLabel(refundOf.remaining, refundOf.currency)
+                      : '0.00'
+                  }
                 />
               </FormField>
 
-              {/* Refund of an expense: takes the expense's category */}
-              <RefundOfField value={refundOf} onChange={handleRefundOf} />
-
-              {/* Category */}
-              {!refundOf && (
-                <FormField label="Category" error={errors.type_id?.message}>
-                  <Controller
-                    name="type_id"
-                    control={control}
-                    render={({ field }) => (
-                      <Select value={field.value} onValueChange={field.onChange}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {categoriesData?.map((type: any) => (
-                            <SelectItem key={type.id} value={type.id.toString()}>
-                              {type.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                </FormField>
-              )}
+              {/* Category; "Refund / Reimbursement" is at the bottom */}
+              <FormField label="Category" error={errors.type_id?.message}>
+                <Controller
+                  name="type_id"
+                  control={control}
+                  render={({ field }) => (
+                    <Select
+                      value={field.value}
+                      onValueChange={(value) => {
+                        field.onChange(value);
+                        setValue('subtype_id', '');
+                        setRefundOf(null);
+                        clearErrors('subtype_id');
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categoriesData?.map((type: any) => (
+                          <SelectItem key={type.id} value={type.id.toString()}>
+                            {type.name}
+                          </SelectItem>
+                        ))}
+                        <SpecialCategoryItems />
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </FormField>
             </div>
 
+            {/* Refund or reimbursement: which one, then the expense */}
+            {formData.type_id === REFUND_CATEGORY && (
+              <FormField label="Refund or reimbursement" error={errors.subtype_id?.message}>
+                <Controller
+                  name="subtype_id"
+                  control={control}
+                  render={({ field }) => (
+                    <Select
+                      value={field.value || ''}
+                      onValueChange={(value) => {
+                        field.onChange(value);
+                        setRefundOf(null);
+                        clearErrors('subtype_id');
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Choose one" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <RefundKindItems />
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                <div className="mt-1.5">
+                  <RefundExplainer />
+                </div>
+              </FormField>
+            )}
+            {refundKind && (
+              <RefundExpensePicker
+                key={refundKind}
+                kind={refundKind}
+                value={refundOf}
+                onChange={handleRefundOf}
+              />
+            )}
+
             {/* Subcategory */}
-            {subtypesForSelectedType.length > 0 && !refundOf && (
+            {subtypesForSelectedType.length > 0 && (
               <FormField label="Subcategory" error={errors.subtype_id?.message}>
                 <Controller
                   name="subtype_id"
@@ -1195,22 +1308,33 @@ export default function ReconcilePage() {
               </FormField>
             )}
 
-            {/* Recipient */}
-            <FormField label="Recipient" error={errors.recipient?.message}>
-              <Controller
-                name="recipient"
-                control={control}
-                render={({ field }) => (
-                  <Autocomplete
-                    options={recipientsData || []}
-                    value={field.value || ''}
-                    onChange={field.onChange}
-                    placeholder="Enter recipient"
-                    freeSolo
-                  />
-                )}
-              />
-            </FormField>
+            {/* Recipient. A refund comes from the expense's recipient; a
+                reimbursement from whoever paid it. */}
+            {(formData.type_id !== REFUND_CATEGORY ||
+              (refundKind === 'reimbursement' && refundOf)) && (
+              <FormField
+                label={refundKind ? 'Reimbursed by' : 'Recipient'}
+                error={errors.recipient?.message}
+              >
+                <Controller
+                  name="recipient"
+                  control={control}
+                  render={({ field }) => (
+                    <Autocomplete
+                      options={recipientsData || []}
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      placeholder={
+                        refundKind
+                          ? 'The insurer, employer… who paid you back'
+                          : 'Enter recipient'
+                      }
+                      freeSolo
+                    />
+                  )}
+                />
+              </FormField>
+            )}
 
             {/* Description with auto-categorize */}
             <FormField label="Description" error={errors.description?.message}>
@@ -1250,7 +1374,10 @@ export default function ReconcilePage() {
               <Button type="button" variant="outline" onClick={() => setAddTransactionDialog(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={!isValid || createTransactionMutation.isPending}>
+              <Button
+                type="submit"
+                disabled={!isValid || !!refundTooMuch || createTransactionMutation.isPending}
+              >
                 {createTransactionMutation.isPending ? (
                   <>
                     <Spinner className="w-4 h-4 mr-2" /> Creating...

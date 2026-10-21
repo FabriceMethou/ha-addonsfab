@@ -420,6 +420,7 @@ def test_debt_payments_are_not_recipients(db, account):
         payment_date = "2026-02-01"
         payment_type = "regular"
         notes = None
+        account_id = None
     debts_api.add_debt_payment(Payment(), current_user=None)
 
     assert stored(db)["Car loan"] == 2, "interest and principal keep the debt's spelling"

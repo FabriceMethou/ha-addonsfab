@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.9.0
+
+**Refunds, reimbursements and loan payments are chosen in the category list**
+- The form no longer shows a refund switch or a "Loan Payment" field on every transaction. At the bottom of the category list, under **Special**, are **Refund / Reimbursement** and **Loan payment**; the form only changes when you pick one
+
+**Refund or reimbursement: start from who you paid**
+- Choose **Refund** or **Reimbursement** ("Refund or reimbursement?" explains the difference)
+- **Refund:** "Refunded by": the shop or company. Its expenses that can still be refunded are listed; pick one
+- **Reimbursement:** "Expense paid to": who you paid (the doctor…). Pick the expense, then fill in **Reimbursed by** (the insurer, the employer…)
+- The amount box shows **"Max €20.00"**, the most that is left to refund on that expense; it disappears as you type, and more than that is refused straight away. The same in "Record refund" on an expense
+- The same choice on the Reconcile page
+- Editing a refund shows it as Refund / Reimbursement with its expense; its category cannot be changed there
+
+**Loan payment from the transaction form is booked like on the Debts page**
+- Pick the loan: the account defaults to the loan's account. Monthly payment: this month's interest as an expense (Debt Interest), the rest as capital repaid (Debt Principal). Extra payment: all capital
+- It used to book the whole payment as one row in whatever category you chose, which counted the capital repaid as spending
+- A payment from an account in another currency than the loan is refused
+
 ## 2.8.0
 
 **Refunds and reimbursements**

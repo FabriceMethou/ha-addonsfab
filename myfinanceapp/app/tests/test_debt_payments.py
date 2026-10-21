@@ -47,7 +47,7 @@ def setup(db):
     return {"cash": cash, "debt": debt}
 
 
-def pay(db, debt_id, amount, kind="regular", date="2026-02-01"):
+def pay(db, debt_id, amount, kind="regular", date="2026-02-01", account=None):
     from api import debts as debts_api
     debts_api.db = db
 
@@ -59,6 +59,7 @@ def pay(db, debt_id, amount, kind="regular", date="2026-02-01"):
     payment.payment_date = date
     payment.payment_type = kind
     payment.notes = None
+    payment.account_id = account
     return debts_api.add_debt_payment(payment, current_user=None)
 
 
@@ -165,3 +166,26 @@ def test_deleting_a_payment_restores_everything(setup, db):
 
 def test_deleting_an_unknown_payment_is_refused(setup, db):
     assert db.delete_debt_payment(9999) is False
+
+
+# ── paid from the transaction form ───────────────────────────────────────────
+
+def test_a_payment_entered_with_an_account_is_taken_from_that_account(setup, db):
+    """The transaction form picks the account; the split is the same."""
+    owner = db.get_owners()[0]["id"]
+    joint = db.add_account({"name": "Joint", "owner_id": owner, "balance": 1000.0,
+                            "currency": "EUR", "account_type": "checking"})
+    result = pay(db, setup["debt"], 200.0, account=joint)
+    assert (result["interest"], result["principal"]) == (12.5, 187.5)
+    assert (balance(db, joint), balance(db, setup["cash"])) == (800.0, 10000.0)
+
+
+def test_a_payment_from_an_account_in_another_currency_is_refused(setup, db):
+    from fastapi import HTTPException
+    owner = db.get_owners()[0]["id"]
+    danish = db.add_account({"name": "Danske", "owner_id": owner, "balance": 1000.0,
+                             "currency": "DKK", "account_type": "checking"})
+    with pytest.raises(HTTPException) as err:
+        pay(db, setup["debt"], 200.0, account=danish)
+    assert err.value.status_code == 400 and "EUR" in err.value.detail
+    assert balance(db, danish) == 1000.0

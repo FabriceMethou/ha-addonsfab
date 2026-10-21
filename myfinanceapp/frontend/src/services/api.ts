@@ -312,8 +312,9 @@ export const transactionsAPI = {
   createRefund: (expenseId: number, data: Record<string, unknown>) =>
     api.post(`/api/transactions/${expenseId}/refunds`, data),
   /** Recent expenses that can still take a refund, searched by text or amount. */
-  getRefundable: (q: string = "", limit: number = 8) =>
-    api.get("/api/transactions/refundable", { params: { q, limit } }),
+  getRefundable: (recipient: string, limit: number = 20) =>
+    api.get("/api/transactions/refundable", { params: { recipient, limit } }),
+  getRefundRecipients: () => api.get("/api/transactions/refundable/recipients"),
   getCategorizerStatus: () => api.get("/api/transactions/categorizer/status"),
   exportCsv: (params?: Record<string, unknown>) =>
     api.get("/api/transactions/export/csv", { params, responseType: "blob" }),

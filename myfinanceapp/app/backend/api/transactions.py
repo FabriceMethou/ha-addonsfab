@@ -191,13 +191,19 @@ def get_transactions(
 
 @router.get("/refundable")
 def list_refundable_expenses(
-    q: str = '',
+    recipient: str = '',
     limit: int = Query(20, le=100),
     current_user: User = Depends(get_current_user),
 ):
-    """Recent expenses that can still take a refund, searched by recipient,
-    description or amount, with what is left to refund on each."""
-    return {"expenses": db.get_refundable_expenses(q, limit)}
+    """A recipient's recent expenses that can still take a refund, with what
+    is left to refund on each."""
+    return {"expenses": db.get_refundable_expenses(recipient, limit)}
+
+
+@router.get("/refundable/recipients")
+def list_refund_recipients(current_user: User = Depends(get_current_user)):
+    """Recipients with a recent expense that can still take a refund."""
+    return {"recipients": db.get_refund_recipients()}
 
 
 @router.get("/{transaction_id}")

@@ -3910,16 +3910,18 @@ class FinanceDatabase:
                 }
         return info
 
-    def get_refundable_expenses(self, search: str = '', limit: int = 20) -> List[Dict[str, Any]]:
-        """Recent expenses that can still take a refund, for "this is a refund of…".
+    # Expenses that may take a refund: a recipient's own expenses (not app
+    # rows such as loan interest) from the last year, refunds excluded.
+    _REFUNDABLE = f"""tt.category = 'expense' AND t.amount < 0 AND t.refund_of_id IS NULL
+                   AND t.transaction_date >= date('now', '-12 months') AND {_PAYEE_ROW}"""
 
-        Searched by recipient, description or amount; newest first, over the
-        last year.
-        """
-        like = f"%{(search or '').strip()}%"
+    def get_refundable_expenses(self, recipient: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """A recipient's expenses that can still take a refund, newest first,
+        with what is left to refund on each. The recipient matches whatever
+        its case, as in the recipient catalogue."""
         with self.db_connection(commit=False) as conn:
             cursor = conn.cursor()
-            rows = cursor.execute("""
+            rows = cursor.execute(f"""
                 SELECT t.id, t.transaction_date, t.amount, t.destinataire, t.description,
                        t.type_id, t.subtype_id, t.account_id,
                        tt.name AS type_name, ts.name AS subtype_name,
@@ -3928,14 +3930,10 @@ class FinanceDatabase:
                   JOIN transaction_types tt ON tt.id = t.type_id
                   LEFT JOIN transaction_subtypes ts ON ts.id = t.subtype_id
                   JOIN accounts a ON a.id = t.account_id
-                 WHERE tt.category = 'expense' AND t.amount < 0 AND t.refund_of_id IS NULL
-                   AND t.transaction_date >= date('now', '-12 months')
-                   AND (? = '%%' OR LOWER(COALESCE(t.destinataire, '')) LIKE LOWER(?)
-                        OR LOWER(COALESCE(t.description, '')) LIKE LOWER(?)
-                        OR CAST(ABS(t.amount) AS TEXT) LIKE ?)
+                 WHERE {self._REFUNDABLE}
+                   AND LOWER(TRIM(t.destinataire)) = LOWER(TRIM(?))
                  ORDER BY t.transaction_date DESC, t.id DESC
-                 LIMIT ?
-            """, (like, like, like, like, limit * 3)).fetchall()
+            """, ((recipient or ''),)).fetchall()
             rates = self.get_exchange_rates_map()
             result = []
             for row in rows:
@@ -3947,6 +3945,29 @@ class FinanceDatabase:
                 if len(result) >= limit:
                     break
         return result
+
+    def get_refund_recipients(self) -> List[str]:
+        """Recipients with at least one expense that can still take a refund."""
+        with self.db_connection(commit=False) as conn:
+            cursor = conn.cursor()
+            rows = cursor.execute(f"""
+                SELECT t.id, t.amount, TRIM(t.destinataire) AS name,
+                       EXISTS (SELECT 1 FROM transactions r WHERE r.refund_of_id = t.id) AS has_refunds
+                  FROM transactions t
+                  JOIN transaction_types tt ON tt.id = t.type_id
+                 WHERE {self._REFUNDABLE}
+            """).fetchall()
+            rates = self.get_exchange_rates_map()
+            names: Dict[str, str] = {}
+            for row in rows:
+                key = row['name'].lower()
+                if key in names:
+                    continue
+                if row['has_refunds'] and \
+                        -row['amount'] - self._refunded_total(cursor, row['id'], rates=rates) <= 0.005:
+                    continue
+                names[key] = row['name']
+        return sorted(names.values(), key=str.lower)
 
     def delete_transaction(self, transaction_id: int) -> bool:
         """Delete a transaction. If it's a transfer with a linked mirror, delete both sides."""

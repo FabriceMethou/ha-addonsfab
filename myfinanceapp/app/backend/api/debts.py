@@ -54,6 +54,7 @@ class DebtPayment(BaseModel):
     payment_date: str  # Frontend sends payment_date not date
     payment_type: str = "monthly"  # "monthly" or "extra"
     notes: Optional[str] = None
+    account_id: Optional[int] = None  # paid from; the debt's linked account when unset
 
 @router.get("/")
 def get_debts(include_inactive: bool = False, current_user: User = Depends(get_current_user)):
@@ -213,11 +214,19 @@ def add_debt_payment(payment: DebtPayment, current_user: User = Depends(get_curr
     if not debt:
         raise HTTPException(status_code=404, detail="Debt not found")
 
-    account_id = debt.get('linked_account_id')
+    account_id = payment.account_id or debt.get('linked_account_id')
     if not account_id:
         raise HTTPException(
             status_code=400,
             detail="Debt has no linked account. Please link an account to this debt first.")
+    account = db.get_account(account_id) if payment.account_id else None
+    if payment.account_id and not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    debt_currency = debt.get('currency') or 'EUR'
+    if account and account.get('currency') != debt_currency:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This loan is in {debt_currency}: pay it from a {debt_currency} account")
 
     debt_name = debt.get('name', 'Debt')
     is_extra = payment.payment_type == "extra"

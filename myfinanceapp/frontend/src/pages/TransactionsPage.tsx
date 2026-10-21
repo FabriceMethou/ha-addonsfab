@@ -63,9 +63,18 @@ import {
   RotateCcw,
 } from "lucide-react";
 import {
+  LOAN_CATEGORY,
+  REFUND_CATEGORY,
   RefundDialog,
-  RefundOfField,
+  RefundExpensePicker,
+  RefundExplainer,
+  RefundKindItems,
+  SpecialCategoryItems,
   expenseLabel,
+  refundAmountError,
+  refundKindOf,
+  refundMaxLabel,
+  type RefundKind,
   type RefundableExpense,
 } from "../components/Refunds";
 
@@ -216,8 +225,10 @@ export default function TransactionsPage() {
   const [selectedFormOwner, setSelectedFormOwner] = useState<string>("");
   // The expense the transaction in the form pays back, when it is a refund.
   const [refundOf, setRefundOf] = useState<RefundableExpense | null>(null);
-  // Remounts the refund field, switched off, for the next transaction.
-  const [refundFieldKey, setRefundFieldKey] = useState(0);
+  // A loan payment from the form: monthly (interest + capital) or extra.
+  const [loanPaymentType, setLoanPaymentType] = useState<"monthly" | "extra">(
+    "monthly",
+  );
   // The expense whose "Record refund" dialog is open.
   const [refundingExpense, setRefundingExpense] = useState<any>(null);
 
@@ -279,6 +290,8 @@ export default function TransactionsPage() {
     reset: resetForm,
     watch,
     setValue,
+    setError,
+    clearErrors,
     trigger,
   } = useForm<TransactionFormData>({
     resolver: zodResolver(transactionSchema),
@@ -589,6 +602,39 @@ export default function TransactionsPage() {
     },
   });
 
+  // "Loan payment" in the form: booked as the Debts page books it, the
+  // interest as an expense and the rest as capital repaid.
+  const loanPaymentMutation = useMutation({
+    mutationFn: (data: Record<string, unknown>) => debtsAPI.addPayment(data),
+    onSuccess: (response: any) => {
+      const { interest, principal } = response.data;
+      const currency = sourceAccount?.currency || "EUR";
+      resetFormPartial();
+      toast.success(
+        `Loan payment recorded: ${formatCurrencyUtil(interest, currency)} interest, ` +
+          `${formatCurrencyUtil(principal, currency)} capital repaid`,
+      );
+    },
+    onError: (error: any) =>
+      toast.error(
+        `Failed to record the loan payment: ${error.response?.data?.detail || error.message}`,
+      ),
+    onSettled: () => {
+      for (const key of [
+        "transactions",
+        "accounts-summary",
+        "transactions-summary",
+        "spending-prediction",
+        "budgets-vs-actual",
+        "debts",
+        "debts-summary",
+        "debt-payments",
+      ]) {
+        queryClient.invalidateQueries({ queryKey: [key] });
+      }
+    },
+  });
+
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: any }) =>
       transactionsAPI.update(id, data),
@@ -751,7 +797,7 @@ export default function TransactionsPage() {
     });
     setAutoCategorizerConfidence(null);
     setRefundOf(null);
-    setRefundFieldKey((k) => k + 1);
+    setLoanPaymentType("monthly");
   };
 
   const resetFormCompletely = () => {
@@ -812,22 +858,24 @@ export default function TransactionsPage() {
     }
   };
 
-  // Picking the expense a refund pays back: its category, and sensible defaults.
+  // Picking the expense a refund pays back. A refund comes from the
+  // expense's recipient; a reimbursement asks who paid it.
   const handleRefundOf = (expense: RefundableExpense | null) => {
     setRefundOf(expense);
-    if (!expense) return;
-    setValue("type_id", String(expense.type_id));
-    setValue("subtype_id", expense.subtype_id ? String(expense.subtype_id) : "");
-    if (!formData.recipient) setValue("recipient", expense.destinataire || "");
-    if (!formData.amount && expense.remaining != null)
-      setValue("amount", expense.remaining.toFixed(2));
-    trigger(["type_id", "subtype_id", "recipient", "amount"]);
+    clearErrors(["amount", "recipient"]);
+    if (expense && refundKind === "refund")
+      setValue("recipient", expense.destinataire || "");
   };
 
   const handleEdit = (transaction: any) => {
     setRefundOf(
       transaction.refund_of
-        ? { ...transaction.refund_of, type_id: transaction.type_id }
+        ? {
+            ...transaction.refund_of,
+            type_id: transaction.type_id,
+            type_name: transaction.type_name,
+            subtype_name: transaction.subtype_name,
+          }
         : null,
     );
     setEditingTransaction(transaction);
@@ -840,8 +888,13 @@ export default function TransactionsPage() {
       date: transaction.date || format(new Date(), "yyyy-MM-dd"),
       due_date: transaction.due_date || "",
       amount: Math.abs(transaction.amount).toString(),
-      type_id: transaction.type_id.toString(),
-      subtype_id: transaction.subtype_id?.toString() || "",
+      // A refund shows as "Refund / Reimbursement"; it keeps its expense's category.
+      type_id: transaction.refund_of
+        ? REFUND_CATEGORY
+        : transaction.type_id.toString(),
+      subtype_id: transaction.refund_of
+        ? refundKindOf(transaction)
+        : transaction.subtype_id?.toString() || "",
       description: transaction.description || "",
       recipient: transaction.destinataire || "",
       transfer_account_id: transaction.transfer_account_id?.toString() || "",
@@ -859,6 +912,26 @@ export default function TransactionsPage() {
   );
   const isTransfer = selectedType?.category === "transfer";
 
+  // Form-only categories: a refund or reimbursement, or a loan payment.
+  const mode =
+    formData.type_id === REFUND_CATEGORY
+      ? "refund"
+      : formData.type_id === LOAN_CATEGORY
+        ? "loan"
+        : null;
+  const refundKind: RefundKind | null =
+    mode === "refund" &&
+    (formData.subtype_id === "refund" || formData.subtype_id === "reimbursement")
+      ? formData.subtype_id
+      : null;
+  const activeLoans = (activeDebtsData || []).filter(
+    (d: any) => d.is_active === 1 || d.status === "active",
+  );
+  const loan =
+    mode === "loan"
+      ? activeLoans.find((d: any) => String(d.id) === formData.subtype_id)
+      : undefined;
+
   const sourceAccount = accountsData?.find(
     (a: any) => a.id === parseInt(formData.account_id || "0"),
   );
@@ -871,8 +944,45 @@ export default function TransactionsPage() {
     destinationAccount &&
     sourceAccount.currency !== destinationAccount.currency;
 
+  // A refund cannot exceed what is left on its expense: said as the
+  // placeholder ("Max €20.00") and checked as soon as an amount is typed.
+  const refundTooMuch =
+    mode === "refund" && refundOf && !editingTransaction
+      ? refundAmountError(
+          Math.abs(parseFloat(formData.amount || "")),
+          refundOf.remaining,
+          refundOf.currency,
+          sourceAccount?.currency,
+        )
+      : null;
+  const amountField = (
+    <FormField
+      label={
+        mode === "refund"
+          ? "Amount received"
+          : mode === "loan"
+            ? "Payment amount"
+            : "Amount"
+      }
+      required
+      error={refundTooMuch || errors.amount?.message}
+    >
+      <Input
+        type="number"
+        step="0.01"
+        {...register("amount")}
+        className={refundTooMuch || errors.amount ? "border-error" : ""}
+        placeholder={
+          refundOf?.remaining != null && !editingTransaction
+            ? refundMaxLabel(refundOf.remaining, refundOf.currency)
+            : "0.00"
+        }
+      />
+    </FormField>
+  );
+
   const handleAutoCategorize = async () => {
-    if (refundOf) return;
+    if (mode) return;
     const recipient = formData.recipient?.trim();
     const description = formData.description?.trim();
 
@@ -909,6 +1019,8 @@ export default function TransactionsPage() {
   };
 
   const onSubmit = (formValues: TransactionFormData) => {
+    if (mode === "loan") return submitLoanPayment(formValues);
+    if (mode === "refund") return submitRefund(formValues);
     const data = {
       account_id: parseInt(formValues.account_id),
       date: formValues.date,
@@ -931,12 +1043,6 @@ export default function TransactionsPage() {
       is_pending: false,
       tags: formValues.tags || null,
       owner_id: selectedFormOwner ? parseInt(selectedFormOwner) : null,
-      debt_id:
-        !editingTransaction && formValues.debt_id
-          ? parseInt(formValues.debt_id)
-          : null,
-      // A refund takes its category from the expense (the server enforces it).
-      refund_of_id: !editingTransaction && refundOf ? refundOf.id : undefined,
     };
 
     if (editingTransaction) {
@@ -944,6 +1050,74 @@ export default function TransactionsPage() {
     } else {
       createMutation.mutate(data);
     }
+  };
+
+  const submitRefund = (formValues: TransactionFormData) => {
+    if (!refundKind) {
+      setError("subtype_id", { message: "Choose refund or reimbursement" });
+      return;
+    }
+    if (!refundOf) {
+      toast.error("Choose the expense being paid back");
+      return;
+    }
+    const amount = Math.abs(parseFloat(formValues.amount));
+    const tooMuch =
+      !editingTransaction &&
+      refundAmountError(
+        amount,
+        refundOf.remaining,
+        refundOf.currency,
+        sourceAccount?.currency,
+      );
+    if (tooMuch) {
+      setError("amount", { message: tooMuch });
+      return;
+    }
+    if (refundKind === "reimbursement" && !formValues.recipient?.trim()) {
+      setError("recipient", { message: "Who reimbursed you?" });
+      return;
+    }
+    const data = {
+      account_id: parseInt(formValues.account_id),
+      date: formValues.date,
+      due_date: null,
+      amount,
+      // The expense's category; the server enforces it anyway.
+      type_id: refundOf.type_id,
+      subtype_id: refundOf.subtype_id ?? null,
+      description: formValues.description || null,
+      destinataire:
+        refundKind === "refund"
+          ? refundOf.destinataire || formValues.recipient || null
+          : formValues.recipient || null,
+      transfer_account_id: null,
+      transfer_amount: null,
+      is_pending: false,
+      tags: formValues.tags || null,
+      owner_id: selectedFormOwner ? parseInt(selectedFormOwner) : null,
+      refund_of_id: editingTransaction ? undefined : refundOf.id,
+    };
+    if (editingTransaction) {
+      updateMutation.mutate({ id: editingTransaction.id, data });
+    } else {
+      createMutation.mutate(data);
+    }
+  };
+
+  const submitLoanPayment = (formValues: TransactionFormData) => {
+    if (!loan) {
+      setError("subtype_id", { message: "Choose the loan" });
+      return;
+    }
+    loanPaymentMutation.mutate({
+      debt_id: loan.id,
+      account_id: parseInt(formValues.account_id),
+      amount: Math.abs(parseFloat(formValues.amount)),
+      payment_date: formValues.date,
+      payment_type: loanPaymentType,
+      notes: formValues.description || null,
+    });
   };
 
   const formatCurrency = (amount: number, currency: string = "EUR") => {
@@ -1791,25 +1965,27 @@ export default function TransactionsPage() {
           </DialogHeader>
           <form onSubmit={handleFormSubmit(onSubmit)}>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
-              {/* Owner Field */}
-              <FormField label="Owner" className="sm:col-span-1">
-                <Select
-                  value={selectedFormOwner}
-                  onValueChange={setSelectedFormOwner}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select owner" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="">None (account's owner)</SelectItem>
-                    {ownersData?.map((owner: any) => (
-                      <SelectItem key={owner.id} value={owner.id.toString()}>
-                        {owner.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
+              {/* Owner Field (a loan payment follows its account) */}
+              {mode !== "loan" && (
+                <FormField label="Owner" className="sm:col-span-1">
+                  <Select
+                    value={selectedFormOwner}
+                    onValueChange={setSelectedFormOwner}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select owner" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">None (account's owner)</SelectItem>
+                      {ownersData?.map((owner: any) => (
+                        <SelectItem key={owner.id} value={owner.id.toString()}>
+                          {owner.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormField>
+              )}
 
               {/* Account Field */}
               <FormField
@@ -1854,61 +2030,146 @@ export default function TransactionsPage() {
               </FormField>
 
               {/* Due Date Field */}
-              <FormField label="Due Date (Optional)">
-                <Input type="date" {...register("due_date")} />
-              </FormField>
+              {!mode && (
+                <FormField label="Due Date (Optional)">
+                  <Input type="date" {...register("due_date")} />
+                </FormField>
+              )}
 
-              {/* Amount Field */}
-              <FormField label="Amount" required error={errors.amount?.message}>
-                <Input
-                  type="number"
-                  step="0.01"
-                  {...register("amount")}
-                  className={errors.amount ? "border-error" : ""}
-                  placeholder="0.00"
+              {/* Amount: after the expense or loan it is for, in those modes */}
+              {!mode && amountField}
+
+              {/* Category Field */}
+              <FormField
+                label="Category"
+                required
+                error={errors.type_id?.message}
+              >
+                <Controller
+                  name="type_id"
+                  control={control}
+                  render={({ field }) => (
+                    <Select
+                      value={field.value}
+                      // A refund keeps its expense's category: not changed here.
+                      disabled={!!editingTransaction?.refund_of}
+                      onValueChange={(value) => {
+                        field.onChange(value);
+                        setValue("subtype_id", ""); // Reset subcategory when category changes
+                        setRefundOf(null);
+                        clearErrors("subtype_id");
+                      }}
+                    >
+                      <SelectTrigger
+                        className={errors.type_id ? "border-error" : ""}
+                      >
+                        <SelectValue placeholder="Select category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {categoriesData?.map((category: any) => (
+                          <SelectItem
+                            key={category.id}
+                            value={category.id.toString()}
+                          >
+                            {category.name}
+                          </SelectItem>
+                        ))}
+                        {(!editingTransaction || editingTransaction.refund_of) && (
+                          <SpecialCategoryItems
+                            loan={!editingTransaction && activeLoans.length > 0}
+                          />
+                        )}
+                      </SelectContent>
+                    </Select>
+                  )}
                 />
               </FormField>
 
-              {/* Refund of an expense: takes the expense's category */}
-              {!isTransfer && (!editingTransaction || refundOf) && (
-                <RefundOfField
-                  key={refundFieldKey}
+              {/* Refund or reimbursement: which one, then the expense */}
+              {mode === "refund" && (
+                <FormField
+                  label="Refund or reimbursement"
+                  required
+                  error={errors.subtype_id?.message}
+                >
+                  <Controller
+                    name="subtype_id"
+                    control={control}
+                    render={({ field }) => (
+                      <Select
+                        value={field.value || ""}
+                        disabled={!!editingTransaction}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          setRefundOf(null);
+                          clearErrors("subtype_id");
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Choose one" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <RefundKindItems />
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                  <div className="mt-1.5">
+                    <RefundExplainer />
+                  </div>
+                </FormField>
+              )}
+              {refundKind && (
+                <RefundExpensePicker
+                  key={refundKind}
+                  kind={refundKind}
                   value={refundOf}
                   onChange={handleRefundOf}
                   editing={!!editingTransaction}
                 />
               )}
+              {refundKind && (refundOf || editingTransaction) && amountField}
 
-              {/* Category Field */}
-              {!refundOf && (
+              {/* Loan payment: which loan, then booked like the Debts page */}
+              {mode === "loan" && (
                 <FormField
-                  label="Category"
+                  label="Loan"
                   required
-                  error={errors.type_id?.message}
+                  error={errors.subtype_id?.message}
                 >
                   <Controller
-                    name="type_id"
+                    name="subtype_id"
                     control={control}
                     render={({ field }) => (
                       <Select
-                        value={field.value}
+                        value={field.value || ""}
                         onValueChange={(value) => {
                           field.onChange(value);
-                          setValue("subtype_id", ""); // Reset subcategory when category changes
+                          clearErrors("subtype_id");
+                          // Paid from the loan's account unless changed.
+                          const picked = activeLoans.find(
+                            (d: any) => String(d.id) === value,
+                          );
+                          if (picked?.linked_account_id)
+                            setValue(
+                              "account_id",
+                              String(picked.linked_account_id),
+                              { shouldValidate: true },
+                            );
                         }}
                       >
-                        <SelectTrigger
-                          className={errors.type_id ? "border-error" : ""}
-                        >
-                          <SelectValue placeholder="Select category" />
+                        <SelectTrigger>
+                          <SelectValue placeholder="Choose the loan" />
                         </SelectTrigger>
                         <SelectContent>
-                          {categoriesData?.map((category: any) => (
-                            <SelectItem
-                              key={category.id}
-                              value={category.id.toString()}
-                            >
-                              {category.name}
+                          {activeLoans.map((debt: any) => (
+                            <SelectItem key={debt.id} value={String(debt.id)}>
+                              {debt.creditor} —{" "}
+                              {formatCurrencyUtil(
+                                debt.current_balance,
+                                debt.currency,
+                              )}{" "}
+                              remaining
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -1917,9 +2178,35 @@ export default function TransactionsPage() {
                   />
                 </FormField>
               )}
+              {loan && amountField}
+              {loan && (
+                <FormField label="Payment type">
+                  <Select
+                    value={loanPaymentType}
+                    onValueChange={(value) =>
+                      setLoanPaymentType(value as "monthly" | "extra")
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="monthly">Monthly payment</SelectItem>
+                      <SelectItem value="extra">Extra payment</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormField>
+              )}
+              {loan && (
+                <p className="sm:col-span-2 text-xs text-foreground-muted">
+                  {loanPaymentType === "monthly"
+                    ? "Booked as on the Debts page: this month's interest as an expense (Debt Interest), the rest as capital repaid (Debt Principal)."
+                    : "An extra payment is all capital repaid (Debt Principal): it lowers the loan and is not an expense."}
+                </p>
+              )}
 
               {/* Subcategory Field */}
-              {formData.type_id && !refundOf && (
+              {formData.type_id && !mode && (
                 <FormField label="Subcategory (Optional)">
                   <Controller
                     name="subtype_id"
@@ -2029,10 +2316,16 @@ export default function TransactionsPage() {
                 </FormField>
               )}
 
-              {/* Recipient Field (non-transfer) */}
-              {!isTransfer && (
+              {/* Recipient Field (non-transfer). A refund comes from the
+                  expense's recipient; a reimbursement from whoever paid it. */}
+              {!isTransfer &&
+                (!mode ||
+                  (refundKind === "reimbursement" &&
+                    (refundOf || editingTransaction))) && (
                 <div className="sm:col-span-2 space-y-1.5">
-                  <Label htmlFor="transaction-recipient">Recipient</Label>
+                  <Label htmlFor="transaction-recipient">
+                    {mode ? "Reimbursed by" : "Recipient"}
+                  </Label>
                   <div className="flex gap-2">
                     <div className="flex-1">
                       <Controller
@@ -2044,35 +2337,46 @@ export default function TransactionsPage() {
                             options={recipientsData || []}
                             value={field.value || ""}
                             onChange={field.onChange}
-                            placeholder="Select or enter recipient"
+                            placeholder={
+                              mode
+                                ? "The insurer, employer… who paid you back"
+                                : "Select or enter recipient"
+                            }
                             freeSolo
                             helperText="Select from previous recipients or enter a new one"
                           />
                         )}
                       />
+                      {errors.recipient && (
+                        <p className="text-xs text-error mt-1">
+                          {errors.recipient.message}
+                        </p>
+                      )}
                     </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleAutoCategorize}
-                      disabled={
-                        !formData.recipient?.trim() ||
-                        autoCategorizingDescription
-                      }
-                      className="shrink-0"
-                    >
-                      <Sparkles className="w-4 h-4 mr-2" />
-                      {autoCategorizingDescription
-                        ? "Analyzing..."
-                        : "Auto-Categorize"}
-                    </Button>
+                    {!mode && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleAutoCategorize}
+                        disabled={
+                          !formData.recipient?.trim() ||
+                          autoCategorizingDescription
+                        }
+                        className="shrink-0"
+                      >
+                        <Sparkles className="w-4 h-4 mr-2" />
+                        {autoCategorizingDescription
+                          ? "Analyzing..."
+                          : "Auto-Categorize"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               )}
 
               {/* Description Field */}
               <FormField
-                label="Description (Optional)"
+                label={mode === "loan" ? "Notes (Optional)" : "Description (Optional)"}
                 htmlFor="transaction-description"
                 className="sm:col-span-2"
               >
@@ -2083,72 +2387,27 @@ export default function TransactionsPage() {
                 />
               </FormField>
 
-              {/* Tags Field */}
-              <div className="sm:col-span-2 space-y-1.5">
-                <Label htmlFor="transaction-tags">Tags (Optional)</Label>
-                <Controller
-                  name="tags"
-                  control={control}
-                  render={({ field }) => (
-                    <Autocomplete
-                      id="transaction-tags"
-                      options={tagsData || []}
-                      value={field.value || ""}
-                      onChange={field.onChange}
-                      placeholder="Select or type tags (comma-separated)"
-                      freeSolo
-                      helperText="E.g., grocery, monthly, vacation"
-                    />
-                  )}
-                />
-              </div>
-
-              {/* Loan Payment Field - only for new non-transfer transactions */}
-              {!editingTransaction &&
-                !isTransfer &&
-                activeDebtsData &&
-                activeDebtsData.length > 0 && (
-                  <FormField
-                    label="Loan Payment (Optional)"
-                    className="sm:col-span-2"
-                  >
-                    <Controller
-                      name="debt_id"
-                      control={control}
-                      render={({ field }) => (
-                        <Select
-                          value={field.value || ""}
-                          onValueChange={field.onChange}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Not a loan payment" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="">Not a loan payment</SelectItem>
-                            {activeDebtsData
-                              .filter(
-                                (d: any) =>
-                                  d.is_active === 1 || d.status === "active",
-                              )
-                              .map((debt: any) => (
-                                <SelectItem
-                                  key={debt.id}
-                                  value={debt.id.toString()}
-                                >
-                                  {debt.creditor} —{" "}
-                                  {formatCurrency(
-                                    debt.current_balance,
-                                    debt.currency,
-                                  )}{" "}
-                                  remaining
-                                </SelectItem>
-                              ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    />
-                  </FormField>
-                )}
+              {/* Tags Field (a loan payment is tagged as the Debts page does) */}
+              {mode !== "loan" && (
+                <div className="sm:col-span-2 space-y-1.5">
+                  <Label htmlFor="transaction-tags">Tags (Optional)</Label>
+                  <Controller
+                    name="tags"
+                    control={control}
+                    render={({ field }) => (
+                      <Autocomplete
+                        id="transaction-tags"
+                        options={tagsData || []}
+                        value={field.value || ""}
+                        onChange={field.onChange}
+                        placeholder="Select or type tags (comma-separated)"
+                        freeSolo
+                        helperText="E.g., grocery, monthly, vacation"
+                      />
+                    )}
+                  />
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button
@@ -2164,8 +2423,12 @@ export default function TransactionsPage() {
               </Button>
               <Button
                 type="submit"
-                disabled={!isValid}
-                loading={createMutation.isPending || updateMutation.isPending}
+                disabled={!isValid || !!refundTooMuch}
+                loading={
+                  createMutation.isPending ||
+                  updateMutation.isPending ||
+                  loanPaymentMutation.isPending
+                }
               >
                 {editingTransaction
                   ? updateMutation.isPending

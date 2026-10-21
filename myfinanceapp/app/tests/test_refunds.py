@@ -248,11 +248,27 @@ def test_the_list_shows_both_sides_of_the_link(api, db, setup):
     assert rows[rid]["refund_of"]["destinataire"] == "Optiker"
 
 
-def test_refundable_expenses_are_searchable_and_exclude_fully_refunded(api, db, setup, monkeypatch):
-    found = api.list_refundable_expenses(q="optik", limit=20, current_user=None)["expenses"]
+def test_a_recipients_expenses_are_proposed_until_fully_refunded(api, db, setup):
+    found = api.list_refundable_expenses(recipient="OPTIKER", limit=20, current_user=None)["expenses"]
     assert [(e["id"], e["remaining"]) for e in found] == [(setup["expense"], 100.0)]
+    assert api.list_refundable_expenses(recipient="Opti", limit=20, current_user=None)["expenses"] == []
     refund(db, setup, 100.0)
-    assert api.list_refundable_expenses(q="optik", limit=20, current_user=None)["expenses"] == []
+    assert api.list_refundable_expenses(recipient="Optiker", limit=20, current_user=None)["expenses"] == []
+
+
+def test_recipients_with_something_left_to_refund(api, db, setup):
+    """Offered for "Expense paid to": once each, until fully refunded."""
+    db.add_transaction({
+        "account_id": setup["card"], "amount": -30.0, "transaction_date": "2026-10-01",
+        "currency": "EUR", "type_id": setup["health"][0], "subtype_id": setup["health"][1],
+        "description": "", "destinataire": "Apotheke"})
+    db.add_transaction({
+        "account_id": setup["card"], "amount": -20.0, "transaction_date": "2026-10-02",
+        "currency": "EUR", "type_id": setup["health"][0], "subtype_id": setup["health"][1],
+        "description": "", "destinataire": "Apotheke"})
+    assert api.list_refund_recipients(current_user=None)["recipients"] == ["Apotheke", "Optiker"]
+    refund(db, setup, 100.0)
+    assert api.list_refund_recipients(current_user=None)["recipients"] == ["Apotheke"]
 
 
 # ── a bug found on the way ───────────────────────────────────────────────────
