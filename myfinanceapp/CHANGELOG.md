@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.11.0
+
+**Spending Trends: what changed, and whether it is a real change**
+- Only **complete months** are compared. The month in progress is shown as "October 2026 so far", lighter in the chart, and is not compared (it used to make almost every category look like it was falling mid-month)
+- Three figures at the top: the **usual month** (median of the complete months before the last one, so one holiday or yearly bill does not shift it), the **last complete month** with its difference, and the month so far
+- **Spending per month:** stacked bars with the period's 6 biggest categories plus "Other", so each bar is the month's total. Amounts on the axis are readable (no more "0k"). With a category filter, the bars split by subcategory
+- **What changed** replaces the cards that set the first month against the last: one row per category with the usual month, the last month, the difference in € and %, and a small line of its months, sorted by the difference in money (not by percentage)
+- Each row says what kind of change it is: **Above / Below usual** (more than 20% and €10 away), **Rising / Falling** (the last 3 months all above / below the 3 before), **Occasional** (spent in half of the months or fewer, such as yearly bills), **New**, or **As usual**. The labels are explained under the table
+- Clicking a row opens its transactions for the period
+- Filtering by category no longer lists every other category as "stable 0%"
+- The Spending Distribution chart is now below the table
+
 ## 2.10.1
 
 **A subcategory is required**

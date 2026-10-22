@@ -553,6 +553,94 @@ def tag_report(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tag report failed: {str(e)}")
 
+# Spending trends: what changed, and whether it is a real change. The last
+# complete month is compared with the usual month (the median of the ones
+# before it).
+TREND_SERIES = 6          # groups drawn in the chart; the rest become "Other"
+UNUSUAL_SHARE = 0.20      # last month this far from the usual month...
+UNUSUAL_MINIMUM = 10.0    # ...and by at least this much: above/below usual
+STREAK_MONTHS = 3         # rising/falling: these months all above/below the ones before
+
+
+def _median(values: List[float]) -> float:
+    """The middle value: one exceptional month does not move it."""
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if not ordered:
+        return 0.0
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _change_label(monthly: List[float], usual: float, difference: float) -> str:
+    """What kind of change a group's last complete month is.
+
+    new        nothing spent in any of the months before
+    occasional spent in half of the months or fewer (yearly bills, a bill
+               every other month...), so a difference is not a trend
+    rising /   the last 3 months all above / below the 3 before them
+    falling
+    above /    last month more than 20% and 10 away from the usual month
+    below
+    usual      none of these
+    """
+    spent_months = sum(1 for v in monthly if v > 0.005)
+    if all(v <= 0.005 for v in monthly[:-1]):
+        return 'new'
+    if spent_months * 2 <= len(monthly):
+        return 'occasional'
+    if len(monthly) >= 2 * STREAK_MONTHS:
+        recent = monthly[-STREAK_MONTHS:]
+        before = monthly[-2 * STREAK_MONTHS:-STREAK_MONTHS]
+        if min(recent) > max(before):
+            return 'rising'
+        if max(recent) < min(before):
+            return 'falling'
+    if abs(difference) >= UNUSUAL_MINIMUM and abs(difference) > UNUSUAL_SHARE * usual:
+        return 'above' if difference > 0 else 'below'
+    return 'usual'
+
+
+def _spending_changes(complete: List[Dict[str, float]]) -> Optional[Dict[str, Any]]:
+    """Compare the last complete month with the usual month.
+
+    `complete` holds the complete months of the period, oldest first, each
+    mapping a group (a category, or a subcategory under a category filter) to
+    what was spent. The usual month is the median of the months before the
+    last one, so a single holiday or yearly bill does not shift it. Changes are sorted by the size of the difference in money, so
+    the moves that matter come first. None below two complete months.
+    """
+    if len(complete) < 2:
+        return None
+    totals = [sum(m.values()) for m in complete]
+    usual_total = _median(totals[:-1])
+    summary = {
+        'usual': round(usual_total, 2),
+        'usual_months': len(complete) - 1,
+        'last': round(totals[-1], 2),
+        'difference': round(totals[-1] - usual_total, 2),
+        'difference_percent': round((totals[-1] - usual_total) / usual_total * 100, 1)
+        if usual_total > 0.005 else None,
+    }
+    changes = []
+    for group in sorted({g for m in complete for g in m}):
+        monthly = [m.get(group, 0.0) for m in complete]
+        if all(abs(v) <= 0.005 for v in monthly):
+            continue
+        usual = _median(monthly[:-1])
+        difference = monthly[-1] - usual
+        changes.append({
+            'name': group,
+            'usual': round(usual, 2),
+            'last': round(monthly[-1], 2),
+            'difference': round(difference, 2),
+            'difference_percent': round(difference / usual * 100, 1) if usual > 0.005 else None,
+            'monthly': [round(v, 2) for v in monthly],
+            'label': _change_label(monthly, usual, difference),
+        })
+    changes.sort(key=lambda c: -abs(c['difference']))
+    return {'summary': summary, 'changes': changes}
+
+
 @router.get("/spending-trends")
 def spending_trends(
     months: int = 6,
@@ -562,17 +650,18 @@ def spending_trends(
     end_date: Optional[str] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """Get spending trends by category over time in user's preferred currency.
+    """Spending per month over a period, and what changed in it.
 
     Covers the last `months` months, or an explicit start_date/end_date range
-    (the "Custom Range" option on the Reports page).
+    (the "Custom Range" option on the Reports page). Spending is grouped by
+    category, or by subcategory when `category` is given. Only complete months
+    are compared: the month in progress (or one the range cuts) is shown, not
+    analysed.
     """
     try:
-        # Get user's preferred display currency
         display_currency = db.get_preference('display_currency', 'EUR')
-
         range_start, range_end = _resolve_period(months, start_date, end_date)
-        trends = []
+        today = datetime.now().date()
 
         # Categories/subcategories seen across the whole period
         categories_set = set()
@@ -590,11 +679,16 @@ def spending_trends(
                 filters['owner_id'] = owner_id
             transactions = db.get_transactions(filters=filters)
 
+            month_end = month_start + relativedelta(months=1) - timedelta(days=1)
             month_data = {
                 "month": month_start.strftime('%B %Y'),
                 "date": month_start.strftime('%Y-%m'),
+                # The whole calendar month is in the range, and it is over.
+                "complete": period_start.date() == month_start.date()
+                and period_end.date() >= month_end.date() and month_end.date() < today,
                 "categories": {},
-                "subcategories": {}
+                "subcategories": {},
+                "groups": {},
             }
 
             total_expenses = 0
@@ -616,6 +710,8 @@ def spending_trends(
                     month_data["categories"][cat] = month_data["categories"].get(cat, 0) + converted_amount
                     month_subcats = month_data["subcategories"].setdefault(cat, {})
                     month_subcats[subcat] = month_subcats.get(subcat, 0) + converted_amount
+                    group = subcat if category else cat
+                    month_data["groups"][group] = month_data["groups"].get(group, 0) + converted_amount
                     total_expenses += converted_amount
 
                 # Calculate income
@@ -627,31 +723,29 @@ def spending_trends(
             month_data["total_income"] = total_income
             return month_data
 
-        for month_start, window_start, window_end in _month_windows(range_start, range_end):
-            trends.append(build_month(month_start, window_start, window_end))
+        trends = [build_month(*window) for window in _month_windows(range_start, range_end)]
 
-        # Calculate trend direction (increasing/decreasing) for each category
-        trend_analysis = {}
-        if len(trends) >= 2:
-            # Compare last month to first month
-            first_month = trends[0]["categories"]
-            last_month = trends[-1]["categories"]
+        # The chart draws the biggest groups of the period; the rest is "Other".
+        totals: Dict[str, float] = {}
+        for month in trends:
+            for group, amount in month["groups"].items():
+                totals[group] = totals.get(group, 0) + amount
+        ranked = sorted(totals, key=lambda g: -totals[g])
+        series = ranked[:TREND_SERIES]
+        other = (f"Other {'subcategories' if category else 'categories'}"
+                 if len(ranked) > TREND_SERIES else None)
+        for month in trends:
+            month["series"] = {g: round(month["groups"].get(g, 0), 2) for g in series}
+            if other:
+                month["series"][other] = round(sum(
+                    v for g, v in month["groups"].items() if g not in series), 2)
 
-            for cat in categories_set:
-                first_val = first_month.get(cat, 0)
-                last_val = last_month.get(cat, 0)
-
-                if first_val == 0:
-                    change = 100 if last_val > 0 else 0
-                else:
-                    change = ((last_val - first_val) / first_val) * 100
-
-                trend_analysis[cat] = {
-                    "change_percent": round(change, 1),
-                    "direction": "increasing" if change > 5 else ("decreasing" if change < -5 else "stable"),
-                    "first_month_value": first_val,
-                    "last_month_value": last_val
-                }
+        complete = [m for m in trends if m["complete"]]
+        analysis = _spending_changes([m["groups"] for m in complete])
+        if analysis:
+            analysis["summary"]["last_month"] = complete[-1]["month"]
+            analysis["summary"]["usual_from"] = complete[0]["month"]
+            analysis["summary"]["usual_to"] = complete[-2]["month"]
 
         return {
             "months": months,
@@ -659,11 +753,12 @@ def spending_trends(
             "end_date": range_end.strftime('%Y-%m-%d'),
             "category_filter": category,
             "trends": trends,
+            "series": series + ([other] if other else []),
             "all_categories": sorted(list(categories_set)),
             "all_subcategories": {
                 cat: sorted(subs) for cat, subs in subcategories_map.items()
             },
-            "trend_analysis": trend_analysis,
+            "analysis": analysis,
             "currency": display_currency
         }
     except Exception as e:

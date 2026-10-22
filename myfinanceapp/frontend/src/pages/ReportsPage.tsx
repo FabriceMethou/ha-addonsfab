@@ -199,6 +199,57 @@ const SUBCATEGORY_COLORS = [
   "#84cc16",
 ];
 
+// ── Spending trends ──────────────────────────────────────────────────────────
+
+/** What kind of change a category's last complete month is (see the API). */
+const CHANGE_LABELS: Record<
+  string,
+  { text: string; variant: "error" | "success" | "warning" | "outline" }
+> = {
+  above: { text: "Above usual", variant: "error" },
+  below: { text: "Below usual", variant: "success" },
+  rising: { text: "Rising", variant: "error" },
+  falling: { text: "Falling", variant: "success" },
+  new: { text: "New", variant: "warning" },
+  occasional: { text: "Occasional", variant: "outline" },
+  usual: { text: "As usual", variant: "outline" },
+};
+
+/** "Oct 26", with "(so far)" for the month in progress. */
+function trendMonthLabel(month: { date: string; complete: boolean }) {
+  const label = format(new Date(`${month.date}-01T00:00:00`), "MMM yy");
+  if (month.complete) return label;
+  return month.date === format(new Date(), "yyyy-MM")
+    ? `${label} (so far)`
+    : `${label} (part)`;
+}
+
+/** The months of a category as a small line, last month marked. */
+function Sparkline({ values }: { values: number[] }) {
+  const width = 80;
+  const height = 24;
+  const max = Math.max(...values, 0);
+  const min = Math.min(...values, 0);
+  const span = max - min || 1;
+  const points = values.map((v, i) => [
+    values.length > 1 ? (i / (values.length - 1)) * (width - 4) + 2 : width / 2,
+    height - 2 - ((v - min) / span) * (height - 4),
+  ]);
+  const [lastX, lastY] = points[points.length - 1] || [0, 0];
+  return (
+    <svg width={width} height={height} aria-hidden="true" className="text-primary">
+      <polyline
+        points={points.map((p) => p.join(",")).join(" ")}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+      />
+      <circle cx={lastX} cy={lastY} r={2.5} fill="currentColor" />
+    </svg>
+  );
+}
+
 // Category/subcategory breakdowns come back from the API as
 // [{ category, <amountKey>, subcategories: [{ category, <amountKey> }] }]
 function toSunburstSlices(
@@ -780,14 +831,20 @@ export default function ReportsPage() {
       .filter((slice: SunburstSlice) => slice.value > 0);
   }, [spendingTrendsData]);
 
-  // Memoize sorted trend analysis for spending trends tab
-  const sortedTrendAnalysis = useMemo(() => {
-    if (!spendingTrendsData?.trend_analysis) return [];
-    return Object.entries(spendingTrendsData.trend_analysis).sort(
-      (a: any, b: any) =>
-        Math.abs(b[1].change_percent) - Math.abs(a[1].change_percent),
-    );
-  }, [spendingTrendsData]);
+  // Spending trends: one chart row per month, its top categories stacked
+  const trendChartRows = useMemo(
+    () =>
+      (spendingTrendsData?.trends || []).map((month: any) => ({
+        label: trendMonthLabel(month),
+        complete: month.complete,
+        ...month.series,
+      })),
+    [spendingTrendsData],
+  );
+  const trendInProgress = (spendingTrendsData?.trends || []).find(
+    (month: any) =>
+      !month.complete && month.date === format(new Date(), "yyyy-MM"),
+  );
 
   // Memoize monthly summary sunburst data (top categories with subcategories)
   const monthlySummarySlices = useMemo(
@@ -1443,6 +1500,256 @@ export default function ReportsPage() {
               </div>
             ) : spendingTrendsData ? (
               <>
+                {/* Usual month, last complete month, month in progress */}
+                {spendingTrendsData.analysis ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <Card className="p-5 rounded-xl border border-border bg-card/50">
+                      <p className="text-sm text-foreground-muted">Usual month</p>
+                      <p className="text-2xl font-bold text-foreground mt-1">
+                        {formatCurrency(spendingTrendsData.analysis.summary.usual)}
+                      </p>
+                      <p className="text-xs text-foreground-muted mt-1">
+                        Median of{" "}
+                        {spendingTrendsData.analysis.summary.usual_months === 1
+                          ? spendingTrendsData.analysis.summary.usual_from
+                          : `${spendingTrendsData.analysis.summary.usual_from} – ${spendingTrendsData.analysis.summary.usual_to}`}
+                      </p>
+                    </Card>
+                    <Card className="p-5 rounded-xl border border-border bg-card/50">
+                      <p className="text-sm text-foreground-muted">
+                        {spendingTrendsData.analysis.summary.last_month}
+                      </p>
+                      <p className="text-2xl font-bold text-foreground mt-1">
+                        {formatCurrency(spendingTrendsData.analysis.summary.last)}
+                      </p>
+                      <p
+                        className={`text-xs mt-1 ${
+                          spendingTrendsData.analysis.summary.difference > 0
+                            ? "text-error"
+                            : "text-success"
+                        }`}
+                      >
+                        {spendingTrendsData.analysis.summary.difference > 0
+                          ? "+"
+                          : spendingTrendsData.analysis.summary.difference < 0
+                            ? "−"
+                            : ""}
+                        {formatCurrency(
+                          Math.abs(spendingTrendsData.analysis.summary.difference),
+                        )}
+                        {spendingTrendsData.analysis.summary.difference_percent != null &&
+                          ` (${spendingTrendsData.analysis.summary.difference_percent > 0 ? "+" : ""}${spendingTrendsData.analysis.summary.difference_percent}%)`}{" "}
+                        <span className="text-foreground-muted">vs usual month</span>
+                      </p>
+                    </Card>
+                    <Card className="p-5 rounded-xl border border-border bg-card/50">
+                      <p className="text-sm text-foreground-muted">
+                        {trendInProgress
+                          ? `${trendInProgress.month} so far`
+                          : "Month in progress"}
+                      </p>
+                      <p className="text-2xl font-bold text-foreground mt-1">
+                        {trendInProgress
+                          ? formatCurrency(trendInProgress.total_expenses)
+                          : "—"}
+                      </p>
+                      <p className="text-xs text-foreground-muted mt-1">
+                        Not finished, so not compared
+                      </p>
+                    </Card>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-lg bg-primary/10 border border-primary/20 text-sm text-foreground-muted">
+                    Comparing needs at least two complete months: choose a
+                    longer period.
+                  </div>
+                )}
+
+                {/* Spending per month, top categories stacked */}
+                <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
+                    <h3 className="text-lg font-semibold text-foreground">
+                      Spending per month
+                    </h3>
+                    <span className="text-xs text-foreground-muted">
+                      {trendCategory
+                        ? `${trendCategory}, by subcategory`
+                        : "Biggest categories of the period"}
+                      ; a lighter bar is a month not finished
+                    </span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={360}>
+                    <BarChart data={trendChartRows}>
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke="#2a2a2a"
+                        opacity={0.2}
+                        horizontal={true}
+                        vertical={false}
+                      />
+                      <XAxis
+                        dataKey="label"
+                        stroke="#888888"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        stroke="#888888"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(value) =>
+                          Math.abs(value) >= 1000
+                            ? `${(value / 1000).toFixed(1)}k`
+                            : `${Math.round(value)}`
+                        }
+                      />
+                      <Tooltip
+                        cursor={false}
+                        contentStyle={{
+                          backgroundColor: "#0a0a0a",
+                          border: "1px solid #2a2a2a",
+                          borderRadius: "8px",
+                          fontSize: "12px",
+                        }}
+                        labelStyle={{ color: "#888888" }}
+                        itemStyle={{ color: "#e5e5e5" }}
+                        formatter={(value: any) => formatCurrency(value)}
+                      />
+                      <Legend
+                        iconType="circle"
+                        wrapperStyle={{ paddingTop: "10px", fontSize: "12px" }}
+                      />
+                      {(spendingTrendsData.series || []).map(
+                        (name: string, idx: number) => (
+                          <Bar
+                            key={name}
+                            dataKey={name}
+                            stackId="spending"
+                            fill={
+                              name.startsWith("Other ")
+                                ? "#6b7280"
+                                : SUBCATEGORY_COLORS[idx % SUBCATEGORY_COLORS.length]
+                            }
+                          >
+                            {trendChartRows.map((row: any, i: number) => (
+                              <Cell
+                                key={i}
+                                fillOpacity={row.complete ? 1 : 0.35}
+                              />
+                            ))}
+                          </Bar>
+                        ),
+                      )}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </Card>
+
+                {/* What changed: last complete month against the usual month */}
+                {spendingTrendsData.analysis &&
+                  spendingTrendsData.analysis.changes.length > 0 && (
+                    <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+                      <h3 className="text-lg font-semibold text-foreground">
+                        What changed
+                      </h3>
+                      <p className="text-xs text-foreground-muted mt-1 mb-4">
+                        {spendingTrendsData.analysis.summary.last_month} against
+                        the usual month, biggest differences first. Click a row
+                        for its transactions.
+                      </p>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>
+                              {trendCategory ? "Subcategory" : "Category"}
+                            </TableHead>
+                            <TableHead className="text-right">Usual</TableHead>
+                            <TableHead className="text-right">
+                              {spendingTrendsData.analysis.summary.last_month}
+                            </TableHead>
+                            <TableHead className="text-right">Change</TableHead>
+                            <TableHead className="hidden md:table-cell">
+                              Months
+                            </TableHead>
+                            <TableHead />
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {spendingTrendsData.analysis.changes.map((change: any) => {
+                            const label =
+                              CHANGE_LABELS[change.label] || CHANGE_LABELS.usual;
+                            return (
+                              <TableRow
+                                key={change.name}
+                                className="cursor-pointer hover:bg-surface-hover"
+                                onClick={() =>
+                                  navigateToTransactions({
+                                    start_date: spendingTrendsData.start_date,
+                                    end_date: spendingTrendsData.end_date,
+                                    category_name: trendCategory || change.name,
+                                    subcategory_name: trendCategory
+                                      ? change.name
+                                      : undefined,
+                                  })
+                                }
+                              >
+                                <TableCell className="font-medium text-foreground">
+                                  {change.name}
+                                </TableCell>
+                                <TableCell className="text-right text-foreground-muted">
+                                  {formatCurrency(change.usual)}
+                                </TableCell>
+                                <TableCell className="text-right text-foreground">
+                                  {formatCurrency(change.last)}
+                                </TableCell>
+                                <TableCell
+                                  className={`text-right font-medium ${
+                                    Math.abs(change.difference) < 0.005
+                                      ? "text-foreground-muted"
+                                      : change.difference > 0
+                                        ? "text-error"
+                                        : "text-success"
+                                  }`}
+                                >
+                                  {change.difference > 0 ? "+" : change.difference < 0 ? "−" : ""}
+                                  {formatCurrency(Math.abs(change.difference))}
+                                  {change.difference_percent != null && (
+                                    <span className="text-xs font-normal ml-1">
+                                      ({change.difference_percent > 0 ? "+" : ""}
+                                      {change.difference_percent}%)
+                                    </span>
+                                  )}
+                                </TableCell>
+                                <TableCell className="hidden md:table-cell">
+                                  <Sparkline values={change.monthly} />
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant={label.variant} size="sm">
+                                    {label.text}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                      <p className="text-xs text-foreground-muted mt-4 leading-relaxed">
+                        <span className="text-foreground">Usual</span>: the
+                        median of the complete months before, so one holiday or
+                        yearly bill does not shift it.{" "}
+                        <span className="text-foreground">Above / Below usual</span>:
+                        more than 20% and {formatCurrency(10)} away from it.{" "}
+                        <span className="text-foreground">Rising / Falling</span>:
+                        the last 3 months all above / below the 3 before.{" "}
+                        <span className="text-foreground">Occasional</span>:
+                        spent in half of the months or fewer, so a difference is
+                        not a trend. <span className="text-foreground">New</span>:
+                        nothing spent in the months before.
+                      </p>
+                    </Card>
+                  )}
+
                 {/* Spending Breakdown Sunburst */}
                 {trendSlices.length > 0 && (
                   <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
@@ -1471,251 +1778,6 @@ export default function ReportsPage() {
                   </Card>
                 )}
 
-                {/* Spending Trends Area Chart */}
-                <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-                  <h3 className="text-lg font-semibold text-foreground mb-4">
-                    Spending Trends by Category
-                  </h3>
-                  <ResponsiveContainer width="100%" height={400}>
-                    <AreaChart data={spendingTrendsData.trends}>
-                      <defs>
-                        {spendingTrendsData.all_categories
-                          .slice(0, 8)
-                          .map((cat: string, idx: number) => {
-                            const colors = [
-                              "#ef4444",
-                              "#f59e0b",
-                              "#10b981",
-                              "#3b82f6",
-                              "#8b5cf6",
-                              "#ec4899",
-                              "#06b6d4",
-                              "#84cc16",
-                            ];
-                            const color = colors[idx % colors.length];
-                            return (
-                              <linearGradient
-                                key={`gradient-${cat}`}
-                                id={`gradient-${cat.replace(/\s+/g, "-")}`}
-                                x1="0"
-                                y1="0"
-                                x2="0"
-                                y2="1"
-                              >
-                                <stop
-                                  offset="5%"
-                                  stopColor={color}
-                                  stopOpacity={0.4}
-                                />
-                                <stop
-                                  offset="95%"
-                                  stopColor={color}
-                                  stopOpacity={0}
-                                />
-                              </linearGradient>
-                            );
-                          })}
-                      </defs>
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke="#2a2a2a"
-                        opacity={0.2}
-                        horizontal={true}
-                        vertical={false}
-                      />
-                      <XAxis
-                        dataKey="month"
-                        stroke="#888888"
-                        fontSize={12}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <YAxis
-                        stroke="#888888"
-                        fontSize={12}
-                        tickLine={false}
-                        axisLine={false}
-                        tickFormatter={(value) =>
-                          `${(value / 1000).toFixed(0)}k`
-                        }
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "#0a0a0a",
-                          border: "1px solid #2a2a2a",
-                          borderRadius: "8px",
-                          fontSize: "12px",
-                        }}
-                        labelStyle={{ color: "#888888" }}
-                        itemStyle={{ color: "#e5e5e5" }}
-                        formatter={(value: any) => formatCurrency(value)}
-                      />
-                      <Legend
-                        iconType="circle"
-                        wrapperStyle={{ paddingTop: "10px" }}
-                      />
-                      {spendingTrendsData.all_categories
-                        .slice(0, 8)
-                        .map((cat: string, idx: number) => {
-                          const colors = [
-                            "#ef4444",
-                            "#f59e0b",
-                            "#10b981",
-                            "#3b82f6",
-                            "#8b5cf6",
-                            "#ec4899",
-                            "#06b6d4",
-                            "#84cc16",
-                          ];
-                          const color = colors[idx % colors.length];
-                          return (
-                            <Area
-                              key={cat}
-                              type="monotone"
-                              dataKey={`categories.${cat}`}
-                              stroke={color}
-                              strokeWidth={2}
-                              fill={`url(#gradient-${cat.replace(/\s+/g, "-")})`}
-                              name={cat}
-                            />
-                          );
-                        })}
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </Card>
-
-                {/* Trend Analysis */}
-                {spendingTrendsData.trend_analysis &&
-                  Object.keys(spendingTrendsData.trend_analysis).length > 0 && (
-                    <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
-                      <h3 className="text-lg font-semibold text-foreground mb-6">
-                        Trend Analysis
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {sortedTrendAnalysis.map(
-                          ([cat, analysis]: [string, any]) => {
-                            const isIncreasing = analysis.change_percent > 5;
-                            const isDecreasing = analysis.change_percent < -5;
-
-                            return (
-                              <Card
-                                key={cat}
-                                className="relative overflow-hidden p-5 rounded-xl bg-card border border-border hover:bg-surface-hover transition-all duration-200 hover:shadow-lg"
-                              >
-                                {/* Background gradient effect */}
-                                <div
-                                  className={`absolute top-0 right-0 w-24 h-24 ${
-                                    isIncreasing
-                                      ? "bg-error"
-                                      : isDecreasing
-                                        ? "bg-success"
-                                        : "bg-foreground-muted"
-                                  } opacity-5 blur-3xl rounded-full`}
-                                />
-
-                                <div className="relative">
-                                  {/* Header with category name and trend badge */}
-                                  <div className="flex items-start justify-between mb-4">
-                                    <h4 className="font-semibold text-foreground text-base leading-tight pr-2">
-                                      {cat}
-                                    </h4>
-                                    <Badge
-                                      variant={
-                                        isIncreasing
-                                          ? "error"
-                                          : isDecreasing
-                                            ? "success"
-                                            : "outline"
-                                      }
-                                      size="sm"
-                                      className="flex items-center gap-1 shrink-0"
-                                    >
-                                      {isIncreasing ? (
-                                        <TrendingUp className="w-3 h-3" />
-                                      ) : isDecreasing ? (
-                                        <TrendingDown className="w-3 h-3" />
-                                      ) : (
-                                        <span className="w-3 h-3 flex items-center justify-center text-xs">
-                                          −
-                                        </span>
-                                      )}
-                                      {analysis.direction}
-                                    </Badge>
-                                  </div>
-
-                                  {/* Values comparison */}
-                                  <div className="space-y-3 mb-4">
-                                    <div className="flex items-center justify-between text-sm">
-                                      <span className="text-foreground-muted">
-                                        First Month
-                                      </span>
-                                      <span className="font-medium text-foreground">
-                                        {formatCurrency(
-                                          analysis.first_month_value,
-                                        )}
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center justify-between text-sm">
-                                      <span className="text-foreground-muted">
-                                        Last Month
-                                      </span>
-                                      <span className="font-medium text-foreground">
-                                        {formatCurrency(
-                                          analysis.last_month_value,
-                                        )}
-                                      </span>
-                                    </div>
-                                  </div>
-
-                                  {/* Change indicator */}
-                                  <div
-                                    className={`flex items-center gap-2 p-3 rounded-lg ${
-                                      isIncreasing
-                                        ? "bg-error/10"
-                                        : isDecreasing
-                                          ? "bg-success/10"
-                                          : "bg-foreground-muted/10"
-                                    }`}
-                                  >
-                                    {isIncreasing ? (
-                                      <TrendingUp className="w-5 h-5 text-error" />
-                                    ) : isDecreasing ? (
-                                      <TrendingDown className="w-5 h-5 text-success" />
-                                    ) : (
-                                      <div className="w-5 h-5 flex items-center justify-center">
-                                        <div className="w-3 h-0.5 bg-foreground-muted rounded" />
-                                      </div>
-                                    )}
-                                    <div className="flex-1">
-                                      <div
-                                        className={`text-lg font-bold ${
-                                          isIncreasing
-                                            ? "text-error"
-                                            : isDecreasing
-                                              ? "text-success"
-                                              : "text-foreground-muted"
-                                        }`}
-                                      >
-                                        {analysis.change_percent > 0 ? "+" : ""}
-                                        {analysis.change_percent}%
-                                      </div>
-                                      <div className="text-xs text-foreground-muted">
-                                        {isIncreasing
-                                          ? "spending increased"
-                                          : isDecreasing
-                                            ? "spending decreased"
-                                            : "spending stable"}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </Card>
-                            );
-                          },
-                        )}
-                      </div>
-                    </Card>
-                  )}
               </>
             ) : (
               <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
