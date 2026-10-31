@@ -60,10 +60,10 @@
 
 **Data check** (Backup page, new tab)
 - Shows what no longer agrees in your data and repairs it in one click, without a shell. Each repair takes a backup first
-- **Balances that disagree with their transactions:** rebuilds them, and clears the "before the account opened" flag from rows dated after it. Compare with your bank first: the numbers it would use are shown
+- **Balances that disagree with their transactions:** rebuilds them, and clears the "before the account opened" flag from rows dated after it. Compare with your bank first: the numbers it would use are shown. The Recalculate Balances button on the Accounts page leaves flagged rows out, so it cannot make such a change on its own
 - **Old loan payments counted as spending:** files them as interest and capital, so only the interest is spending
 - **Old sales counted as income:** files them as capital and gain, so only the gain is income
-- **Refunds on the wrong owner** and **rows pointing at deleted records**
+- **Refunds on the wrong owner** and **rows pointing at deleted records**. Only rows carrying no money or position are deleted; a transaction or trade with a missing link is listed for you instead
 - What only you can judge, such as a trade whose ledger row has another date, is listed but not changed
 
 **Loan payments as one unit**

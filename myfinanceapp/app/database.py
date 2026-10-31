@@ -169,6 +169,14 @@ _LEDGER_BALANCE = """ROUND(COALESCE(a.opening_balance, 0)
            OR t.transaction_date >= a.opening_date)
 ), 0), 2)"""
 
+#: The ledger balance as a rebuild leaves it: rows flagged historical do not count.
+_REBUILT_BALANCE = _LEDGER_BALANCE.replace("""    WHERE t.account_id = a.id
+      AND t.confirmed = 1
+""", """    WHERE t.account_id = a.id
+      AND t.confirmed = 1
+      AND COALESCE(t.is_historical, 0) = 0
+""")
+
 #: A transaction `t` whose payee is a recipient someone typed. Transfers are out
 #: too: their payee is one of your own account names.
 _PAYEE_ROW = f"""(
@@ -2000,9 +2008,11 @@ class FinanceDatabase:
             # The ledger is the authority, to the cent. Replaying it rounds at every
             # step, which leaves old rows holding fractions of a cent a few cents
             # away from their own total.
+            # Flagged rows stay out, as in the replay: re-counting them changes a
+            # balance by whole amounts, which only the Data check repair may do.
             cursor.execute(f"""
                 UPDATE accounts SET balance = (
-                    SELECT {_LEDGER_BALANCE} FROM accounts a WHERE a.id = accounts.id)
+                    SELECT {_REBUILT_BALANCE} FROM accounts a WHERE a.id = accounts.id)
                  WHERE account_type != 'investment'
                     OR id IN ({_HOLDINGLESS_INVESTMENT_ACCOUNTS})
             """)
@@ -5051,7 +5061,8 @@ class FinanceDatabase:
             parts.append('interest')
         return {part: self.get_or_create_debt_category(debt['name'], payment_type, part) for part in parts}
 
-    def _debt_payment_account(self, cursor, debt: Dict[str, Any], account_id: Optional[int]) -> int:
+    def _debt_payment_account(self, cursor, debt: Dict[str, Any], account_id: Optional[int],
+                              check_currency: bool = True) -> int:
         """The account a payment comes from, by default the one linked to the debt."""
         chosen = account_id or debt.get('linked_account_id')
         if not chosen:
@@ -5060,7 +5071,7 @@ class FinanceDatabase:
         if not account:
             raise ValueError("Account not found")
         currency = debt.get('currency') or 'EUR'
-        if account_id and account['currency'] != currency:
+        if check_currency and account_id and account['currency'] != currency:
             raise ValueError(f"This loan is in {currency}: pay it from a {currency} account")
         return chosen
 
@@ -5069,7 +5080,8 @@ class FinanceDatabase:
         """Ledger rows, payment record and loan balance, on the caller's transaction."""
         cursor = conn.cursor()
         debt = dict(cursor.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone())
-        account_id = self._debt_payment_account(cursor, debt, data.get('account_id'))
+        account_id = self._debt_payment_account(cursor, debt, data.get('account_id'),
+                                                check_currency=not data.get('same_account'))
         payment_type = data.get('payment_type') or 'regular'
         is_extra = payment_type == 'extra'
         interest, capital = self._split_debt_payment(
@@ -5173,13 +5185,20 @@ class FinanceDatabase:
             row_id = payment.get('transaction_id') or payment.get('principal_transaction_id')
             row = conn.execute("SELECT account_id FROM transactions WHERE id = ?", (row_id,)).fetchone()
 
+        # Recording it again would debit cash that nothing says has left.
+        if not row:
+            raise ValueError("This payment has no ledger rows to correct. Delete it and record it again")
+
         debt = self.get_debt(payment['debt_id'])
         data = {
             'amount': changes.get('amount') or payment['amount'],
             'payment_date': changes.get('payment_date') or payment['payment_date'],
             'payment_type': changes.get('payment_type')
             or ('extra' if payment.get('extra_payment') else 'regular'),
-            'account_id': changes.get('account_id') or (row['account_id'] if row else None),
+            'account_id': changes.get('account_id') or row['account_id'],
+            # A payment that stays where it is may already differ from the loan's
+            # currency: its default account is never checked either.
+            'same_account': changes.get('account_id') in (None, row['account_id']),
             'notes': changes['notes'] if 'notes' in changes else payment.get('notes'),
         }
         categories = self._debt_payment_categories(debt, data['payment_type'])

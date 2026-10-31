@@ -886,20 +886,22 @@ def _run_price_update(holdings, request_delay):
 
 
 def refresh_all_prices_now() -> None:
-    """The daily refresh: every quote, on the caller's thread. Raises when Yahoo
-    answered for nothing at all, so the day is not counted as done."""
+    """The daily refresh: every quote, on the caller's thread. Raises when it did not
+    really run, or Yahoo answered for nothing, so the day is not counted as done."""
     holdings = db.get_investment_holdings()
     if not holdings:
         return
     with _price_update_lock:
         if _price_update_state["running"]:
-            return
+            raise RuntimeError("a price update is already running")
         _price_update_state.update({
             "running": True, "started_at": datetime.now().isoformat(), "finished_at": None,
             "total": len(holdings), "processed": 0, "updated_count": 0,
             "failed": [], "skipped": [], "error": None,
         })
     _run_price_update(holdings, float(os.getenv("PRICE_UPDATE_DELAY_SECONDS", "0.3")))
+    if _price_update_state["error"]:
+        raise RuntimeError(_price_update_state["error"])
     if not _price_update_state["updated_count"] and _price_update_state["failed"]:
         raise RuntimeError(f"no quote received for {len(_price_update_state['failed'])} holding(s)")
 

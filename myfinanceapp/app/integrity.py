@@ -294,10 +294,31 @@ def repair_refund_owners(db) -> int:
     return len(refunds)
 
 
-def _dead_rows(db) -> List[Any]:
+#: Tables whose rows carry no money and no position, so can go when their parent has.
+_DISPOSABLE_TABLES = {'login_history', 'balance_validations'}
+
+
+def _split_dead_rows(conn, rows):
+    """(safe to delete, for the owner to look at). A ledger row or a position still
+    means something with a link missing, and deleting it would move the numbers."""
+    no_holding = {rowid for table, rowid, parent, _fk in rows
+                  if table == 'investment_transactions' and parent == 'investment_holdings'}
+    safe, kept = [], []
+    for row in rows:
+        table, rowid = row[0], row[1]
+        unused_subtype = table == 'transaction_subtypes' and not conn.execute(
+            "SELECT 1 FROM transactions WHERE subtype_id = ? LIMIT 1", (rowid,)).fetchone()
+        if table in _DISPOSABLE_TABLES or unused_subtype or rowid in no_holding:
+            safe.append(row)
+        else:
+            kept.append(row)
+    return safe, kept
+
+
+def _dead_rows(db):
     conn = sqlite3.connect(db.db_path)
     try:
-        return violations(conn)
+        return _split_dead_rows(conn, violations(conn))
     finally:
         conn.close()
 
@@ -308,10 +329,10 @@ def repair_dead_rows(db) -> int:
     conn = sqlite3.connect(db.db_path)
     try:
         removed = 0
-        rows = violations(conn)
+        rows, _kept = _split_dead_rows(conn, violations(conn))
         while rows:
             removed += sum(delete_orphans(conn, rows).values())
-            rows = violations(conn)
+            rows, _kept = _split_dead_rows(conn, violations(conn))
         conn.commit()
         return removed
     finally:
@@ -322,7 +343,8 @@ def repair_dead_rows(db) -> int:
 REPAIRS: Dict[str, Dict[str, Any]] = {
     'balances': {
         'title': 'Balances that disagree with their transactions',
-        'detail': 'Rebuilds every balance from its transactions. Compare the account with your bank first.',
+        'detail': 'Rebuilds every balance from its transactions, including rows wrongly marked as dated '
+                  'before the account opened. Compare the account with your bank first.',
         'count': lambda db: len(db.verify_balances()),
         'apply': repair_balances,
     },
@@ -347,7 +369,7 @@ REPAIRS: Dict[str, Dict[str, Any]] = {
     'dead_rows': {
         'title': 'Rows pointing at deleted records',
         'detail': 'Deletes them. They no longer show anywhere and change no total.',
-        'count': lambda db: len({(row[0], row[1]) for row in _dead_rows(db)}),
+        'count': lambda db: len({(row[0], row[1]) for row in _dead_rows(db)[0]}),
         'apply': repair_dead_rows,
     },
 }
@@ -361,6 +383,10 @@ def data_check(db) -> Dict[str, Any]:
         problems = linked_row_problems(conn)
     finally:
         conn.close()
+    _safe, kept = _dead_rows(db)
+    problems += [{'kind': 'missing link', 'subject': f"{table} row {rowid}",
+                  'problem': f"it points at a {parent} that no longer exists"}
+                 for table, rowid, parent, _fk in kept]
     return {
         'problems': problems,
         'balances': db.verify_balances(),
