@@ -20,7 +20,7 @@ def api(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from api import accounts, categories, debts, investments, reports, transactions
+    from api import accounts, categories, debts, investments, reports, settings, transactions
     from api.auth import get_current_user
     from database import FinanceDatabase
 
@@ -31,11 +31,13 @@ def api(monkeypatch, tmp_path):
     for module, prefix in ((accounts, "/api/accounts"), (categories, "/api/categories"),
                            (debts, "/api/debts"),
                            (investments, "/api/investments"), (reports, "/api/reports"),
-                           (transactions, "/api/transactions")):
+                           (settings, "/api/settings"), (transactions, "/api/transactions")):
         # Other test modules rebind these too, so set them for this test only.
         monkeypatch.setattr(module, "db", db)
         app.include_router(module.router, prefix=prefix)
     app.dependency_overrides[get_current_user] = lambda: None
+    # The real one writes to the data directory, not this test's database.
+    monkeypatch.setattr(settings, "backup_before_repair", lambda repair: None)
 
     client = TestClient(app, raise_server_exceptions=False)
     client.db = db

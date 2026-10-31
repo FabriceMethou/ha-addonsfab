@@ -50,6 +50,7 @@ import {
 } from "../components/shadcn";
 import { debtsAPI, accountsAPI, currenciesAPI } from "../services/api";
 import { useNavigate } from "react-router-dom";
+import DebtPayments from "../components/DebtPayments";
 import { format, parseISO } from "date-fns";
 import { useToast } from "../contexts/ToastContext";
 import {
@@ -1349,70 +1350,6 @@ export default function DebtsPage() {
 }
 
 // Debt Payments Component
-function DebtPayments({
-  debtId,
-  currency = "EUR",
-}: {
-  debtId: number;
-  currency?: string;
-}) {
-  const { data: paymentsData, isLoading } = useQuery({
-    queryKey: ["debt-payments", debtId],
-    queryFn: async () => {
-      const response = await debtsAPI.getPayments(debtId);
-      return response.data.payments;
-    },
-  });
-
-  const formatCurrency = (amount: number) => {
-    return formatCurrencyUtil(amount, currency);
-  };
-
-  if (isLoading) {
-    return (
-      <div className="flex justify-center p-4">
-        <Spinner size="sm" />
-      </div>
-    );
-  }
-
-  if (!paymentsData || paymentsData.length === 0) {
-    return (
-      <p className="text-sm text-foreground-muted text-center py-4">
-        No payments yet
-      </p>
-    );
-  }
-
-  return (
-    <div className="rounded-lg border border-border overflow-hidden">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Date</TableHead>
-            <TableHead>Amount</TableHead>
-            <TableHead>Notes</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {paymentsData.map((payment: any) => (
-            <TableRow key={payment.id}>
-              <TableCell className="text-sm">
-                {formatDate(payment.payment_date)}
-              </TableCell>
-              <TableCell className="font-semibold text-success">
-                {formatCurrency(payment.total_paid ?? payment.amount)}
-              </TableCell>
-              <TableCell className="text-sm">{payment.notes || payment.description || "-"}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  );
-}
-
-// Amortization Schedule Component
 function AmortizationSchedule({
   debtId,
   currency = "EUR",

@@ -339,6 +339,7 @@ export default function ReconcilePage() {
       },
       lockAccount: true,
       closeOnSave: true,
+      bankAmount: csvTx.amount,
       description: 'Add the missing transaction to your system.',
       onSaved: () => setAddedCsvIndices((prev) => new Set(prev).add(csvIndex)),
     });

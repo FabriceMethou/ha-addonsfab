@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.12.0
+
+**Data check** (Backup page, new tab)
+- Shows what no longer agrees in your data and repairs it in one click, without a shell. Each repair takes a backup first
+- **Balances that disagree with their transactions:** rebuilds them, and clears the "before the account opened" flag from rows dated after it. Compare with your bank first: the numbers it would use are shown
+- **Old loan payments counted as spending:** files them as interest and capital, so only the interest is spending
+- **Old sales counted as income:** files them as capital and gain, so only the gain is income
+- **Refunds on the wrong owner** and **rows pointing at deleted records**
+- What only you can judge, such as a trade whose ledger row has another date, is listed but not changed
+
+**Loan payments as one unit**
+- A payment is recorded as a single operation: nothing is left behind if it fails
+- **Payment History** can correct a payment (amount, date, type, account) or delete it. The cash and the loan change together; other payments keep their split
+- Interest is worked out on what was owed on the payment's date, so a payment entered late is split correctly
+- Deleting a payment before an account's opening date no longer credits cash that never left. Deleting a payment on a deleted loan no longer brings the loan back
+
+**Transactions**
+- Rows from a loan payment or a trade have a badge and a link to their page instead of Edit and Delete
+- The category list no longer offers what only the app files rows under, such as a loan's own subcategory or Securities Purchase. Bank fees and other categories you use stay. A row already using one keeps it
+- Auto-Categorize no longer learns from those rows
+
+**Reconcile**
+- One bank line now matches the two rows of a loan payment or of a sale
+- Adding a bank line warns when money coming in gets an expense category, or money going out an income one
+
+**Cents**
+- Trades write whole cents, and rebuilding balances matches the transactions to the cent
+
 ## 2.11.1
 
 **Accounts**

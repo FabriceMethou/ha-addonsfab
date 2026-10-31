@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -57,6 +57,26 @@ import { RefundDialog, expenseLabel } from "../components/Refunds";
 import { useTransactionDialog } from "../components/TransactionDialog";
 
 // KPI Card Component
+// Rows written by a loan payment or a trade change only from their own page:
+// the server refuses the rest, because the two would stop matching.
+const LINKED_ROWS: Record<
+  string,
+  { badge: string; text: string; link: string; page: string }
+> = {
+  loan_payment: {
+    badge: "Loan payment",
+    text: "Part of a loan payment.",
+    link: "Correct it under Debts › Payment History",
+    page: "/debts",
+  },
+  trade: {
+    badge: "Trade",
+    text: "Part of a trade.",
+    link: "Correct it on the Investments page",
+    page: "/investments",
+  },
+};
+
 interface KPICardProps {
   title: string;
   value: string;
@@ -1049,6 +1069,11 @@ export default function TransactionsPage() {
                         Refund
                       </Badge>
                     )}
+                    {LINKED_ROWS[transaction.origin] && (
+                      <Badge variant="info" size="sm" className="ml-2">
+                        {LINKED_ROWS[transaction.origin].badge}
+                      </Badge>
+                    )}
                     {transaction.refunded_amount > 0 && (
                       <Badge variant="success" size="sm" className="ml-2">
                         {transaction.refunded_amount >= Math.abs(transaction.amount) - 0.005
@@ -1237,6 +1262,17 @@ export default function TransactionsPage() {
                   )}
 
                   {/* Actions */}
+                  {LINKED_ROWS[transaction.origin] ? (
+                    <p className="pt-3 border-t border-border text-sm text-foreground-muted">
+                      {LINKED_ROWS[transaction.origin].text}{" "}
+                      <Link
+                        to={LINKED_ROWS[transaction.origin].page}
+                        className="text-primary underline"
+                      >
+                        {LINKED_ROWS[transaction.origin].link}
+                      </Link>
+                    </p>
+                  ) : (
                   <div className="flex flex-wrap gap-2 pt-3 border-t border-border">
                     <Button
                       size="sm"
@@ -1270,6 +1306,7 @@ export default function TransactionsPage() {
                         </Button>
                       )}
                   </div>
+                  )}
                 </div>
               )}
             </Card>

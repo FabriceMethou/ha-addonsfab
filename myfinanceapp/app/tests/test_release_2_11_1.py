@@ -609,7 +609,7 @@ def test_integrity_notes_what_the_upgrade_will_change(api):
 
 
 def test_refund_owner_repair_only_touches_refunds_without_an_owner(api):
-    from scripts.fix_refund_owners import find_refunds_to_repair, repair
+    from integrity import find_refunds_to_repair, repair_refund_owners
 
     db = api.db
     other = db.add_owner("Other")
@@ -633,7 +633,7 @@ def test_refund_owner_repair_only_touches_refunds_without_an_owner(api):
     found = find_refunds_to_repair(db)
     assert [r["id"] for r in found] == [blank]
 
-    assert repair(db, found) == 1
+    assert repair_refund_owners(db) == 1
     assert refund_owner(db, blank) == other
     assert refund_owner(db, chosen) == third
     assert find_refunds_to_repair(db) == []
@@ -707,7 +707,7 @@ def test_refund_repair_command_reports_until_told_to_apply(api, monkeypatch, cap
 
     _, out = run_script(monkeypatch, capsys, fix_refund_owners, "--db", db.db_path)
     assert "Report only" in out
-    assert fix_refund_owners.find_refunds_to_repair(db) != []
+    assert "#" in out
 
     _, out = run_script(monkeypatch, capsys, fix_refund_owners, "--db", db.db_path, "--apply")
     assert "Repaired 1" in out

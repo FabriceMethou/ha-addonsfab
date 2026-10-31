@@ -477,6 +477,8 @@ def match_transactions(csv_transactions: List[Dict], system_transactions: List[D
     Matching strategy:
     - Primary match: Exact amount (0.01 tolerance) + exact date
     - Secondary match: Exact amount (0.01 tolerance) + date within ±2 days
+    - Last: one bank line against all the rows of a group (`group_key`), such as
+      the interest and capital of one loan payment
 
     When dates don't match exactly, the match includes a date_mismatch indicator.
     """
@@ -564,6 +566,43 @@ def match_transactions(csv_transactions: List[Dict], system_transactions: List[D
                 'days_difference': best_days_diff
             })
             matched_system_ids.add(best_match['id'])
+            matched_csv_indices.add(csv_idx)
+
+    # Third pass: a whole group of rows that are one movement at the bank.
+    groups = {}
+    for sys_tx in system_transactions:
+        if sys_tx.get('group_key'):
+            groups.setdefault(sys_tx['group_key'], []).append(sys_tx)
+
+    for csv_idx, csv_tx in enumerate(csv_transactions):
+        if csv_idx in matched_csv_indices:
+            continue
+
+        best_group, best_days_diff = None, DATE_TOLERANCE_DAYS + 1
+        for rows in groups.values():
+            if len(rows) < 2 or any(r['id'] in matched_system_ids for r in rows):
+                continue
+            if abs(abs(sum(r['amount'] for r in rows)) - abs(csv_tx['amount'])) >= AMOUNT_TOLERANCE:
+                continue
+            try:
+                days_diff = max(days_difference(csv_tx['date'], r.get('transaction_date') or r.get('date'))
+                                for r in rows)
+            except (ValueError, TypeError):
+                continue
+            if days_diff < best_days_diff:
+                best_group, best_days_diff = rows, days_diff
+
+        if best_group:
+            for sys_tx in best_group:
+                matched.append({
+                    'csv_index': csv_idx,
+                    'system_id': sys_tx['id'],
+                    'date_mismatch': best_days_diff > 0,
+                    'csv_date': csv_tx['date'],
+                    'system_date': sys_tx.get('transaction_date') or sys_tx.get('date'),
+                    'days_difference': best_days_diff,
+                })
+                matched_system_ids.add(sys_tx['id'])
             matched_csv_indices.add(csv_idx)
 
     # Find unmatched
@@ -678,6 +717,9 @@ async def upload_csv(
         system_transactions.append(virtual_tx)
 
     # Perform matching
+    groups = db.get_linked_row_groups()
+    for system_tx in system_transactions:
+        system_tx['group_key'] = groups.get(system_tx['id'])
     match_result = match_transactions(csv_transactions, system_transactions)
 
     # Get CSV ending balance (from the last transaction by date)

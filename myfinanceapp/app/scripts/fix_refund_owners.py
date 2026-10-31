@@ -17,20 +17,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import paths
-from database import REFUNDS_MISSING_OWNER, FinanceDatabase
-
-
-def find_refunds_to_repair(db):
-    with db.db_connection(commit=False) as conn:
-        return [dict(row) for row in conn.execute(REFUNDS_MISSING_OWNER).fetchall()]
-
-
-def repair(db, refunds):
-    with db.db_connection(commit=True) as conn:
-        for refund in refunds:
-            conn.execute("UPDATE transactions SET owner_id = ? WHERE id = ?",
-                         (refund['expense_owner_id'], refund['id']))
-    return len(refunds)
+from database import FinanceDatabase
+from integrity import find_refunds_to_repair, repair_refund_owners
 
 
 def main():
@@ -62,7 +50,7 @@ def main():
         print("\nReport only. Re-run with --apply to repair them.")
         return 0
 
-    print(f"\nRepaired {repair(db, refunds)} refund(s).")
+    print(f"\nRepaired {repair_refund_owners(db)} refund(s).")
     return 0
 
 

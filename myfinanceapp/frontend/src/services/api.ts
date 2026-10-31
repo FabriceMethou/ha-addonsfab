@@ -382,6 +382,9 @@ export const debtsAPI = {
   /** Removes both ledger rows and gives the debt its balance back. */
   deletePayment: (paymentId: number) =>
     api.delete(`/api/debts/payments/${paymentId}`),
+  /** Corrects a payment: its ledger rows and the loan balance change together. */
+  updatePayment: (paymentId: number, data: Record<string, unknown>) =>
+    api.put(`/api/debts/payments/${paymentId}`, data),
   getSchedule: (id: number) => api.get(`/api/debts/${id}/schedule`),
   getPayoff: (id: number) => api.get(`/api/debts/${id}/payoff`),
 };
@@ -484,6 +487,10 @@ export const settingsAPI = {
   get: (key: string) => api.get(`/api/settings/${key}`),
   update: (key: string, value: unknown) =>
     api.put(`/api/settings/${key}`, { value }),
+  getDataCheck: () => api.get("/api/settings/data-check"),
+  /** Takes a backup, then runs one repair from the Data check. */
+  runDataRepair: (repair: string) =>
+    api.post("/api/settings/data-check/repair", { repair }),
 };
 
 // Budgets API

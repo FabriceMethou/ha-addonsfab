@@ -32,6 +32,7 @@ import {
   TableSkeleton,
 } from '../components/shadcn';
 import {
+  ShieldCheck,
   Archive,
   RotateCcw,
   Trash2,
@@ -46,6 +47,7 @@ import {
   CloudUpload,
   RefreshCw,
 } from 'lucide-react';
+import DataCheck from "../components/DataCheck";
 import { backupsAPI } from '../services/api';
 import { format } from 'date-fns';
 
@@ -422,6 +424,10 @@ export default function BackupPage() {
           <TabsTrigger value="settings" className="flex items-center gap-2">
             <Settings className="w-4 h-4" />
             Settings
+          </TabsTrigger>
+          <TabsTrigger value="data-check" className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4" />
+            Data check
           </TabsTrigger>
         </TabsList>
 
@@ -885,6 +891,10 @@ export default function BackupPage() {
         </TabsContent>
 
         {/* Settings Tab */}
+        <TabsContent value="data-check">
+          <DataCheck />
+        </TabsContent>
+
         <TabsContent value="settings">
           <div className="mt-4 space-y-6">
             {/* Automation Settings */}

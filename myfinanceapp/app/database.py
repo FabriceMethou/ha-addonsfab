@@ -32,6 +32,20 @@ _APP_WRITTEN_ROW_IDS = """
     UNION SELECT principal_transaction_id FROM debt_payments WHERE principal_transaction_id IS NOT NULL
 """
 
+#: Subcategories only the app files rows under: picking one by hand writes a row
+#: with no loan payment or trade behind it. The Debt category itself stays open,
+#: because bank fees and credit cards live there next to each loan's subcategory.
+_APP_OWNED_SUBTYPE_IDS = """
+    SELECT ts.id FROM transaction_subtypes ts
+      JOIN transaction_types tt ON tt.id = ts.type_id
+     WHERE tt.name IN ('Debt Interest', 'Debt Principal')
+        OR (tt.name = 'Investments' AND ts.name IN ('Securities Purchase', 'Securities Sale'))
+        OR (tt.name = 'Investment Income'
+            AND ts.name IN ('Dividends', 'Realised Gain', 'Sale Proceeds'))
+        OR (tt.name = 'Debt' AND (ts.name IN (SELECT name FROM debts)
+                                  OR ts.name IN (SELECT name || ' (extra)' FROM debts)))
+"""
+
 #: What only the loan payment or trade behind a ledger row may change. These
 #: columns decide the cash and the category, so editing them on the row alone
 #: moves the money without moving the loan or the position.
@@ -1951,6 +1965,16 @@ class FinanceDatabase:
 
                 transactions_processed += 1
 
+            # The ledger is the authority, to the cent. Replaying it rounds at every
+            # step, which leaves old rows holding fractions of a cent a few cents
+            # away from their own total.
+            cursor.execute(f"""
+                UPDATE accounts SET balance = (
+                    SELECT {_LEDGER_BALANCE} FROM accounts a WHERE a.id = accounts.id)
+                 WHERE account_type != 'investment'
+                    OR id IN ({_HOLDINGLESS_INVESTMENT_ACCOUNTS})
+            """)
+
             # Investment accounts with holdings carry no transactions of their
             # own — their balance is the portfolio, so replaying the ledger alone
             # would leave them at their opening balance. Re-price them once the
@@ -3510,6 +3534,14 @@ class FinanceDatabase:
                        a.name as account_name, a.account_type, a.currency as account_currency,
                        b.name as bank_name,
                        COALESCE(t.owner_id, a.owner_id) as effective_owner_id,
+                       CASE
+                           WHEN EXISTS (SELECT 1 FROM debt_payments dp
+                                         WHERE t.id IN (dp.transaction_id, dp.principal_transaction_id)) THEN 'loan_payment'
+                           WHEN EXISTS (SELECT 1 FROM investment_transactions it
+                                         WHERE t.id IN (it.linked_transaction_id, it.gain_transaction_id)) THEN 'trade'
+                           WHEN t.refund_of_id IS NOT NULL THEN 'refund'
+                           WHEN t.linked_transfer_id IS NOT NULL OR COALESCE(t.is_transfer, 0) = 1 THEN 'transfer'
+                       END as origin,
                        COALESCE(ot.name, o.name) as owner_name,
                        ta.name as transfer_account_name, ta.account_type as transfer_account_type,
                        tb.name as transfer_bank_name
@@ -3630,6 +3662,14 @@ class FinanceDatabase:
                        a.name as account_name, a.account_type, a.currency as account_currency,
                        b.name as bank_name,
                        COALESCE(t.owner_id, a.owner_id) as effective_owner_id,
+                       CASE
+                           WHEN EXISTS (SELECT 1 FROM debt_payments dp
+                                         WHERE t.id IN (dp.transaction_id, dp.principal_transaction_id)) THEN 'loan_payment'
+                           WHEN EXISTS (SELECT 1 FROM investment_transactions it
+                                         WHERE t.id IN (it.linked_transaction_id, it.gain_transaction_id)) THEN 'trade'
+                           WHEN t.refund_of_id IS NOT NULL THEN 'refund'
+                           WHEN t.linked_transfer_id IS NOT NULL OR COALESCE(t.is_transfer, 0) = 1 THEN 'transfer'
+                       END as origin,
                        COALESCE(ot.name, o.name) as owner_name,
                        ta.name as transfer_account_name, ta.account_type as transfer_account_type,
                        tb.name as transfer_bank_name
@@ -4884,134 +4924,258 @@ class FinanceDatabase:
         ledger rows and the payment record must split it to the same cent."""
         return round((balance * (annual_rate_percent / 100)) / 12, 2)
 
-    def add_debt_payment(self, payment_data: Dict[str, Any]) -> int:
-        """Record a debt payment linked to a transaction."""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
+    def _debt_balance_on(self, cursor, debt: Dict[str, Any], on_date: str) -> float:
+        """What was owed at the end of a date: today's balance plus anything repaid since."""
+        repaid_since = cursor.execute("""
+            SELECT COALESCE(SUM(principal_paid + COALESCE(extra_payment, 0)), 0)
+              FROM debt_payments WHERE debt_id = ? AND payment_date > ?
+        """, (debt['id'], on_date)).fetchone()[0]
+        return (debt.get('current_balance') or 0) + repaid_since
 
-            # Get debt info to calculate interest
-            cursor.execute("SELECT * FROM debts WHERE id = ?", (payment_data['debt_id'],))
-            debt = dict(cursor.fetchone())
+    def _split_debt_payment(self, cursor, debt: Dict[str, Any], amount: float,
+                            payment_type: str, payment_date: str) -> Tuple[float, float]:
+        """(interest, capital) of a payment. The only place this is worked out, so
+        the ledger rows and the payment record cannot disagree by a cent.
 
-            current_balance = debt['current_balance']
-
-            # Calculate principal/interest split depending on payment type
-            total_payment = payment_data['amount']
-            extra_payment = payment_data.get('extra_payment', 0)
-            payment_type = payment_data.get('payment_type', 'regular')
-
-            if payment_type == 'extra':
-                # Extra payment: entire amount reduces principal, no interest charged
-                interest_paid = 0.0
-                principal_paid = 0.0
-                extra_payment = total_payment
-                total_principal = total_payment
-            else:
-                # Regular monthly payment: split into interest + principal.
-                # Capped the way the ledger rows are, so what is stored here is
-                # what the cash shows.
-                interest_paid = min(self.monthly_interest(current_balance, debt['interest_rate']),
-                                    round(total_payment, 2))
-
-                # Principal = Total Payment - Interest - Extra
-                principal_paid = round(max(0, total_payment - interest_paid - extra_payment), 2)
-
-                # If extra payment specified, it all goes to principal
-                total_principal = principal_paid + extra_payment
-
-            if total_principal > current_balance + 0.005:
-                raise ValueError(
-                    f"Only {max(0.0, current_balance):.2f} {debt.get('currency') or 'EUR'} left to repay")
-
-            cursor.execute("""
-                INSERT INTO debt_payments
-                (debt_id, transaction_id, principal_transaction_id, payment_date,
-                 amount, principal_paid, interest_paid, extra_payment, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                payment_data['debt_id'],
-                payment_data.get('transaction_id'),
-                # The second ledger row. Without it, deleting a payment would
-                # reverse the interest and leave the principal behind.
-                payment_data.get('principal_transaction_id'),
-                payment_data['payment_date'],
-                total_payment,
-                principal_paid,
-                interest_paid,
-                extra_payment,
-                payment_data.get('notes')
-            ))
-
-            payment_id = cursor.lastrowid
-
-            # Update debt balance (subtract principal + extra)
-            cursor.execute("""
-                UPDATE debts
-                SET current_balance = ROUND(current_balance - ?, 2)
-                WHERE id = ?
-            """, (total_principal, payment_data['debt_id']))
-
-            # Check if debt is now fully paid
-            cursor.execute("SELECT current_balance FROM debts WHERE id = ?", (payment_data['debt_id'],))
-            result = cursor.fetchone()
-            if result:
-                new_balance = result[0]
-                if new_balance <= 0:
-                    # Mark debt as inactive (paid off)
-                    cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (payment_data['debt_id'],))
-                    logger.info(f"Debt {payment_data['debt_id']} marked as inactive (fully paid)")
-
-            conn.commit()
-            logger.info(f"Added debt payment for debt {payment_data['debt_id']}: Interest={interest_paid:.2f}, Principal={principal_paid:.2f}, Extra={extra_payment}")
-            return payment_id
-        finally:
-            conn.close()
-
-    def delete_debt_payment(self, payment_id: int) -> bool:
-        """Undo a payment: remove its ledger rows and give the debt back its balance.
-
-        There was no way to delete one at all, so a mistyped amount was permanent
-        — and with a payment now writing two rows, correcting one by hand would
-        mean finding both.
+        Interest is charged on what was owed that day, so a payment entered late
+        does not take the interest of a smaller balance.
         """
+        amount = round(amount, 2)
+        if payment_type == 'extra':
+            interest = 0.0
+        else:
+            owed = self._debt_balance_on(cursor, debt, payment_date)
+            interest = min(self.monthly_interest(owed, debt['interest_rate']), amount)
+        capital = round(amount - interest, 2)
+
+        left = max(0.0, debt.get('current_balance') or 0)
+        if capital > left + 0.005:
+            raise ValueError(f"Only {left + interest:.2f} {debt.get('currency') or 'EUR'} left to repay")
+        return interest, capital
+
+    def _insert_debt_payment(self, cursor, debt: Dict[str, Any], payment_data: Dict[str, Any]) -> int:
+        """The payment record and the loan balance, for ledger rows already written."""
+        total_payment = payment_data['amount']
+        payment_type = payment_data.get('payment_type', 'regular')
+        interest_paid, capital = self._split_debt_payment(
+            cursor, debt, total_payment, payment_type, payment_data['payment_date'])
+
+        if payment_type == 'extra':
+            # The whole amount reduces the principal, with no interest charged.
+            extra_payment = total_payment
+            principal_paid = 0.0
+        else:
+            extra_payment = payment_data.get('extra_payment', 0)
+            principal_paid = round(max(0, capital - extra_payment), 2)
+        total_principal = principal_paid + extra_payment
+
+        cursor.execute("""
+            INSERT INTO debt_payments
+            (debt_id, transaction_id, principal_transaction_id, payment_date,
+             amount, principal_paid, interest_paid, extra_payment, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            debt['id'],
+            payment_data.get('transaction_id'),
+            # The second ledger row. Without it, deleting a payment would
+            # reverse the interest and leave the principal behind.
+            payment_data.get('principal_transaction_id'),
+            payment_data['payment_date'],
+            total_payment,
+            principal_paid,
+            interest_paid,
+            extra_payment,
+            payment_data.get('notes')
+        ))
+        payment_id = cursor.lastrowid
+
+        cursor.execute("""
+            UPDATE debts
+            SET current_balance = ROUND(current_balance - ?, 2)
+            WHERE id = ?
+        """, (total_principal, debt['id']))
+        new_balance = cursor.execute("SELECT current_balance FROM debts WHERE id = ?",
+                                     (debt['id'],)).fetchone()[0]
+        if new_balance <= 0:
+            cursor.execute("UPDATE debts SET is_active = 0 WHERE id = ?", (debt['id'],))
+            logger.info(f"Debt {debt['id']} marked as inactive (fully paid)")
+
+        logger.info(f"Added debt payment for debt {debt['id']}: Interest={interest_paid:.2f}, Principal={principal_paid:.2f}, Extra={extra_payment}")
+        return payment_id
+
+    def add_debt_payment(self, payment_data: Dict[str, Any]) -> int:
+        """Record a debt payment for ledger rows that already exist."""
         with self.db_connection(commit=True) as conn:
             cursor = conn.cursor()
+            debt = dict(cursor.execute("SELECT * FROM debts WHERE id = ?",
+                                       (payment_data['debt_id'],)).fetchone())
+            return self._insert_debt_payment(cursor, debt, payment_data)
 
-            cursor.execute("SELECT * FROM debt_payments WHERE id = ?", (payment_id,))
-            payment = cursor.fetchone()
+    def _debt_payment_categories(self, debt: Dict[str, Any], payment_type: str) -> Dict[str, Tuple[int, int]]:
+        """The categories a payment's rows go under. Read first: creating one opens
+        its own write connection, which would wait on the payment's own."""
+        parts = ['principal']
+        if payment_type != 'extra' and debt.get('interest_rate'):
+            parts.append('interest')
+        return {part: self.get_or_create_debt_category(debt['name'], payment_type, part) for part in parts}
+
+    def _debt_payment_account(self, cursor, debt: Dict[str, Any], account_id: Optional[int]) -> int:
+        """The account a payment comes from, by default the one linked to the debt."""
+        chosen = account_id or debt.get('linked_account_id')
+        if not chosen:
+            raise ValueError("Debt has no linked account. Please link an account to this debt first.")
+        account = cursor.execute("SELECT currency FROM accounts WHERE id = ?", (chosen,)).fetchone()
+        if not account:
+            raise ValueError("Account not found")
+        currency = debt.get('currency') or 'EUR'
+        if account_id and account['currency'] != currency:
+            raise ValueError(f"This loan is in {currency}: pay it from a {currency} account")
+        return chosen
+
+    def _record_debt_payment(self, conn, debt_id: int, data: Dict[str, Any],
+                             categories: Dict[str, Tuple[int, int]]) -> Dict[str, Any]:
+        """Ledger rows, payment record and loan balance, on the caller's transaction."""
+        cursor = conn.cursor()
+        debt = dict(cursor.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone())
+        account_id = self._debt_payment_account(cursor, debt, data.get('account_id'))
+        payment_type = data.get('payment_type') or 'regular'
+        is_extra = payment_type == 'extra'
+        interest, capital = self._split_debt_payment(
+            cursor, debt, data['amount'], payment_type, data['payment_date'])
+
+        label = "Extra payment" if is_extra else "Monthly payment"
+        rows = {}
+        for part, amount in (('interest', interest), ('principal', capital)):
+            if not amount:
+                continue
+            type_id, subtype_id = categories[part]
+            rows[part] = self._add_transaction(conn, {
+                'account_id': account_id,
+                'transaction_date': data['payment_date'],
+                'amount': -abs(amount),
+                'type_id': type_id,
+                'subtype_id': subtype_id,
+                'description': f"{label} ({part}): {debt['name']}",
+                'destinataire': debt['name'],
+                # The creditor's name, not a recipient: keep it exactly as the debt has it.
+                'keep_recipient_spelling': True,
+                'currency': debt.get('currency') or 'EUR',
+                'transfer_account_id': None,
+                'confirmed': True,
+                'tags': "Extra Debt Payment" if is_extra else "Debt Payment",
+            })
+
+        payment_id = self._insert_debt_payment(cursor, debt, {
+            'amount': data['amount'],
+            'payment_type': payment_type,
+            'payment_date': data['payment_date'],
+            'transaction_id': rows.get('interest'),
+            'principal_transaction_id': rows.get('principal'),
+            'notes': data.get('notes'),
+        })
+        return {'payment_id': payment_id, 'interest': interest, 'principal': capital}
+
+    def record_debt_payment(self, debt_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Record a payment as one unit: `data` holds amount, payment_date, and
+        optionally payment_type, account_id and notes.
+
+        One entry, but two ledger rows: the interest, which is money genuinely
+        spent, and the capital, which turns cash into a smaller debt. Anything
+        refused or failing leaves no row behind.
+        """
+        debt = self.get_debt(debt_id)
+        if not debt:
+            raise ValueError("Debt not found")
+        categories = self._debt_payment_categories(debt, data.get('payment_type') or 'regular')
+        with self.db_connection(commit=True) as conn:
+            return self._record_debt_payment(conn, debt_id, data, categories)
+
+    def _delete_debt_payment(self, conn, payment: Dict[str, Any]) -> None:
+        """Take a payment off the books, on the caller's transaction."""
+        cursor = conn.cursor()
+
+        # Give the debt back what this payment took off it. Paying it off closed
+        # the loan, so undoing that opens it again; a loan someone deleted while
+        # money was still owed stays deleted.
+        restored = (payment.get('principal_paid') or 0) + (payment.get('extra_payment') or 0)
+        owed = cursor.execute("SELECT current_balance FROM debts WHERE id = ?",
+                              (payment['debt_id'],)).fetchone()[0]
+        cursor.execute("UPDATE debts SET current_balance = ROUND(current_balance + ?, 2) WHERE id = ?",
+                       (restored, payment['debt_id']))
+        if owed <= 0.005 and restored > 0:
+            cursor.execute("UPDATE debts SET is_active = 1 WHERE id = ?", (payment['debt_id'],))
+
+        # Drop the payment row first: it holds foreign keys to both ledger
+        # rows, so deleting those while it still points at them is refused.
+        cursor.execute("DELETE FROM debt_payments WHERE id = ?", (payment['id'],))
+
+        # Reverse the cash and drop both ledger rows.
+        for column in ('transaction_id', 'principal_transaction_id'):
+            row_id = payment.get(column)
+            if not row_id:
+                continue
+            # _delete_transaction knows a row that never moved the balance.
+            self._delete_transaction(conn, row_id)
+
+        logger.info(f"Deleted debt payment {payment['id']}, restored {restored:.2f} to debt {payment['debt_id']}")
+
+    def delete_debt_payment(self, payment_id: int) -> bool:
+        """Undo a payment: remove its ledger rows and give the debt back its balance."""
+        with self.db_connection(commit=True) as conn:
+            payment = conn.execute("SELECT * FROM debt_payments WHERE id = ?", (payment_id,)).fetchone()
             if not payment:
                 return False
-            payment = dict(payment)
-
-            # Give the debt back what this payment took off it.
-            restored = (payment.get('principal_paid') or 0) + (payment.get('extra_payment') or 0)
-            cursor.execute(
-                "UPDATE debts SET current_balance = ROUND(current_balance + ?, 2), "
-                "is_active = 1 WHERE id = ?",
-                (restored, payment['debt_id']))
-
-            # Drop the payment row first: it holds foreign keys to both ledger
-            # rows, so deleting those while it still points at them is refused.
-            cursor.execute("DELETE FROM debt_payments WHERE id = ?", (payment_id,))
-
-            # Reverse the cash and drop both ledger rows.
-            for column in ('transaction_id', 'principal_transaction_id'):
-                row_id = payment.get(column)
-                if not row_id:
-                    continue
-                cursor.execute(
-                    "SELECT t.account_id, t.amount, tt.category FROM transactions t "
-                    "JOIN transaction_types tt ON t.type_id = tt.id WHERE t.id = ?",
-                    (row_id,))
-                row = cursor.fetchone()
-                if row:
-                    self._update_account_balance(
-                        cursor, row['account_id'], -row['amount'], row['category'])
-                    cursor.execute("DELETE FROM transactions WHERE id = ?", (row_id,))
-
-            logger.info(f"Deleted debt payment {payment_id}, restored {restored:.2f} to debt {payment['debt_id']}")
+            self._delete_debt_payment(conn, dict(payment))
             return True
+
+    def update_debt_payment(self, payment_id: int, changes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Correct a payment by taking it off the books and recording it again, as
+        one transaction. `changes` may hold amount, payment_date, payment_type,
+        account_id and notes. The other payments keep the split they were given.
+        """
+        with self.db_connection(commit=False) as conn:
+            payment = conn.execute("SELECT * FROM debt_payments WHERE id = ?", (payment_id,)).fetchone()
+            if not payment:
+                return None
+            payment = dict(payment)
+            row_id = payment.get('transaction_id') or payment.get('principal_transaction_id')
+            row = conn.execute("SELECT account_id FROM transactions WHERE id = ?", (row_id,)).fetchone()
+
+        debt = self.get_debt(payment['debt_id'])
+        data = {
+            'amount': changes.get('amount') or payment['amount'],
+            'payment_date': changes.get('payment_date') or payment['payment_date'],
+            'payment_type': changes.get('payment_type')
+            or ('extra' if payment.get('extra_payment') else 'regular'),
+            'account_id': changes.get('account_id') or (row['account_id'] if row else None),
+            'notes': changes['notes'] if 'notes' in changes else payment.get('notes'),
+        }
+        categories = self._debt_payment_categories(debt, data['payment_type'])
+        with self.db_connection(commit=True) as conn:
+            self._delete_debt_payment(conn, payment)
+            return self._record_debt_payment(conn, payment['debt_id'], data, categories)
+
+    def get_linked_row_groups(self) -> Dict[int, str]:
+        """Ledger rows that are one movement at the bank: the two rows of a loan
+        payment, or the capital and gain of a sale."""
+        with self.db_connection(commit=False) as conn:
+            groups = {}
+            for row in conn.execute("""
+                SELECT 'loan:' || id AS key, transaction_id AS a, principal_transaction_id AS b
+                  FROM debt_payments
+                 UNION ALL
+                SELECT 'trade:' || id, linked_transaction_id, gain_transaction_id
+                  FROM investment_transactions
+            """).fetchall():
+                for row_id in (row['a'], row['b']):
+                    if row_id:
+                        groups[row_id] = row['key']
+            return groups
+
+    def get_app_owned_subtype_ids(self) -> set:
+        """Subcategories only the app files rows under."""
+        with self.db_connection(commit=False) as conn:
+            return {row[0] for row in conn.execute(_APP_OWNED_SUBTYPE_IDS).fetchall()}
 
     def get_debt_payments(self, debt_id: int) -> List[Dict[str, Any]]:
         """Get all payments for a specific debt."""
@@ -5023,7 +5187,12 @@ class FinanceDatabase:
                        COALESCE(i.destinataire, c.destinataire) AS destinataire,
                        COALESCE(i.description, c.description) AS description,
                        ROUND(dp.interest_paid + dp.principal_paid
-                             + COALESCE(dp.extra_payment, 0), 2) AS total_paid
+                             + COALESCE(dp.extra_payment, 0), 2) AS total_paid,
+                       CASE WHEN COALESCE(dp.extra_payment, 0) > 0 THEN 'extra'
+                            ELSE 'regular' END AS payment_type,
+                       COALESCE(i.account_id, c.account_id) AS account_id,
+                       (SELECT name FROM accounts
+                         WHERE id = COALESCE(i.account_id, c.account_id)) AS account_name
                 FROM debt_payments dp
                 -- Either row can be absent: a payment with no interest has only
                 -- the capital one, so joining on the interest row hid it.
@@ -6319,7 +6488,7 @@ class FinanceDatabase:
                     # Reverse the balance change
                     cursor.execute("""
                         UPDATE accounts
-                        SET balance = balance - ?
+                        SET balance = ROUND(balance - ?, 2)
                         WHERE id = ?
                     """, (cash_impact, linked_account_id))
 
@@ -6421,7 +6590,9 @@ class FinanceDatabase:
                 raise ValueError("Transaction type 'Investments - Securities Purchase' not found in database")
 
             # Cash impact: negative (money leaving linked account)
-            cash_impact = -(total_amount + fees + tax)
+            # Whole cents: the bank moves no less, and the balance rounds at each
+            # step, so fractions in the ledger drift away from it.
+            cash_impact = round(-(total_amount + fees + tax), 2)
             description = f"Purchase of {trans_data.get('shares', 0)} shares of {symbol}"
             destinataire = holding_name
 
@@ -6449,7 +6620,7 @@ class FinanceDatabase:
             if not gain_type_info:
                 raise ValueError("Transaction type 'Investment Income - Realised Gain' not found in database")
 
-            cash_impact = total_amount - fees - tax
+            cash_impact = round(total_amount - fees - tax, 2)
             shares_sold = trans_data.get('shares') or 0
             cost_of_sold, realised_gain = self._sale_split(
                 cursor, trans_data['holding_id'], trans_data['transaction_date'],
@@ -6471,7 +6642,7 @@ class FinanceDatabase:
                 raise ValueError("Transaction type 'Investment Income - Dividends' not found in database")
 
             # Cash impact: positive (money coming into linked account)
-            cash_impact = total_amount
+            cash_impact = round(total_amount, 2)
             description = f"Dividend from {symbol}"
             destinataire = holding_name
 
@@ -6528,7 +6699,7 @@ class FinanceDatabase:
             # Update LINKED account balance (not investment account)
             cursor.execute("""
                 UPDATE accounts
-                SET balance = balance + ?
+                SET balance = ROUND(balance + ?, 2)
                 WHERE id = ?
             """, (cash_impact, linked_account_id))
 
@@ -6762,7 +6933,7 @@ class FinanceDatabase:
             if not (account_opening_date and trans['transaction_date'] < account_opening_date):
                 cursor.execute("""
                     UPDATE accounts
-                    SET balance = balance - ?
+                    SET balance = ROUND(balance - ?, 2)
                     WHERE id = ?
                 """, (cash_impact, linked_account_id))
 
@@ -7055,6 +7226,8 @@ class FinanceDatabase:
                 LEFT JOIN transaction_subtypes ts ON t.subtype_id = ts.id
                 WHERE LOWER(t.destinataire) = LOWER(?)
                   AND t.type_id IS NOT NULL
+                  AND t.id NOT IN (""" + _APP_WRITTEN_ROW_IDS + """)
+                  AND COALESCE(t.subtype_id, 0) NOT IN (""" + _APP_OWNED_SUBTYPE_IDS + """)
                 GROUP BY t.type_id, t.subtype_id
                 ORDER BY cnt DESC
             """, (recipient.strip(),))

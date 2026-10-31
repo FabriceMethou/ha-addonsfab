@@ -2,7 +2,7 @@
 Debts API endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import sys, os
 import logging
@@ -55,6 +55,13 @@ class DebtPayment(BaseModel):
     payment_type: str = "monthly"  # "monthly" or "extra"
     notes: Optional[str] = None
     account_id: Optional[int] = None  # paid from; the debt's linked account when unset
+
+class DebtPaymentUpdate(BaseModel):
+    amount: Optional[float] = Field(None, gt=0)
+    payment_date: Optional[str] = None
+    payment_type: Optional[str] = None
+    account_id: Optional[int] = None
+    notes: Optional[str] = None
 
 @router.get("/")
 def get_debts(include_inactive: bool = False, current_user: User = Depends(get_current_user)):
@@ -210,91 +217,31 @@ def add_debt_payment(payment: DebtPayment, current_user: User = Depends(get_curr
     Both rows are filed under the debt's own subcategory, so reports show what
     each loan costs rather than one shared 'Payment' bucket.
     """
-    debt = db.get_debt(payment.debt_id)
-    if not debt:
+    if not db.get_debt(payment.debt_id):
         raise HTTPException(status_code=404, detail="Debt not found")
-
-    account_id = payment.account_id or debt.get('linked_account_id')
-    if not account_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Debt has no linked account. Please link an account to this debt first.")
-    account = db.get_account(account_id) if payment.account_id else None
-    if payment.account_id and not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    debt_currency = debt.get('currency') or 'EUR'
-    if account and account.get('currency') != debt_currency:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This loan is in {debt_currency}: pay it from a {debt_currency} account")
-
-    debt_name = debt.get('name', 'Debt')
-    is_extra = payment.payment_type == "extra"
-
-    # Split the payment before writing anything. The schedule is what decides
-    # how much of a regular payment is interest; an extra payment is all capital.
-    if is_extra:
-        interest_part = 0.0
-        principal_part = round(payment.amount, 2)
-    else:
-        interest_part = min(
-            db.monthly_interest(debt.get('current_balance', 0), debt.get('interest_rate', 0)),
-            round(payment.amount, 2))
-        principal_part = round(payment.amount - interest_part, 2)
-
-    # Before anything is written: the ledger rows go first, and a refusal after
-    # them would leave the cash debited for a payment that never happened.
-    balance = max(0.0, debt.get('current_balance') or 0)
-    if principal_part > balance + 0.005:
-        left = balance + interest_part
-        raise HTTPException(status_code=400, detail=f"Only {left:.2f} {debt_currency} left to repay")
-
-    label = "Extra payment" if is_extra else "Monthly payment"
-    tags = "Extra Debt Payment" if is_extra else "Debt Payment"
-
-    def write_row(amount, part):
-        """One ledger row. The part decides which type — and so the category."""
-        type_id, subtype_id = db.get_or_create_debt_category(
-            debt_name, payment.payment_type, part)
-        return db.add_transaction({
-            'account_id': account_id,
-            'transaction_date': payment.payment_date,
-            'amount': -abs(amount),
-            'type_id': type_id,
-            'subtype_id': subtype_id,
-            'description': f"{label} ({part}): {debt_name}",
-            'destinataire': debt_name,
-            # The creditor's name, not a recipient: keep it exactly as the debt has it.
-            'keep_recipient_spelling': True,
-            'currency': debt.get('currency', 'EUR'),
-            'transfer_account_id': None,
-            'confirmed': True,
-            'tags': tags,
-        })
-
     try:
-        interest_transaction_id = write_row(interest_part, 'interest') if interest_part else None
-        principal_transaction_id = write_row(principal_part, 'principal') if principal_part else None
-
-        payment_data = {
-            'debt_id': payment.debt_id,
+        return {"message": "Payment recorded", **db.record_debt_payment(payment.debt_id, {
             'amount': payment.amount,
-            'payment_type': payment.payment_type,
             'payment_date': payment.payment_date,
-            'transaction_id': interest_transaction_id,
-            'principal_transaction_id': principal_transaction_id,
+            'payment_type': payment.payment_type,
+            'account_id': payment.account_id,
             'notes': payment.notes,
-        }
-        payment_id = db.add_debt_payment(payment_data)
-
-        return {
-            "message": "Payment recorded",
-            "payment_id": payment_id,
-            "interest": interest_part,
-            "principal": principal_part,
-        }
+        })}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/payments/{payment_id}")
+def update_debt_payment(payment_id: int, changes: DebtPaymentUpdate,
+                        current_user: User = Depends(get_current_user)):
+    """Correct a payment: its ledger rows and the loan balance change together."""
+    try:
+        result = db.update_debt_payment(payment_id, changes.dict(exclude_unset=True))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    return {"message": "Payment corrected", **result}
 
 
 @router.delete("/payments/{payment_id}")
@@ -321,6 +268,10 @@ def get_debt_payments(debt_id: int, current_user: User = Depends(get_current_use
             'interest_paid': payment.get('interest_paid'),
             'extra_payment': payment.get('extra_payment'),
             'total_paid': payment.get('total_paid'),
+            'payment_type': payment.get('payment_type'),
+            'account_id': payment.get('account_id'),
+            'account_name': payment.get('account_name'),
+            'notes': payment.get('notes'),
             'description': payment.get('description') or payment.get('destinataire'),
             'created_at': payment.get('created_at')
         }

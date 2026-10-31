@@ -4,11 +4,15 @@ Settings API endpoints
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
+import logging
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+import integrity
 from deps import lazy_db
 from api.auth import get_current_user, User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -28,6 +32,18 @@ ALLOWED_PREFERENCE_KEYS = {
 
 class SettingUpdate(BaseModel):
     value: Any
+
+
+class DataRepair(BaseModel):
+    repair: str
+
+
+def backup_before_repair(repair: str) -> None:
+    """A repair rewrites real rows, so it never runs without a way back."""
+    from api.backups import backup_mgr
+
+    if not backup_mgr.create_backup("pre_repair", f"Before the data repair: {repair}"):
+        raise RuntimeError("the backup was not written")
 
 @router.get("/")
 def get_all_settings(current_user: User = Depends(get_current_user)):
@@ -52,6 +68,26 @@ def get_all_settings(current_user: User = Depends(get_current_user)):
             "debug_log_transactions": debug_log_transactions == 'true',
         }
     }
+
+@router.get("/data-check")
+def get_data_check(current_user: User = Depends(get_current_user)):
+    """What is inconsistent in the data, and which repairs apply. Changes nothing."""
+    return integrity.data_check(db)
+
+
+@router.post("/data-check/repair")
+def run_data_repair(request: DataRepair, current_user: User = Depends(get_current_user)):
+    """Run one repair from the Data check, after taking a backup."""
+    if request.repair not in integrity.REPAIRS:
+        raise HTTPException(status_code=400, detail="Unknown repair")
+    try:
+        backup_before_repair(request.repair)
+    except Exception as e:
+        logger.error(f"Backup before repair {request.repair} failed: {e}")
+        raise HTTPException(status_code=500,
+                            detail="The backup failed, so the repair did not run")
+    return {"message": "Repair done", "repaired": integrity.run_repair(db, request.repair)}
+
 
 @router.get("/{key}")
 def get_setting(key: str, current_user: User = Depends(get_current_user)):

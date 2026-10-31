@@ -80,6 +80,7 @@ sqlite3 data/finance.db
 - `auth.py` - User authentication and password management
 - `isin_lookup.py` - Investment symbol lookup via yfinance
 - `validators.py` - Input validation utilities
+- `integrity.py` - What can be inconsistent in the data, and the repairs for it. Used by `scripts/check_integrity.py` and the Data check on the Backup page (`/api/settings/data-check`)
 - `utils.py` - Shared utility functions
 
 **API Routers** (`backend/api/`):
@@ -436,6 +437,7 @@ The suite lives in `app/tests/` and covers the money paths specifically:
 - `test_referential_integrity.py` — foreign keys and cascades as actually enforced
 - `test_exchange_rate_history.py` — conversion at the transaction's own date
 - `test_release_2_11_1.py` — loans, locked rows and refunds through the real API routes, using the `api` fixture in `conftest.py`
+- `frontend/e2e/` — Playwright against the real API on invented data: `cd frontend && npm run test:e2e` (uses the installed Chrome, and `.venv-dev`)
 
 Any change touching balances must keep these green. They exist because the
 counter drifted silently for months.

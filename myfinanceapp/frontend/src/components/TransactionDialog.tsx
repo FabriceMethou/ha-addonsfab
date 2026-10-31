@@ -72,6 +72,9 @@ export interface AddTransactionOptions {
   description?: string;
   /** After a transaction or loan payment has been saved. */
   onSaved?: () => void;
+  /** The signed amount of the bank line this starts from. The amount field only
+   * holds its size, so the category decides the direction on saving. */
+  bankAmount?: number;
 }
 
 interface TransactionDialogApi {
@@ -382,6 +385,19 @@ function TransactionDialog({
   );
   const isTransfer = selectedType?.category === "transfer";
 
+  // Subcategories only the app files rows under are not offered: picked by hand
+  // they would write a row with no loan payment or trade behind it. The row being
+  // edited keeps its own.
+  const pickable = (subtype: any) =>
+    !subtype.app_owned || String(subtype.id) === formData.subtype_id;
+  const pickableCategories = categoriesData?.filter(
+    (category: any) =>
+      String(category.id) === formData.type_id ||
+      !category.subtypes?.length ||
+      category.subtypes.some(pickable),
+  );
+  const pickableSubtypes = selectedType?.subtypes?.filter(pickable);
+
   // Form-only categories: a refund or reimbursement, or a loan payment.
   const mode =
     formData.type_id === REFUND_CATEGORY
@@ -393,6 +409,15 @@ function TransactionDialog({
     mode === "refund" &&
     (formData.subtype_id === "refund" || formData.subtype_id === "reimbursement")
       ? formData.subtype_id
+      : null;
+  // The saved sign comes from the category, so a mismatch reverses the bank line.
+  const bankLineConflict =
+    options.bankAmount !== undefined && !editingTransaction && !mode
+      ? options.bankAmount > 0 && selectedType?.category === "expense"
+        ? "This bank line is money coming in, but this category is an expense: it would be saved as money going out. For money paid back, use Refund / Reimbursement."
+        : options.bankAmount < 0 && selectedType?.category === "income"
+          ? "This bank line is money going out, but this category is income: it would be saved as money coming in."
+          : null
       : null;
   const activeLoans = (activeDebtsData || []).filter(
     (d: any) => d.is_active === 1 || d.status === "active",
@@ -605,6 +630,14 @@ function TransactionDialog({
         </DialogHeader>
         <form onSubmit={handleFormSubmit(onSubmit)}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
+            {bankLineConflict && (
+              <p
+                role="alert"
+                className="sm:col-span-2 rounded-lg border border-warning bg-warning/10 p-3 text-sm text-foreground"
+              >
+                {bankLineConflict}
+              </p>
+            )}
             {/* Owner Field (a loan payment follows its account) */}
             {mode !== "loan" && (
               <FormField label="Owner" className="sm:col-span-1">
@@ -715,7 +748,7 @@ function TransactionDialog({
                       <SelectValue placeholder="Select category" />
                     </SelectTrigger>
                     <SelectContent>
-                      {categoriesData?.map((category: any) => (
+                      {pickableCategories?.map((category: any) => (
                         <SelectItem
                           key={category.id}
                           value={category.id.toString()}
@@ -879,7 +912,7 @@ function TransactionDialog({
                         <SelectValue placeholder="Select subcategory" />
                       </SelectTrigger>
                       <SelectContent>
-                        {selectedType?.subtypes?.map((subtype: any) => (
+                        {pickableSubtypes?.map((subtype: any) => (
                             <SelectItem
                               key={subtype.id}
                               value={subtype.id.toString()}

@@ -205,10 +205,12 @@ def get_category_hierarchy(current_user: User = Depends(get_current_user)):
     """Get full category hierarchy (types with their subtypes)"""
     types = db.get_types()
     subtypes = db.get_subtypes()
+    app_owned = db.get_app_owned_subtype_ids()
 
     hierarchy = []
     for type_obj in types:
-        type_subtypes = [s for s in subtypes if s['type_id'] == type_obj['id']]
+        type_subtypes = [{**s, 'app_owned': s['id'] in app_owned}
+                         for s in subtypes if s['type_id'] == type_obj['id']]
         hierarchy.append({
             **type_obj,
             "subtypes": type_subtypes
