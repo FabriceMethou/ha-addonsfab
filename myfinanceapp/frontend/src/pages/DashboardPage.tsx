@@ -25,7 +25,7 @@ import {
   DashboardSkeleton,
 } from "../components/shadcn";
 import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
-import { absMoney, subtractMoney, percentChange } from "../lib/money";
+import { sliceMoney, subtractMoney, percentChange } from "../lib/money";
 import { useIsMobile } from "../hooks/useBreakpoint";
 import KPICard from "../components/KPICard";
 import PageHeader from "../components/PageHeader";
@@ -348,7 +348,7 @@ export default function DashboardPage() {
       spendingTrends?.map((item: any) => ({
         month: item.month,
         income: item.total_income ?? 0,
-        expenses: absMoney(item.total_expenses ?? 0),
+        expenses: item.total_expenses ?? 0,
       })) ?? [],
     [spendingTrends],
   );
@@ -357,10 +357,13 @@ export default function DashboardPage() {
     () => ({
       name: "Expenses",
       children:
-        spendingByCategory?.slice(0, 8).map((cat: any) => ({
-          name: cat.category || "Other",
-          value: absMoney(cat.total ?? 0),
-        })) ?? [],
+        spendingByCategory
+          ?.slice(0, 8)
+          .map((cat: any) => ({
+            name: cat.category || "Other",
+            value: sliceMoney(cat.total ?? 0),
+          }))
+          .filter((slice: { value: number }) => slice.value > 0) ?? [],
     }),
     [spendingByCategory],
   );
@@ -424,7 +427,8 @@ export default function DashboardPage() {
     ? (netWorthData?.net_worth ?? 0)
     : (netWorthMonth?.end_net_worth ?? 0);
   const monthlyIncome = transactionsSummary?.total_income ?? 0;
-  const monthlyExpenses = absMoney(transactionsSummary?.total_expense ?? 0);
+  // Signed: a month with more refunded than spent has negative expenses.
+  const monthlyExpenses = transactionsSummary?.total_expense ?? 0;
   // Savings are income minus expenses. Investing is one use of what was saved
   // (it leaves net worth unchanged), shown as a breakdown, not taken out.
   const monthlySavings = subtractMoney(monthlyIncome, monthlyExpenses);
@@ -440,9 +444,7 @@ export default function DashboardPage() {
   const monthlyFromExistingCash = Math.max(0, -monthlyKeptInCash);
 
   const previousIncome = previousTransactionsSummary?.total_income ?? 0;
-  const previousExpenses = absMoney(
-    previousTransactionsSummary?.total_expense ?? 0,
-  );
+  const previousExpenses = previousTransactionsSummary?.total_expense ?? 0;
   const previousSavings = subtractMoney(previousIncome, previousExpenses);
   const previousInvested = previousMonthlyInvestments?.total_invested ?? 0;
 

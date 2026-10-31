@@ -1401,7 +1401,7 @@ function DebtPayments({
                 {formatDate(payment.payment_date)}
               </TableCell>
               <TableCell className="font-semibold text-success">
-                {formatCurrency(payment.amount)}
+                {formatCurrency(payment.total_paid ?? payment.amount)}
               </TableCell>
               <TableCell className="text-sm">{payment.notes || payment.description || "-"}</TableCell>
             </TableRow>

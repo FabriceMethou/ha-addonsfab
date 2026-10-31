@@ -616,7 +616,11 @@ function TransactionDialog({
                     <SelectValue placeholder="Select owner" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">None (account's owner)</SelectItem>
+                    <SelectItem value="">
+                      {mode === "refund"
+                        ? "None (the expense's owner)"
+                        : "None (account's owner)"}
+                    </SelectItem>
                     {ownersData?.map((owner: any) => (
                       <SelectItem key={owner.id} value={owner.id.toString()}>
                         {owner.name}

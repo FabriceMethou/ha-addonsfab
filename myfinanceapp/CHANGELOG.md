@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.11.1
+
+**Accounts**
+- Creating an account with an opening date no longer hangs for 30 seconds and fails. The opening checkpoint is saved with the account
+
+**Loans**
+- **Net worth history** starts from what is still owed and adds back the payments made since. It used to start from the original amount, so a loan entered part-way through its life showed too high
+- A **deleted loan with a balance** leaves net worth history. A paid-off loan stays in it
+- **The owner filter** keeps debts: a debt belongs to the owner of its linked account. Total debts used to drop to 0
+- **Payment History** lists extra payments and payments on 0% loans, which were missing, and shows each payment's real total
+- Extra payments no longer store interest that was never charged. The upgrade clears it from old payments
+- A payment that would take a loan below zero is refused: "Only X left to repay"
+
+**Linked rows are locked**
+- The amount, account, date and category of a row written by a loan payment or a trade can no longer be changed or deleted from Transactions. Doing so moved the cash without moving the loan or the position. The message says why; description and tags stay editable
+- A category holding such rows cannot change between expense, income and transfer on the Categories page
+- **Known limit:** trades are corrected on the Investments page. Correcting a loan payment from Payment History arrives in the next version
+
+**Investments**
+- **Add Holding** refuses an investment account with no linked account and says so. It used to report success and lose the purchase
+- Deleting a holding also removes the realised gain rows of its sales, which were left in the ledger after their cash had been reversed
+- The page no longer overflows the screen below about 1590px
+
+**Refunds**
+- A refund counts for the owner of the expense unless you choose another one. `scripts/fix_refund_owners.py` lists old refunds on the wrong owner, and repairs them with `--apply`
+- A month or category with more refunded than spent no longer looks like spending: the dashboard, the Transactions summary and the Reports charts keep the sign, so savings are right too
+
 ## 2.11.0
 
 **Spending Trends: what changed, and whether it is a real change**

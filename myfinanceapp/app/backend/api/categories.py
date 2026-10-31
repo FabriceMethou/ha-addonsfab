@@ -94,7 +94,10 @@ def update_type(
             detail="No fields to update"
         )
 
-    success = db.update_type(type_id, update_data)
+    try:
+        success = db.update_type(type_id, update_data)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     if not success:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

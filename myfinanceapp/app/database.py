@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 #: Schema revision, written to PRAGMA user_version after _init_database() runs.
 #: Bump it when adding a migration so a database can report what it has applied.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 #: Ledger rows whose payee the app writes rather than a person: the cash legs of
 #: investment trades and both legs of a debt payment. Their "payee" is a holding
@@ -30,6 +30,31 @@ _APP_WRITTEN_ROW_IDS = """
     UNION SELECT gain_transaction_id FROM investment_transactions WHERE gain_transaction_id IS NOT NULL
     UNION SELECT transaction_id FROM debt_payments WHERE transaction_id IS NOT NULL
     UNION SELECT principal_transaction_id FROM debt_payments WHERE principal_transaction_id IS NOT NULL
+"""
+
+#: What only the loan payment or trade behind a ledger row may change. These
+#: columns decide the cash and the category, so editing them on the row alone
+#: moves the money without moving the loan or the position.
+_LOCKED_ROW_COLUMNS = {
+    'account_id', 'transaction_date', 'amount', 'currency', 'type_id', 'subtype_id',
+    'confirmed', 'is_historical', 'is_transfer', 'transfer_account_id',
+    'transfer_amount', 'linked_transfer_id', 'refund_of_id',
+}
+
+#: Refunds saved with no owner, on an account of someone other than the owner of
+#: the expense. Refunds used not to inherit that owner, so they lowered the wrong
+#: person's spending. A refund with an owner of its own was chosen, and stays out.
+REFUNDS_MISSING_OWNER = """
+    SELECT r.id, r.transaction_date, r.amount, r.destinataire,
+           COALESCE(e.owner_id, ea.owner_id) AS expense_owner_id, o.name AS expense_owner
+      FROM transactions r
+      JOIN transactions e ON e.id = r.refund_of_id
+      JOIN accounts ea ON ea.id = e.account_id
+      JOIN accounts ra ON ra.id = r.account_id
+      JOIN owners o ON o.id = COALESCE(e.owner_id, ea.owner_id)
+     WHERE r.owner_id IS NULL
+       AND COALESCE(e.owner_id, ea.owner_id) != ra.owner_id
+     ORDER BY r.transaction_date, r.id
 """
 
 _CATEGORY_OF_T = "(SELECT category FROM transaction_types WHERE id = t.type_id)"
@@ -1112,6 +1137,17 @@ class FinanceDatabase:
             if cursor.rowcount:
                 logger.info(f"Cleared stored quantity/cost on {cursor.rowcount} holding(s) with trades")
 
+            # Schema 5: an extra payment was stored with an amount of 0 and an
+            # interest worked out on the balance, though none was charged. That
+            # false interest showed in the loan's totals. Amount 0 with an extra
+            # part is only ever such a row, and the update cannot match it twice.
+            cursor.execute("""
+                UPDATE debt_payments SET interest_paid = 0, amount = extra_payment
+                 WHERE amount = 0 AND extra_payment > 0
+            """)
+            if cursor.rowcount:
+                logger.info(f"Cleared false interest on {cursor.rowcount} extra debt payment(s)")
+
             # Re-value investment accounts at every start. Their balance used to
             # be left at whatever it was created with — almost always zero —
             # because trades move cash on the linked account. Existing databases
@@ -1768,7 +1804,9 @@ class FinanceDatabase:
                     'actual_balance': opening_balance,
                     'notes': 'Initial opening balance checkpoint'
                 }
-                self.add_balance_validation(validation_data)
+                # On this connection: a second one would wait on the write lock
+                # this one holds, until the timeout turned it into a failure.
+                self._insert_balance_validation(cursor, validation_data)
                 logger.info(f"Created initial balance validation checkpoint for account {account_id}: {opening_balance}")
 
             logger.info(f"Added account: {account_name} with opening balance: {opening_balance}")
@@ -1945,35 +1983,37 @@ class FinanceDatabase:
             validation_id: int
         """
         with self.db_connection(commit=True) as conn:
-            cursor = conn.cursor()
+            return self._insert_balance_validation(conn.cursor(), validation_data)
 
-            system_balance = validation_data['system_balance']
-            actual_balance = validation_data['actual_balance']
-            difference = actual_balance - system_balance
-            is_match = abs(difference) < 0.01  # Match if difference is less than 1 cent
+    def _insert_balance_validation(self, cursor, validation_data: Dict[str, Any]) -> int:
+        """Body of add_balance_validation, running inside a managed connection."""
+        system_balance = validation_data['system_balance']
+        actual_balance = validation_data['actual_balance']
+        difference = actual_balance - system_balance
+        is_match = abs(difference) < 0.01  # Match if difference is less than 1 cent
 
-            cursor.execute("""
-                INSERT INTO balance_validations
-                (account_id, validation_date, system_balance, actual_balance, difference, is_match, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                validation_data['account_id'],
-                validation_data['validation_date'],
-                system_balance,
-                actual_balance,
-                difference,
-                is_match,
-                validation_data.get('notes', '')
-            ))
+        cursor.execute("""
+            INSERT INTO balance_validations
+            (account_id, validation_date, system_balance, actual_balance, difference, is_match, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            validation_data['account_id'],
+            validation_data['validation_date'],
+            system_balance,
+            actual_balance,
+            difference,
+            is_match,
+            validation_data.get('notes', '')
+        ))
 
-            validation_id = cursor.lastrowid
+        validation_id = cursor.lastrowid
 
-            if is_match:
-                logger.info(f"Balance validation {validation_id}: Match! Account {validation_data['account_id']}")
-            else:
-                logger.warning(f"Balance validation {validation_id}: Mismatch! Account {validation_data['account_id']}, Difference: {difference}")
+        if is_match:
+            logger.info(f"Balance validation {validation_id}: Match! Account {validation_data['account_id']}")
+        else:
+            logger.warning(f"Balance validation {validation_id}: Mismatch! Account {validation_data['account_id']}, Difference: {difference}")
 
-            return validation_id
+        return validation_id
 
     def recalculate_account_balance(self, account_id: int) -> Dict[str, Any]:
         """Rebuild one account's balance from its own ledger.
@@ -3014,6 +3054,20 @@ class FinanceDatabase:
         try:
             cursor = conn.cursor()
 
+            # A loan's capital filed as an expense would count as spending, and
+            # the rows themselves cannot be edited to correct it.
+            current = cursor.execute("SELECT category FROM transaction_types WHERE id = ?",
+                                     (type_id,)).fetchone()
+            if current and updates.get('category', current['category']) != current['category']:
+                locked = cursor.execute(f"""
+                    SELECT 1 FROM transactions t
+                     WHERE t.type_id = ? AND t.id IN ({_APP_WRITTEN_ROW_IDS}) LIMIT 1
+                """, (type_id,)).fetchone()
+                if locked:
+                    raise ValueError(
+                        "This category holds rows written by loan payments or trades, "
+                        "so its kind cannot change")
+
             set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
             values = list(updates.values()) + [type_id]
 
@@ -3596,6 +3650,41 @@ class FinanceDatabase:
 
             return dict(row) if row else None
 
+    def _linked_row_lock(self, cursor, transaction_id: int) -> Optional[Dict[str, str]]:
+        """What a ledger row belongs to, when a loan payment or trade wrote it.
+
+        Their own delete paths write to the table directly and are not affected.
+        """
+        loan = cursor.execute("""
+            SELECT d.name FROM debt_payments dp
+              JOIN debts d ON d.id = dp.debt_id
+             WHERE ? IN (dp.transaction_id, dp.principal_transaction_id)
+        """, (transaction_id,)).fetchone()
+        if loan:
+            return {'part_of': f'a payment on the loan "{loan["name"]}"',
+                    'remedy': "Otherwise the loan balance would no longer match the cash."}
+        trade = cursor.execute("""
+            SELECT s.symbol FROM investment_transactions it
+              JOIN investment_holdings h ON h.id = it.holding_id
+              JOIN securities s ON s.id = h.security_id
+             WHERE ? IN (it.linked_transaction_id, it.gain_transaction_id)
+        """, (transaction_id,)).fetchone()
+        if trade:
+            return {'part_of': f'a {trade["symbol"]} trade',
+                    'remedy': "Change the trade on the Investments page."}
+        return None
+
+    @staticmethod
+    def _same_locked_value(column: str, old: Any, new: Any) -> bool:
+        """Whether an edit leaves a locked column as it is."""
+        if column in ('amount', 'transfer_amount'):
+            # By magnitude: the API signs amounts by category, and would make the
+            # positive capital row of a sale negative because it is a transfer.
+            return abs(abs(old or 0) - abs(new or 0)) < 0.005
+        if column == 'transaction_date':
+            return str(old)[:10] == str(new)[:10]
+        return (old or None) == (new or None)
+
     def update_transaction(self, transaction_id: int, updates: Dict[str, Any]) -> bool:
         """Update an existing transaction."""
         with self.db_connection(commit=True) as conn:
@@ -3635,6 +3724,19 @@ class FinanceDatabase:
         updates = {k: v for k, v in updates.items() if k in ALLOWED_COLUMNS}
         if not updates:
             return False
+
+        # The edit form sends every field back, so only a real change is refused.
+        lock = self._linked_row_lock(cursor, transaction_id)
+        if lock:
+            changed = [k for k, v in updates.items() if k in _LOCKED_ROW_COLUMNS
+                       and not self._same_locked_value(k, old_transaction.get(k), v)]
+            if changed:
+                raise ValueError(
+                    f"This row is part of {lock['part_of']}: its amount, account, date and "
+                    f"category cannot be changed here. {lock['remedy']}")
+            updates = {k: v for k, v in updates.items() if k not in _LOCKED_ROW_COLUMNS}
+            if not updates:
+                return True
 
         # Same tidy-up as on insert, so editing a payee cannot reintroduce the
         # stray casing and whitespace that fragment the recipient list.
@@ -3823,7 +3925,8 @@ class FinanceDatabase:
         the expense's currency when the refund lands on another account).
         """
         expense = cursor.execute("""
-            SELECT t.*, tt.category, a.currency AS account_currency
+            SELECT t.*, tt.category, a.currency AS account_currency,
+                   COALESCE(t.owner_id, a.owner_id) AS effective_owner_id
               FROM transactions t
               JOIN transaction_types tt ON tt.id = t.type_id
               JOIN accounts a ON a.id = t.account_id
@@ -3853,7 +3956,9 @@ class FinanceDatabase:
         """Record a refund of an expense: positive, in the expense's category.
 
         `refund` holds account_id, transaction_date and amount, and optionally
-        destinataire (default: the expense's), description, tags and owner_id.
+        destinataire and owner_id (default: the expense's), description and tags.
+        The owner follows the expense, not the account the money landed on:
+        otherwise one owner's spending stays high while another's goes down.
         """
         with self.db_connection(commit=True) as conn:
             cursor = conn.cursor()
@@ -3871,7 +3976,7 @@ class FinanceDatabase:
                 'type_id': expense['type_id'],
                 'subtype_id': expense['subtype_id'],
                 'tags': refund.get('tags') or '',
-                'owner_id': refund.get('owner_id'),
+                'owner_id': refund.get('owner_id') or expense['effective_owner_id'],
                 'confirmed': refund.get('confirmed', True),
                 'refund_of_id': expense_id,
             })
@@ -3994,6 +4099,11 @@ class FinanceDatabase:
 
         if not transaction:
             return False
+
+        lock = self._linked_row_lock(cursor, transaction_id)
+        if lock:
+            raise ValueError(
+                f"This row is part of {lock['part_of']} and cannot be deleted here. {lock['remedy']}")
 
         refunds = cursor.execute(
             "SELECT COUNT(*) FROM transactions WHERE refund_of_id = ?", (transaction_id,)).fetchone()[0]
@@ -4405,14 +4515,14 @@ class FinanceDatabase:
         
             if include_inactive:
                 query = """
-                    SELECT d.*, a.name as account_name
+                    SELECT d.*, a.name as account_name, a.owner_id as owner_id
                     FROM debts d
                     LEFT JOIN accounts a ON d.linked_account_id = a.id
                     ORDER BY d.is_active DESC, d.name
                 """
             else:
                 query = """
-                    SELECT d.*, a.name as account_name
+                    SELECT d.*, a.name as account_name, a.owner_id as owner_id
                     FROM debts d
                     LEFT JOIN accounts a ON d.linked_account_id = a.id
                     WHERE d.is_active = 1
@@ -4768,6 +4878,12 @@ class FinanceDatabase:
 
             logger.info("All investment transaction types verified/created")
 
+    @staticmethod
+    def monthly_interest(balance: float, annual_rate_percent: float) -> float:
+        """A month's interest on a balance. Both sides of a payment use this: the
+        ledger rows and the payment record must split it to the same cent."""
+        return round((balance * (annual_rate_percent / 100)) / 12, 2)
+
     def add_debt_payment(self, payment_data: Dict[str, Any]) -> int:
         """Record a debt payment linked to a transaction."""
         conn = self._get_connection()
@@ -4778,9 +4894,6 @@ class FinanceDatabase:
             cursor.execute("SELECT * FROM debts WHERE id = ?", (payment_data['debt_id'],))
             debt = dict(cursor.fetchone())
 
-            # Calculate interest for this payment
-            annual_rate = debt['interest_rate'] / 100
-            monthly_rate = annual_rate / 12
             current_balance = debt['current_balance']
 
             # Calculate principal/interest split depending on payment type
@@ -4792,22 +4905,24 @@ class FinanceDatabase:
                 # Extra payment: entire amount reduces principal, no interest charged
                 interest_paid = 0.0
                 principal_paid = 0.0
+                extra_payment = total_payment
                 total_principal = total_payment
             else:
-                # Regular monthly payment: split into interest + principal
-                if debt['interest_type'] == 'simple':
-                    # Simple interest: (Balance × Annual Rate) / 12
-                    interest_paid = (current_balance * annual_rate) / 12
-                else:
-                    # Compound interest: Balance × Monthly Rate
-                    interest_paid = current_balance * monthly_rate
+                # Regular monthly payment: split into interest + principal.
+                # Capped the way the ledger rows are, so what is stored here is
+                # what the cash shows.
+                interest_paid = min(self.monthly_interest(current_balance, debt['interest_rate']),
+                                    round(total_payment, 2))
 
                 # Principal = Total Payment - Interest - Extra
-                # But if total < interest (shouldn't happen), just record as is
-                principal_paid = max(0, total_payment - interest_paid - extra_payment)
+                principal_paid = round(max(0, total_payment - interest_paid - extra_payment), 2)
 
                 # If extra payment specified, it all goes to principal
                 total_principal = principal_paid + extra_payment
+
+            if total_principal > current_balance + 0.005:
+                raise ValueError(
+                    f"Only {max(0.0, current_balance):.2f} {debt.get('currency') or 'EUR'} left to repay")
 
             cursor.execute("""
                 INSERT INTO debt_payments
@@ -4823,7 +4938,7 @@ class FinanceDatabase:
                 payment_data['payment_date'],
                 total_payment,
                 principal_paid,
-                round(interest_paid, 2),
+                interest_paid,
                 extra_payment,
                 payment_data.get('notes')
             ))
@@ -4833,7 +4948,7 @@ class FinanceDatabase:
             # Update debt balance (subtract principal + extra)
             cursor.execute("""
                 UPDATE debts
-                SET current_balance = current_balance - ?
+                SET current_balance = ROUND(current_balance - ?, 2)
                 WHERE id = ?
             """, (total_principal, payment_data['debt_id']))
 
@@ -4904,9 +5019,16 @@ class FinanceDatabase:
             cursor = conn.cursor()
         
             cursor.execute("""
-                SELECT dp.*, t.destinataire, t.description
+                SELECT dp.*,
+                       COALESCE(i.destinataire, c.destinataire) AS destinataire,
+                       COALESCE(i.description, c.description) AS description,
+                       ROUND(dp.interest_paid + dp.principal_paid
+                             + COALESCE(dp.extra_payment, 0), 2) AS total_paid
                 FROM debt_payments dp
-                JOIN transactions t ON dp.transaction_id = t.id
+                -- Either row can be absent: a payment with no interest has only
+                -- the capital one, so joining on the interest row hid it.
+                LEFT JOIN transactions i ON dp.transaction_id = i.id
+                LEFT JOIN transactions c ON dp.principal_transaction_id = c.id
                 WHERE dp.debt_id = ?
                 ORDER BY dp.payment_date DESC
             """, (debt_id,))
@@ -5596,7 +5718,7 @@ class FinanceDatabase:
         # Calculate net worth at each date
         trend_data = []
         accounts = self.get_accounts(owner_id=owner_id)
-        debts = self._debts_of_owner(owner_id)
+        debts = self.debts_of_owner(owner_id, include_inactive=True)
         with self.db_connection(commit=False) as conn:
             cursor = conn.cursor()
             for calc_date in calculation_dates:
@@ -5618,12 +5740,14 @@ class FinanceDatabase:
         ledger the same way as each point of get_net_worth_trend."""
         display_currency = self.get_preference('display_currency', 'EUR')
         accounts = self.get_accounts(owner_id=owner_id)
-        debts = self._debts_of_owner(owner_id)
+        debts = self.debts_of_owner(owner_id, include_inactive=True)
         with self.db_connection(commit=False) as conn:
             return self._net_worth_on(conn.cursor(), as_of, accounts, debts, display_currency)
 
-    def _debts_of_owner(self, owner_id: int = None) -> List[Dict]:
-        debts = self.get_debts(include_inactive=True)
+    def debts_of_owner(self, owner_id: int = None, include_inactive: bool = False) -> List[Dict]:
+        """Debts of one owner, or all of them. A debt has no owner of its own:
+        it belongs to whoever owns the account that pays it."""
+        debts = self.get_debts(include_inactive=include_inactive)
         if owner_id:
             debts = [d for d in debts if d.get('owner_id') == owner_id]
         return debts
@@ -5719,10 +5843,16 @@ class FinanceDatabase:
             converted_balance = self.convert_currency(balance, account['currency'], display_currency)
             total_assets += converted_balance
 
-        # Get historical debt balances at this snapshot date
-        # Balance at date = principal_amount - sum of principal reductions up to that date
+        # Debt balances at this snapshot date: what is owed now, plus whatever
+        # has been repaid since. Working forward from the original amount was
+        # wrong for a loan entered part-way through its life, which showed the
+        # whole original amount as owed until its first recorded payment.
         total_debts = 0
         for debt in debts:
+            # A paid-off loan stays in history. One deleted with money still on
+            # it was a mistake or is no longer owed, so it leaves history too.
+            if not debt.get('is_active') and (debt.get('current_balance') or 0) > 0.005:
+                continue
             # You owe the money from the day you borrow it, not from the
             # day the instalments begin. start_date is the first payment
             # date — using it here hid a loan contracted in January whose
@@ -5734,15 +5864,13 @@ class FinanceDatabase:
             appeared = (debt.get('created_at') or debt.get('start_date') or '')[:10]
             if appeared and appeared > calc_date:
                 continue
-            principal_amount = debt.get('principal_amount', 0) or 0
-            # Sum all principal reductions (principal_paid + extra_payment) up to calc_date
             cursor.execute("""
                 SELECT COALESCE(SUM(principal_paid + extra_payment), 0)
                 FROM debt_payments
-                WHERE debt_id = ? AND payment_date <= ?
+                WHERE debt_id = ? AND payment_date > ?
             """, (debt['id'], calc_date))
-            total_principal_paid = cursor.fetchone()[0] or 0
-            debt_balance = max(0, principal_amount - total_principal_paid)
+            repaid_since = cursor.fetchone()[0] or 0
+            debt_balance = max(0, (debt.get('current_balance') or 0) + repaid_since)
             if debt_balance > 0:
                 debt_currency = debt.get('currency', 'EUR')
                 converted_debt = self.convert_currency(debt_balance, debt_currency, display_currency)
@@ -6158,7 +6286,7 @@ class FinanceDatabase:
             WHERE holding_id = ?
         """, (holding_id,))
         transactions = [dict(row) for row in cursor.fetchall()]
-        linked_transaction_ids = []
+        ledger_row_ids = []
 
         # Process each transaction - reverse balance impact and delete linked transaction
         for trans in transactions:
@@ -6196,14 +6324,16 @@ class FinanceDatabase:
                     """, (cash_impact, linked_account_id))
 
                 # Collect rather than delete: investment_transactions still holds
-                # a foreign key to this row, so it has to go first.
-                linked_transaction_ids.append(trans['linked_transaction_id'])
+                # a foreign key to these rows, so it has to go first. A sale wrote
+                # two, and the reversal above covers the cash of both.
+                ledger_row_ids += [row_id for row_id in (trans['linked_transaction_id'],
+                                                         trans.get('gain_transaction_id')) if row_id]
 
         # Delete all investment transactions for this holding, then the cash rows
         # they referenced.
         cursor.execute("DELETE FROM investment_transactions WHERE holding_id = ?", (holding_id,))
-        for linked_id in linked_transaction_ids:
-            cursor.execute("DELETE FROM transactions WHERE id = ?", (linked_id,))
+        for row_id in ledger_row_ids:
+            cursor.execute("DELETE FROM transactions WHERE id = ?", (row_id,))
 
         # Delete the holding itself
         cursor.execute("DELETE FROM investment_holdings WHERE id = ?", (holding_id,))

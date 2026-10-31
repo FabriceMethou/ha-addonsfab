@@ -268,6 +268,22 @@ export function absMoney(value: number | string | Decimal): number {
 }
 
 /**
+ * A signed total as the size of a chart slice. A slice cannot be negative, and a
+ * category with more refunded than spent has no spending to show. Taking the
+ * absolute value would draw that money coming back as money going out.
+ *
+ * @param value - The signed total
+ * @returns The value rounded to 2 decimal places, or 0 when it is negative
+ *
+ * @example
+ * sliceMoney(50.25) // 50.25
+ * sliceMoney(-50.25) // 0
+ */
+export function sliceMoney(value: number | string | Decimal): number {
+  return Decimal.max(money(value), 0).toDecimalPlaces(2).toNumber();
+}
+
+/**
  * Negates a monetary value.
  *
  * @param value - The value to negate

@@ -11,7 +11,7 @@ import {
 import { format } from "date-fns";
 import { useToast } from "../contexts/ToastContext";
 import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
-import { subtractMoney, absMoney } from "../lib/money";
+import { subtractMoney } from "../lib/money";
 import {
   Card,
   Button,
@@ -162,6 +162,10 @@ function FlowBanner({
     detail = `${transactions} · ${money(totalIncome)} − ${money(totalExpense)} = ${money(totalAmount)}`;
   } else if (flow === "income") {
     detail = `${transactions} · ${money(totalAmount)}`;
+  } else if (flow === "expense") {
+    // Spending is negative in the ledger. Signed, so a month with more refunded
+    // than spent reads the same here as on the card that links to this page.
+    detail = `${transactions} · ${money(0 - totalAmount)}`;
   } else {
     detail = `${transactions} · ${money(Math.abs(totalAmount))}`;
   }
@@ -612,7 +616,7 @@ export default function TransactionsPage() {
   const { totalIncome, totalExpenses, netChange, summaryCurrency } =
     useMemo(() => {
       const inc = summaryData?.total_income ?? 0;
-      const exp = absMoney(summaryData?.total_expense ?? 0);
+      const exp = summaryData?.total_expense ?? 0;
       return {
         totalIncome: inc,
         totalExpenses: exp,

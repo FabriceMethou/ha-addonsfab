@@ -118,11 +118,7 @@ def net_worth(
     display_currency = db.get_preference('display_currency', 'EUR')
 
     accounts = db.get_accounts(owner_id=owner_id)
-    debts = db.get_debts()
-
-    # Filter debts by owner if specified
-    if owner_id:
-        debts = [d for d in debts if d.get('owner_id') == owner_id]
+    debts = db.debts_of_owner(owner_id)
 
     # Convert all account balances to display currency
     total_assets = sum(

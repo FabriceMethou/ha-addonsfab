@@ -79,6 +79,7 @@ import {
 import { formatCurrency as formatCurrencyUtil } from "../lib/utils";
 import {
   absMoney,
+  sliceMoney,
   sumMoney,
   percentOf,
   percentChange,
@@ -258,10 +259,10 @@ function toSunburstSlices(
 ): SunburstSlice[] {
   return (categories || []).map((cat: any) => ({
     name: cat.category,
-    value: absMoney(cat[amountKey] ?? 0),
+    value: sliceMoney(cat[amountKey] ?? 0),
     subcategories: (cat.subcategories || []).map((sub: any) => ({
       name: sub.category,
-      value: absMoney(sub[amountKey] ?? 0),
+      value: sliceMoney(sub[amountKey] ?? 0),
     })),
   }));
 }
@@ -816,14 +817,20 @@ export default function ReportsPage() {
       .map((cat: string) => ({
         name: cat,
         // Calculate total for this category across all months using precise arithmetic
-        value: sumMoney(spendingTrendsData.trends, (month: any) =>
-          absMoney(month.categories?.[cat] || 0),
+        value: sliceMoney(
+          sumMoney(
+            spendingTrendsData.trends,
+            (month: any) => month.categories?.[cat] || 0,
+          ),
         ),
         subcategories: (spendingTrendsData.all_subcategories?.[cat] || []).map(
           (sub: string) => ({
             name: sub,
-            value: sumMoney(spendingTrendsData.trends, (month: any) =>
-              absMoney(month.subcategories?.[cat]?.[sub] || 0),
+            value: sliceMoney(
+              sumMoney(
+                spendingTrendsData.trends,
+                (month: any) => month.subcategories?.[cat]?.[sub] || 0,
+              ),
             ),
           }),
         ),
@@ -868,7 +875,7 @@ export default function ReportsPage() {
     (): SunburstSlice[] =>
       (categoryReportData?.subcategories || []).map((sub: any) => ({
         name: sub.name,
-        value: absMoney(sub.amount ?? 0),
+        value: sliceMoney(sub.amount ?? 0),
       })),
     [categoryReportData],
   );
@@ -890,7 +897,7 @@ export default function ReportsPage() {
         ...Object.fromEntries(
           categoryReportSeries.map((name: string) => [
             name,
-            absMoney(entry.subcategories?.[name] ?? 0),
+            sliceMoney(entry.subcategories?.[name] ?? 0),
           ]),
         ),
       })),

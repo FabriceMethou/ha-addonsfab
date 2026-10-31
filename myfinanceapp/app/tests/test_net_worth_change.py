@@ -47,9 +47,6 @@ def add_account(db, owner_id, opening_balance=1000.0):
         "opening_date": "2026-01-01",
         "currency": "EUR",
         "account_type": "checking",
-        # The opening checkpoint opens a second write connection inside
-        # add_account's and deadlocks; it plays no part in net worth.
-        "create_initial_validation": False,
     })
 
 

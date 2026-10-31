@@ -345,12 +345,19 @@ def create_holding(holding: InvestmentHoldingCreate, current_user: User = Depend
     # Validate that the provided account_id exists and is an investment account
     with db.db_connection(commit=False) as conn:
         account = conn.execute("""
-            SELECT id, currency FROM accounts
+            SELECT id, currency, linked_account_id FROM accounts
             WHERE id = ? AND account_type = 'investment'
         """, (holding.account_id,)).fetchone()
 
     if not account:
         raise HTTPException(status_code=400, detail="Invalid investment account ID or account is not an investment account")
+
+    has_purchase = holding.quantity > 0 and holding.purchase_price > 0
+    if has_purchase and not account['linked_account_id']:
+        raise HTTPException(
+            status_code=400,
+            detail="This investment account has no linked account for its cash movements. "
+                   "Link one on the Accounts page, then add the holding.")
 
     account_id = account['id']
     account_currency = account['currency']
@@ -373,7 +380,7 @@ def create_holding(holding: InvestmentHoldingCreate, current_user: User = Depend
     holding_id = db.add_investment_holding(holding_data)
 
     # Create initial buy transaction if quantity and price provided
-    if holding.quantity > 0 and holding.purchase_price > 0:
+    if has_purchase:
         transaction_data = {
             'holding_id': holding_id,
             'transaction_type': 'buy',
@@ -390,11 +397,10 @@ def create_holding(holding: InvestmentHoldingCreate, current_user: User = Depend
         try:
             db.add_investment_transaction(transaction_data)
         except ValueError as e:
-            # If linked account issue, log the error but still create the holding
-            # User can add transactions manually later
-            import logging
-            logger = logging.getLogger("uvicorn")
-            logger.warning(f"Could not create initial transaction for holding {holding_id}: {str(e)}")
+            # A holding without its purchase reads as a success that lost the
+            # position, so take it back and say why.
+            db.delete_investment_holding(holding_id)
+            raise HTTPException(status_code=400, detail=str(e))
 
     return {"message": "Holding created", "holding_id": holding_id}
 

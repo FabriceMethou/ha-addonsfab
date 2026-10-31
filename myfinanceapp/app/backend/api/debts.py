@@ -237,10 +237,17 @@ def add_debt_payment(payment: DebtPayment, current_user: User = Depends(get_curr
         interest_part = 0.0
         principal_part = round(payment.amount, 2)
     else:
-        interest_part = round(
-            (debt.get('current_balance', 0) * (debt.get('interest_rate', 0) / 100)) / 12, 2)
-        interest_part = min(interest_part, round(payment.amount, 2))
+        interest_part = min(
+            db.monthly_interest(debt.get('current_balance', 0), debt.get('interest_rate', 0)),
+            round(payment.amount, 2))
         principal_part = round(payment.amount - interest_part, 2)
+
+    # Before anything is written: the ledger rows go first, and a refusal after
+    # them would leave the cash debited for a payment that never happened.
+    balance = max(0.0, debt.get('current_balance') or 0)
+    if principal_part > balance + 0.005:
+        left = balance + interest_part
+        raise HTTPException(status_code=400, detail=f"Only {left:.2f} {debt_currency} left to repay")
 
     label = "Extra payment" if is_extra else "Monthly payment"
     tags = "Extra Debt Payment" if is_extra else "Debt Payment"
@@ -271,11 +278,11 @@ def add_debt_payment(payment: DebtPayment, current_user: User = Depends(get_curr
 
         payment_data = {
             'debt_id': payment.debt_id,
-            'amount': 0 if is_extra else payment.amount,
+            'amount': payment.amount,
+            'payment_type': payment.payment_type,
             'payment_date': payment.payment_date,
             'transaction_id': interest_transaction_id,
             'principal_transaction_id': principal_transaction_id,
-            'extra_payment': payment.amount if is_extra else 0,
             'notes': payment.notes,
         }
         payment_id = db.add_debt_payment(payment_data)
@@ -313,6 +320,7 @@ def get_debt_payments(debt_id: int, current_user: User = Depends(get_current_use
             'principal_paid': payment.get('principal_paid'),
             'interest_paid': payment.get('interest_paid'),
             'extra_payment': payment.get('extra_payment'),
+            'total_paid': payment.get('total_paid'),
             'description': payment.get('description') or payment.get('destinataire'),
             'created_at': payment.get('created_at')
         }

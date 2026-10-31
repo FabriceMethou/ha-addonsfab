@@ -232,7 +232,9 @@ Add new ones the same way and bump `SCHEMA_VERSION`, which is stamped into
 Foreign keys **are** enforced (`PRAGMA foreign_keys=ON` in both connection
 helpers). Before deploying against an existing database, run
 `python3 scripts/check_integrity.py` — one that ran without enforcement may hold
-orphans that will make new writes fail. It also reports balance drift.
+orphans that will make new writes fail. It also reports balance drift and loan
+payments or trades whose ledger rows no longer match. To check before an upgrade,
+point `--db` at a copy of a backup: opening a database applies the migrations.
 
 ### Mutation Error Handling Pattern
 
@@ -318,6 +320,8 @@ When deleting investment transactions, the system:
 
 **Common Bug Pattern**: Using `abs(cash_impact)` when storing linked transactions causes balance reversals to go in the wrong direction.
 
+**Locked rows**: rows written by a loan payment or a trade (`_linked_row_lock` in `database.py`) refuse changes to `_LOCKED_ROW_COLUMNS` and deletion through `update_transaction` / `delete_transaction`. Their own paths (`delete_debt_payment`, the investment transaction methods) write directly.
+
 ## Core Database Tables
 
 Key tables for reference when implementing features:
@@ -391,6 +395,8 @@ Located in `scripts/` directory:
   - Should be run once after fixing the investment transaction bug
 - `fix_dividend_totals.py` - Repair dividends stored with a total of 0 (was an API endpoint)
   - Usage: `python3 scripts/fix_dividend_totals.py [--apply]` (reports only by default)
+- `fix_refund_owners.py` - Give old refunds the owner of the expense they pay back
+  - Usage: `python3 scripts/fix_refund_owners.py [--apply]` (reports only by default)
 
 ## API Interceptor Debug Logging
 
@@ -429,6 +435,7 @@ The suite lives in `app/tests/` and covers the money paths specifically:
 - `test_investment_cash_invariants.py` — the linked cash row must match the investment in sign and magnitude
 - `test_referential_integrity.py` — foreign keys and cascades as actually enforced
 - `test_exchange_rate_history.py` — conversion at the transaction's own date
+- `test_release_2_11_1.py` — loans, locked rows and refunds through the real API routes, using the `api` fixture in `conftest.py`
 
 Any change touching balances must keep these green. They exist because the
 counter drifted silently for months.
