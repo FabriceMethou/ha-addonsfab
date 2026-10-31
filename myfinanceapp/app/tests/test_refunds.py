@@ -215,11 +215,10 @@ def test_an_expense_with_refunds_stays_an_expense(db, setup):
 # ── the API ──────────────────────────────────────────────────────────────────
 
 def test_the_add_form_records_a_refund_from_the_expense(api, db, setup):
-    """Whatever category the form sends, a refund takes the expense's, positive."""
-    food = ids_of(db, "Food")
-    created = api.create_transaction(api.TransactionCreate(
-        account_id=setup["joint"], date="2026-10-07", amount=-25.0, type_id=food[0], subtype_id=food[1],
-        description="", destinataire="Optiker", refund_of_id=setup["expense"]), current_user=None)
+    """A refund takes the expense's category, positive, whatever sign it is sent with."""
+    created = api.create_refund(setup["expense"], api.RefundCreate(
+        account_id=setup["joint"], date="2026-10-07", amount=-25.0,
+        description="", destinataire="Optiker"), current_user=None)
     row = db.get_transaction(created["transaction_id"])
     assert (row["amount"], row["type_id"], row["refund_of_id"]) == (25.0, setup["health"][0], setup["expense"])
 

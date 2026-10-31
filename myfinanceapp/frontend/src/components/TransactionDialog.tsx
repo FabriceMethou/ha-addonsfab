@@ -51,15 +51,15 @@ import {
   LOAN_CATEGORY,
   REFUND_CATEGORY,
   RefundExpensePicker,
-  RefundExplainer,
-  RefundKindItems,
   SpecialCategoryItems,
   refundAmountError,
-  refundKindOf,
   refundMaxLabel,
-  type RefundKind,
   type RefundableExpense,
 } from "./Refunds";
+
+// A refund has no subcategory of its own: it takes the expense's on saving. The
+// form's required field holds this until then.
+const REFUND_SUBTYPE = "refund";
 
 export interface AddTransactionOptions {
   /** Values to start from, such as a bank line on the Reconcile page. */
@@ -72,6 +72,8 @@ export interface AddTransactionOptions {
   description?: string;
   /** After a transaction or loan payment has been saved. */
   onSaved?: () => void;
+  /** Start from this expense: "Record refund" on the Transactions page. */
+  refundOf?: RefundableExpense;
   /** The signed amount of the bank line this starts from. The amount field only
    * holds its size, so the category decides the direction on saving. */
   bankAmount?: number;
@@ -152,7 +154,6 @@ const emptyForm = (): TransactionFormData => ({
   transfer_account_id: "",
   transfer_amount: "",
   tags: "",
-  debt_id: "",
 });
 
 function TransactionDialog({
@@ -241,7 +242,10 @@ function TransactionDialog({
   useEffect(() => {
     if (!session.open) return;
     if (session.editing) loadForEdit(session.editing);
-    else resetFormCompletely(session.options.preset);
+    else {
+      resetFormCompletely(session.options.preset);
+      setRefundOf(session.options.refundOf ?? null);
+    }
     // Only when the window is opened again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
@@ -259,6 +263,18 @@ function TransactionDialog({
 
   const errorDetail = (error: any) =>
     error.response?.data?.detail || error.message || "Unknown error";
+
+  const refundMutation = useMutation({
+    mutationFn: ({ expenseId, data }: { expenseId: number; data: any }) =>
+      transactionsAPI.createRefund(expenseId, data),
+    onSuccess: () => {
+      toast.success("Refund recorded");
+      afterCreate();
+    },
+    onError: (error: any) =>
+      toast.error(`Failed to record the refund: ${errorDetail(error)}`),
+    onSettled: refreshAfterSave,
+  });
 
   const createMutation = useMutation({
     mutationFn: (data: any) => transactionsAPI.create(data),
@@ -317,7 +333,6 @@ function TransactionDialog({
       transfer_account_id: "",
       transfer_amount: "",
       tags: currentValues.tags,
-      debt_id: "",
     });
     setAutoCategorizerConfidence(null);
     setRefundOf(null);
@@ -332,13 +347,12 @@ function TransactionDialog({
     setLoanPaymentType("monthly");
   };
 
-  // Picking the expense a refund pays back. A refund comes from the
-  // expense's recipient; a reimbursement asks who paid it.
+  // Picking the expense being paid back. Whoever it was paid to is the starting
+  // point for who pays back; change it for an insurer or an employer.
   const handleRefundOf = (expense: RefundableExpense | null) => {
     setRefundOf(expense);
     clearErrors(["amount", "recipient"]);
-    if (expense && refundKind === "refund")
-      setValue("recipient", expense.destinataire || "");
+    if (expense) setValue("recipient", expense.destinataire || "");
   };
 
   const loadForEdit = (transaction: any) => {
@@ -366,14 +380,13 @@ function TransactionDialog({
         ? REFUND_CATEGORY
         : transaction.type_id.toString(),
       subtype_id: transaction.refund_of
-        ? refundKindOf(transaction)
+        ? REFUND_SUBTYPE
         : transaction.subtype_id?.toString() || "",
       description: transaction.description || "",
       recipient: transaction.destinataire || "",
       transfer_account_id: transaction.transfer_account_id?.toString() || "",
       transfer_amount: transaction.transfer_amount?.toString() || "",
       tags: transaction.tags || "",
-      debt_id: "",
     });
     setAutoCategorizerConfidence(null);
     // Trigger validation after reset to enable the Update button
@@ -405,11 +418,6 @@ function TransactionDialog({
       : formData.type_id === LOAN_CATEGORY
         ? "loan"
         : null;
-  const refundKind: RefundKind | null =
-    mode === "refund" &&
-    (formData.subtype_id === "refund" || formData.subtype_id === "reimbursement")
-      ? formData.subtype_id
-      : null;
   // The saved sign comes from the category, so a mismatch reverses the bank line.
   const bankLineConflict =
     options.bankAmount !== undefined && !editingTransaction && !mode
@@ -548,10 +556,6 @@ function TransactionDialog({
   };
 
   const submitRefund = (formValues: TransactionFormData) => {
-    if (!refundKind) {
-      setError("subtype_id", { message: "Choose refund or reimbursement" });
-      return;
-    }
     if (!refundOf) {
       toast.error("Choose the expense being paid back");
       return;
@@ -569,8 +573,8 @@ function TransactionDialog({
       setError("amount", { message: tooMuch });
       return;
     }
-    if (refundKind === "reimbursement" && !formValues.recipient?.trim()) {
-      setError("recipient", { message: "Who reimbursed you?" });
+    if (!formValues.recipient?.trim()) {
+      setError("recipient", { message: "Who paid you back?" });
       return;
     }
     const data = {
@@ -582,21 +586,17 @@ function TransactionDialog({
       type_id: refundOf.type_id,
       subtype_id: refundOf.subtype_id ?? null,
       description: formValues.description || null,
-      destinataire:
-        refundKind === "refund"
-          ? refundOf.destinataire || formValues.recipient || null
-          : formValues.recipient || null,
+      destinataire: formValues.recipient,
       transfer_account_id: null,
       transfer_amount: null,
       is_pending: false,
       tags: formValues.tags || null,
       owner_id: selectedFormOwner ? parseInt(selectedFormOwner) : null,
-      refund_of_id: editingTransaction ? undefined : refundOf.id,
     };
     if (editingTransaction) {
       updateMutation.mutate({ id: editingTransaction.id, data });
     } else {
-      createMutation.mutate(data);
+      refundMutation.mutate({ expenseId: refundOf.id, data });
     }
   };
 
@@ -738,7 +738,11 @@ function TransactionDialog({
                       field.onChange(value);
                       // A new category needs its own subcategory: checked
                       // now, so "Add" stays off and the field says why.
-                      setValue("subtype_id", "", { shouldValidate: true });
+                      setValue(
+                        "subtype_id",
+                        value === REFUND_CATEGORY ? REFUND_SUBTYPE : "",
+                        { shouldValidate: true },
+                      );
                       setRefundOf(null);
                     }}
                   >
@@ -767,50 +771,15 @@ function TransactionDialog({
               />
             </FormField>
 
-            {/* Refund or reimbursement: which one, then the expense */}
+            {/* Refund or reimbursement: the expense it pays back, then how much */}
             {mode === "refund" && (
-              <FormField
-                label="Refund or reimbursement"
-                required
-                error={errors.subtype_id && "Choose refund or reimbursement"}
-              >
-                <Controller
-                  name="subtype_id"
-                  control={control}
-                  render={({ field }) => (
-                    <Select
-                      value={field.value || ""}
-                      disabled={!!editingTransaction}
-                      onValueChange={(value) => {
-                        field.onChange(value);
-                        setRefundOf(null);
-                        clearErrors("subtype_id");
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Choose one" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <RefundKindItems />
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-                <div className="mt-1.5">
-                  <RefundExplainer />
-                </div>
-              </FormField>
-            )}
-            {refundKind && (
               <RefundExpensePicker
-                key={refundKind}
-                kind={refundKind}
                 value={refundOf}
                 onChange={handleRefundOf}
                 editing={!!editingTransaction}
               />
             )}
-            {refundKind && (refundOf || editingTransaction) && amountField}
+            {mode === "refund" && (refundOf || editingTransaction) && amountField}
 
             {/* Loan payment: which loan, then booked like the Debts page */}
             {mode === "loan" && (
@@ -1004,15 +973,12 @@ function TransactionDialog({
               </FormField>
             )}
 
-            {/* Recipient Field (non-transfer). A refund comes from the
-                expense's recipient; a reimbursement from whoever paid it. */}
+            {/* Recipient Field (non-transfer). On a refund, whoever paid it back. */}
             {!isTransfer &&
-              (!mode ||
-                (refundKind === "reimbursement" &&
-                  (refundOf || editingTransaction))) && (
+              (!mode || (mode === "refund" && (refundOf || editingTransaction))) && (
               <div className="sm:col-span-2 space-y-1.5">
                 <Label htmlFor="transaction-recipient">
-                  {mode ? "Reimbursed by" : "Recipient"}
+                  {mode ? "Paid back by" : "Recipient"}
                 </Label>
                 <div className="flex gap-2">
                   <div className="flex-1">
@@ -1027,7 +993,7 @@ function TransactionDialog({
                           onChange={field.onChange}
                           placeholder={
                             mode
-                              ? "The insurer, employer… who paid you back"
+                              ? "The shop, insurer or employer who paid you back"
                               : "Select or enter recipient"
                           }
                           freeSolo
@@ -1111,6 +1077,7 @@ function TransactionDialog({
               loading={
                 createMutation.isPending ||
                 updateMutation.isPending ||
+                refundMutation.isPending ||
                 loanPaymentMutation.isPending
               }
             >

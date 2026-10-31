@@ -70,7 +70,6 @@ class TransactionCreate(BaseModel):
     is_pending: bool = False
     tags: Optional[str] = None
     owner_id: Optional[int] = None  # Override owner; None = inherit from account
-    debt_id: Optional[int] = None  # Link transaction to a debt payment
     # The expense this pays back (a refund or reimbursement): it then takes that
     # expense's category, with a positive amount. See database.add_refund.
     refund_of_id: Optional[int] = None
@@ -232,10 +231,9 @@ def create_transaction(
 ):
     """Create new transaction"""
     if transaction.refund_of_id:
-        return create_refund(transaction.refund_of_id, RefundCreate(
-            account_id=transaction.account_id, date=transaction.date, amount=transaction.amount,
-            destinataire=transaction.destinataire, description=transaction.description,
-            tags=transaction.tags, owner_id=transaction.owner_id), current_user)
+        # Without this it would save as an ordinary expense, the opposite way round.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Record a refund through /transactions/{id}/refunds")
     # Every transaction has a subcategory (the column is NOT NULL): say so
     # instead of failing on the database.
     if not transaction.subtype_id:
@@ -314,7 +312,6 @@ def create_transaction(
             'tags': transaction.tags,
             'owner_id': transaction.owner_id,  # None = inherit from account
             # A debt payment is left out of recipient management, spelling included.
-            'keep_recipient_spelling': bool(transaction.debt_id),
         }
         transaction_id = db.add_transaction(transaction_data)
 
@@ -323,27 +320,6 @@ def create_transaction(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Failed to create transaction"
             )
-
-        # If linked to a debt, record a debt payment automatically
-        if transaction.debt_id:
-            try:
-                debt = db.get_debt(transaction.debt_id)
-                if debt:
-                    payment_data = {
-                        'debt_id': transaction.debt_id,
-                        'amount': abs(amount),
-                        'payment_date': transaction.date,
-                        'transaction_id': transaction_id,
-                        'extra_payment': 0,
-                        'payment_type': 'regular',
-                        'notes': transaction.description,
-                    }
-                    db.add_debt_payment(payment_data)
-            except Exception as e:
-                import logging as _logging
-                _logging.getLogger(__name__).warning(
-                    f"Failed to record debt payment for transaction {transaction_id}: {e}"
-                )
 
         # Check alerts after successful transaction creation
         # Wrap in try/except so alert failures don't block the transaction

@@ -53,7 +53,7 @@ import {
   ArrowDownCircle,
   RotateCcw,
 } from "lucide-react";
-import { RefundDialog, expenseLabel } from "../components/Refunds";
+import { REFUND_CATEGORY, expenseLabel } from "../components/Refunds";
 import { useTransactionDialog } from "../components/TransactionDialog";
 
 // KPI Card Component
@@ -223,7 +223,6 @@ export default function TransactionsPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
   // The expense whose "Record refund" dialog is open.
-  const [refundingExpense, setRefundingExpense] = useState<any>(null);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -275,6 +274,26 @@ export default function TransactionsPage() {
   const debouncedFilters = appliedFilters;
 
   const { openAdd, openEdit } = useTransactionDialog();
+
+  // The shared window, already on this expense.
+  const recordRefund = (expense: any) =>
+    openAdd({
+      preset: {
+        account_id: String(expense.account_id),
+        type_id: REFUND_CATEGORY,
+        subtype_id: "refund",
+        recipient: expense.destinataire || "",
+      },
+      refundOf: {
+        ...expense,
+        currency: expense.account_currency,
+        remaining: Math.max(
+          0,
+          Math.abs(expense.amount) - (expense.refunded_amount || 0),
+        ),
+      },
+      closeOnSave: true,
+    });
 
   const queryClient = useQueryClient();
 
@@ -536,20 +555,6 @@ export default function TransactionsPage() {
   const hasActiveFilters =
     Object.values(appliedFilters).some((v) => v) ||
     Object.values(pendingFilters).some((v) => v);
-
-  const refreshAfterRefund = () => {
-    for (const key of [
-      "transactions",
-      "accounts-summary",
-      "transactions-summary",
-      "recipients",
-      "spending-prediction",
-      "budgets-vs-actual",
-      "refundable",
-    ]) {
-      queryClient.invalidateQueries({ queryKey: [key] });
-    }
-  };
 
   const formatCurrency = (amount: number, currency: string = "EUR") => {
     return formatCurrencyUtil(Math.abs(amount), currency);
@@ -1299,7 +1304,7 @@ export default function TransactionsPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => setRefundingExpense(transaction)}
+                          onClick={() => recordRefund(transaction)}
                         >
                           <RotateCcw className="w-4 h-4 mr-2" />
                           Record refund
@@ -1382,13 +1387,6 @@ export default function TransactionsPage() {
       )}
 
       {/* Record a refund of an expense */}
-      <RefundDialog
-        expense={refundingExpense}
-        accounts={accountsData || []}
-        onClose={() => setRefundingExpense(null)}
-        onRecorded={refreshAfterRefund}
-      />
-
       {/* Delete Confirmation Dialog */}
       <Dialog
         open={!!deleteConfirm}

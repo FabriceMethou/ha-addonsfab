@@ -225,6 +225,15 @@ def test_a_loan_filed_under_the_old_category_is_marked_but_bank_fees_are_not(api
     """Real data keeps bank fees and credit cards under Debt, next to the loans."""
     db = api.db
     add_debt(db, add_account(db), name="Car loan")
+    with db.db_connection(commit=True) as conn:
+        conn.execute("""
+            INSERT INTO transaction_subtypes (type_id, name)
+            SELECT id, 'Car loan' FROM transaction_types WHERE name = 'Debt'
+        """)
+        conn.execute("""
+            INSERT INTO transaction_subtypes (type_id, name)
+            SELECT id, 'Bank Fee' FROM transaction_types WHERE name = 'Debt'
+        """)
     owned = owned_names(api)
 
     assert ("Debt", "Car loan") in owned

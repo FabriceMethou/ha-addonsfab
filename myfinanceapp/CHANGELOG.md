@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.13.0
+
+**Refunds: one window, one way**
+- "Record refund" on an expense opens the same Add window as everywhere else, already on that expense
+- **Refund and reimbursement are one form:** choose who you paid and which expense, then say who paid you back. It starts on the expense's recipient; change it for an insurer or an employer. Both were always recorded the same way
+- A row written by a loan payment or a trade can no longer take a new refund. A refund made earlier can still be edited
+
+**Loans**
+- **One answer for when a loan ends:** the Debts page now reads its payoff date, payment count and remaining interest from the loan's schedule. The app used to work this out three ways, with three answers
+- The schedule starts on the next payment day (or the start date of a loan not yet repaid) and splits each month exactly like a real payment
+- The loan form no longer asks for simple or compound interest: both were calculated the same way
+
+**Removed**
+- A new loan no longer adds a subcategory under the old Debt category; its payments have their own under Debt Interest and Debt Principal
+- New setups no longer have "Other Income › Refund". Rows already using it stay where they are
+- Code nothing used any more: a second way of booking a loan payment on a transaction, a second payoff calculation, an old reports module and an unused holding summary
+
 ## 2.12.0
 
 **Data check** (Backup page, new tab)

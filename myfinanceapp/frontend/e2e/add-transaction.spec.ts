@@ -32,7 +32,6 @@ test("a refund: starts from who was paid and lowers that expense", async ({ page
 
   await pick(dialog, "Account", "E2E Checking");
   await pick(dialog, "Category", "Refund / Reimbursement");
-  await pick(dialog, "Refund or reimbursement", "Refund");
   await dialog.locator("#refund-paid-to").fill("E2E Market");
   await dialog.locator("li", { hasText: "E2E Market" }).first().click();
   await dialog.getByLabel("Expenses paid to E2E Market").getByRole("button").first().click();
@@ -42,6 +41,23 @@ test("a refund: starts from who was paid and lowers that expense", async ({ page
   await expect
     .poll(async () => (await rowsOf(page.request, headers)).find((t: any) => t.refund_of)?.amount)
     .toBe(30);
+});
+
+test("Record refund opens the same window on that expense", async ({ page }) => {
+  const headers = await signIn(page, "/transactions");
+  // Oldest first from the end: the refund made by the test above is newer.
+  await page.getByText("E2E Market").last().click();
+  await page.getByRole("button", { name: "Record refund" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("Add Transaction").first()).toBeVisible();
+  await amountField(dialog).fill("5");
+  await dialog.getByLabel("Paid back by").fill("E2E Insurer");
+  await dialog.getByRole("button", { name: "Add Transaction" }).click();
+
+  await expect
+    .poll(async () => (await rowsOf(page.request, headers)).find((t: any) => t.destinataire === "E2E Insurer")?.amount)
+    .toBe(5);
 });
 
 test("a loan payment: writes interest and capital and moves the loan", async ({ page }) => {

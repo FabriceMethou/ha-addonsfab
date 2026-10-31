@@ -157,14 +157,12 @@ export default function DebtsPage() {
     handleSubmit: handleDebtSubmit,
     formState: { errors: debtErrors, isValid: isDebtValid },
     reset: resetDebtForm,
-    watch: watchDebt,
   } = useForm<DebtFormData>({
     resolver: zodResolver(debtSchema),
     mode: "onChange",
     defaultValues: defaultDebtValues,
   });
 
-  const watchDebtInterestType = watchDebt("interest_type");
 
   const defaultPaymentValues: PaymentFormData = {
     amount: "",
@@ -351,10 +349,6 @@ export default function DebtsPage() {
       }
     }
 
-    // Include interest_type
-    if (formData.interest_type) {
-      data.interest_type = formData.interest_type;
-    }
 
     // Include minimum_payment if provided
     if (formData.minimum_payment) {
@@ -450,46 +444,15 @@ export default function DebtsPage() {
   const payoffProgress =
     totalOriginal > 0 ? (totalPaid / totalOriginal) * 100 : 0;
 
-  // Calculate payoff timeline
-  const calculatePayoffTimeline = (debt: any) => {
-    // Use minimum_payment (API returns it as this, not monthly_payment)
-    const monthlyPayment = debt.minimum_payment || 0;
-
-    if (!monthlyPayment || monthlyPayment <= 0 || debt.current_balance <= 0) {
-      return { months: null, payoffDate: null, totalInterest: 0 };
-    }
-
-    const monthlyRate = (debt.interest_rate || 0) / 100 / 12;
-    let balance = debt.current_balance;
-    let months = 0;
-    let totalInterest = 0;
-    const maxMonths = 600;
-
-    while (balance > 0 && months < maxMonths) {
-      const interestPayment = balance * monthlyRate;
-      const principalPayment = Math.min(
-        monthlyPayment - interestPayment,
-        balance,
-      );
-
-      if (principalPayment <= 0) {
-        return { months: null, payoffDate: null, totalInterest: 0 };
-      }
-
-      totalInterest += interestPayment;
-      balance -= principalPayment;
-      months++;
-    }
-
-    if (balance > 0) {
-      return { months: null, payoffDate: null, totalInterest: 0 };
-    }
-
-    const payoffDate = new Date();
-    payoffDate.setMonth(payoffDate.getMonth() + months);
-
-    return { months, payoffDate, totalInterest };
-  };
+  // When each loan ends comes from its schedule on the server.
+  const calculatePayoffTimeline = (debt: any) =>
+    debt.payoff
+      ? {
+          months: debt.payoff.months as number,
+          payoffDate: parseISO(debt.payoff.payoff_date),
+          totalInterest: debt.payoff.total_interest as number,
+        }
+      : { months: null, payoffDate: null, totalInterest: 0 };
 
   // Separate active and inactive debts
   const activeDebts = debtsData?.filter((d: any) => d.is_active === 1) || [];
@@ -1094,38 +1057,6 @@ export default function DebtsPage() {
                     type="number"
                     step="0.01"
                   />
-                </FormField>
-                <FormField
-                  label="Interest Type"
-                  error={debtErrors.interest_type?.message}
-                >
-                  <Controller
-                    name="interest_type"
-                    control={debtControl}
-                    render={({ field }) => (
-                      <Select
-                        value={field.value}
-                        onValueChange={field.onChange}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="simple">
-                            Simple Interest
-                          </SelectItem>
-                          <SelectItem value="compound">
-                            Compound Interest
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                  <p className="text-xs text-foreground-muted mt-1">
-                    {watchDebtInterestType === "simple"
-                      ? "Interest on principal only"
-                      : "Interest on principal + accumulated interest"}
-                  </p>
                 </FormField>
               </div>
 

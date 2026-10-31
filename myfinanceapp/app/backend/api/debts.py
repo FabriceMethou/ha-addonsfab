@@ -87,7 +87,8 @@ def get_debts(include_inactive: bool = False, current_user: User = Depends(get_c
             'account_name': debt.get('account_name'),
             'linked_account_id': debt.get('linked_account_id'),
             'account_id': debt.get('linked_account_id'),  # Add alias for frontend compatibility
-            'currency': debt.get('currency', 'EUR')  # Debt currency
+            'currency': debt.get('currency', 'EUR'),  # Debt currency
+            'payoff': db.debt_payoff_summary(debt['id']),
         }
         mapped_debts.append(mapped_debt)
 
@@ -286,11 +287,3 @@ def get_amortization_schedule(debt_id: int, current_user: User = Depends(get_cur
     if not schedule:
         raise HTTPException(status_code=404, detail="Debt not found or no payments needed")
     return {"schedule": schedule}
-
-@router.get("/{debt_id}/payoff")
-def get_payoff_summary(debt_id: int, current_user: User = Depends(get_current_user)):
-    """Get payoff summary for a debt (exposes existing calculate_debt_payoff)"""
-    summary = db.calculate_debt_payoff(debt_id)
-    if not summary:
-        raise HTTPException(status_code=404, detail="Debt not found")
-    return summary

@@ -1285,7 +1285,7 @@ class FinanceDatabase:
                 "category": "income",
                 "icon": "💵",
                 "color": "#FDCB6E",
-                "subtypes": ["Gift", "Refund", "Side Hustle", "Miscellaneous"]
+                "subtypes": ["Gift", "Side Hustle", "Miscellaneous"]
             },
             "Transfer": {
                 "category": "transfer",
@@ -4003,6 +4003,9 @@ class FinanceDatabase:
         with self.db_connection(commit=True) as conn:
             cursor = conn.cursor()
             amount = abs(refund.get('amount') or 0)
+            # For new refunds only: an old one on such a row can still be edited.
+            if self._is_app_written_row(cursor, expense_id):
+                raise ValueError("A loan payment or a trade cannot take a refund: correct it on its own page")
             expense = self._check_refund(cursor, expense_id, amount, refund['account_id'])
             currency = cursor.execute("SELECT currency FROM accounts WHERE id = ?",
                                       (refund['account_id'],)).fetchone()['currency']
@@ -4600,9 +4603,6 @@ class FinanceDatabase:
                 "linked_account_id is required: payments on this debt need an "
                 "account to be debited from"
             )
-
-        # Get or create Debt type and subtype BEFORE opening connection
-        debt_type_id, debt_subtype_id = self.get_or_create_debt_subtype(debt_data['name'])
 
         with self.db_connection(commit=True) as conn:
             cursor = conn.cursor()
@@ -5205,73 +5205,34 @@ class FinanceDatabase:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
-    def calculate_debt_payoff(self, debt_id: int) -> Dict[str, Any]:
-        """Calculate payoff information for a debt."""
-        from datetime import datetime
+    @staticmethod
+    def _next_debt_payment_date(debt: Dict[str, Any]):
+        """The first payment still to come: the payment day on or after today, or
+        after the loan's start date when its repayments have not begun."""
+        from calendar import monthrange
+        from datetime import date
         from dateutil.relativedelta import relativedelta
-        import math
-        
-        debt = next((d for d in self.get_debts() if d['id'] == debt_id), None)
-        if not debt:
-            return {}
-        
-        balance = debt['current_balance']
-        monthly_payment = debt['monthly_payment']
-        annual_rate = debt['interest_rate'] / 100
-        monthly_rate = annual_rate / 12
-        
-        if balance <= 0:
-            return {
-                'debt_id': debt_id,
-                'is_paid_off': True,
-                'months_remaining': 0,
-                'payoff_date': None,
-                'total_interest_remaining': 0,
-                'total_amount_remaining': 0
-            }
-        
-        # Calculate months to payoff
-        if debt['interest_type'] == 'simple':
-            # Simple interest: Total Interest = Principal × Rate × Time
-            # Approximate time to pay off
-            months = balance / monthly_payment
-            total_interest = balance * annual_rate * (months / 12)
-        else:
-            # Compound interest calculation
-            # Formula: n = log(P / (P - B*r)) / log(1 + r)
-            # Where: P = monthly payment, B = balance, r = monthly rate, n = months
-            
-            if monthly_rate == 0:
-                # No interest
-                months = balance / monthly_payment
-                total_interest = 0
-            elif monthly_payment <= balance * monthly_rate:
-                # Payment too small to cover interest - loan won't be paid off
-                months = 999
-                total_interest = balance
-            else:
-                # Standard amortization formula
-                try:
-                    months = math.log(monthly_payment / (monthly_payment - balance * monthly_rate)) / math.log(1 + monthly_rate)
-                    total_paid = monthly_payment * months
-                    total_interest = total_paid - balance
-                except (ValueError, ZeroDivisionError):
-                    months = 999
-                    total_interest = balance
-        
-        # Calculate payoff date
-        start_date = datetime.now().date()
-        payoff_date = start_date + relativedelta(months=int(months))
-        
+
+        start = date.today()
+        if debt.get('start_date'):
+            start = max(start, date.fromisoformat(str(debt['start_date'])[:10]))
+        wanted_day = debt.get('payment_day') or start.day
+        due = start.replace(day=min(wanted_day, monthrange(start.year, start.month)[1]))
+        if due < start:
+            following = start + relativedelta(months=1)
+            due = following.replace(day=min(wanted_day, monthrange(following.year, following.month)[1]))
+        return due
+
+    def debt_payoff_summary(self, debt_id: int) -> Optional[Dict[str, Any]]:
+        """When a loan ends and what it still costs, read from its schedule. None
+        when the monthly payment never clears it."""
+        schedule = self.generate_amortization_schedule(debt_id)
+        if not schedule or schedule[-1]['balance'] > 0.01:
+            return None
         return {
-            'debt_id': debt_id,
-            'is_paid_off': False,
-            'months_remaining': int(months),
-            'payoff_date': payoff_date.isoformat(),
-            'total_interest_remaining': round(total_interest, 2),
-            'total_amount_remaining': round(balance + total_interest, 2),
-            'current_balance': balance,
-            'monthly_payment': monthly_payment
+            'months': len(schedule),
+            'payoff_date': schedule[-1]['date'],
+            'total_interest': round(sum(row['interest'] for row in schedule), 2),
         }
 
     def generate_amortization_schedule(self, debt_id: int) -> List[Dict[str, Any]]:
@@ -5298,21 +5259,15 @@ class FinanceDatabase:
 
         schedule = []
         balance = float(debt['current_balance'])
-        monthly_rate = (float(debt['interest_rate']) / 100) / 12
         payment = float(debt['monthly_payment'])
-
-        # Start from today
-        current_date = datetime.now().date()
+        first_date = self._next_debt_payment_date(debt)
 
         # Generate schedule until balance is paid off (max 360 months = 30 years)
         while balance > 0.01 and len(schedule) < 360:
-            # Calculate interest for this period
-            if debt.get('interest_type') == 'simple':
-                # Simple interest: I = P * r * t (annual)
-                interest = (balance * float(debt['interest_rate']) / 100) / 12
-            else:
-                # Compound interest: I = P * (monthly_rate)
-                interest = balance * monthly_rate
+            current_date = first_date + relativedelta(months=len(schedule))
+
+            # The same split a real payment gets.
+            interest = self.monthly_interest(balance, debt['interest_rate'])
 
             # Principal is what's left after interest
             principal = min(payment - interest, balance)
@@ -5333,9 +5288,6 @@ class FinanceDatabase:
                 'interest': round(interest, 2),
                 'balance': round(max(balance, 0), 2),
             })
-
-            # Move to next month
-            current_date = current_date + relativedelta(months=1)
 
         return schedule
 
@@ -6955,153 +6907,6 @@ class FinanceDatabase:
             self._sync_investment_account_balance(cursor, investment_account_id)
             logger.info(f"Deleted investment transaction {transaction_id}")
         return success
-
-    def calculate_holding_summary(self, holding_id: int) -> Dict[str, Any]:
-        """Calculate summary for a holding (shares, cost basis, gains, etc.)."""
-        from datetime import datetime, timedelta
-        
-        with self.db_connection(commit=False) as conn:
-            cursor = conn.cursor()
-        
-            # Identity (symbol, name, type) lives on securities — the holding
-            # only points at it. A bare SELECT * here is what made this function
-            # raise KeyError on every call once the two tables were split.
-            cursor.execute("""
-                SELECT h.*, s.symbol, s.name, s.investment_type,
-                       COALESCE(h.currency, s.currency) AS currency
-                FROM investment_holdings h
-                JOIN securities s ON h.security_id = s.id
-                WHERE h.id = ?
-            """, (holding_id,))
-            row = cursor.fetchone()
-            if row is None:
-                raise ValueError(f"Holding {holding_id} not found")
-            holding = dict(row)
-        
-            # Get all transactions
-            cursor.execute("""
-                SELECT * FROM investment_transactions 
-                WHERE holding_id = ? 
-                ORDER BY transaction_date
-            """, (holding_id,))
-            transactions = [dict(row) for row in cursor.fetchall()]
-        
-        
-            # Calculate totals
-            total_shares = 0
-            total_cost = 0
-            total_dividends = 0
-            realized_gains = 0
-        
-            for trans in transactions:
-                if trans['transaction_type'] == 'buy':
-                    total_shares += trans['shares']
-                    total_cost += trans['total_amount'] + trans['fees']
-                elif trans['transaction_type'] == 'sell':
-                    shares_sold = trans['shares']
-                    total_shares -= shares_sold
-                
-                    # Calculate realized gain (simplified - FIFO)
-                    avg_cost_per_share = total_cost / (total_shares + shares_sold) if (total_shares + shares_sold) > 0 else 0
-                    cost_of_sold = avg_cost_per_share * shares_sold
-                    realized_gains += (trans['total_amount'] - trans['fees']) - cost_of_sold
-                    total_cost -= cost_of_sold
-                elif trans['transaction_type'] == 'dividend':
-                    total_dividends += trans['total_amount']
-        
-            # Current value
-            current_price = holding['current_price']
-            current_value = total_shares * current_price if total_shares > 0 else 0
-        
-            # Unrealized gains
-            unrealized_gains = current_value - total_cost if total_shares > 0 else 0
-        
-            # Average cost per share
-            avg_cost_per_share = total_cost / total_shares if total_shares > 0 else 0
-        
-            # Total return %
-            total_invested = sum(t['total_amount'] + t['fees'] for t in transactions if t['transaction_type'] == 'buy')
-            total_return_pct = ((current_value + total_dividends + realized_gains) / total_invested - 1) * 100 if total_invested > 0 else 0
-        
-            # Daily change
-            daily_change = 0  # Would need historical data for this
-            daily_change_pct = 0
-        
-            # Dividend yield (annual)
-            # Calculate dividends in last 12 months
-            # timedelta rather than replace(year=...): the latter raises on
-            # 29 February, so the yield would crash one day every four years.
-            one_year_ago = (datetime.now().date() - timedelta(days=365)).isoformat()
-            recent_dividends = sum(t['total_amount'] for t in transactions 
-                                  if t['transaction_type'] == 'dividend' and t['transaction_date'] >= one_year_ago)
-            dividend_yield = (recent_dividends / current_value * 100) if current_value > 0 else 0
-        
-            return {
-                'holding_id': holding_id,
-                'symbol': holding['symbol'],
-                'name': holding['name'],
-                'isin': holding.get('isin'),
-                'investment_type': holding['investment_type'],
-                'currency': holding['currency'],
-                'total_shares': total_shares,
-                'avg_cost_per_share': avg_cost_per_share,
-                'current_price': current_price,
-                'current_value': current_value,
-                'total_cost': total_cost,
-                'unrealized_gains': unrealized_gains,
-                'realized_gains': realized_gains,
-                'total_dividends': total_dividends,
-                'total_return': unrealized_gains + realized_gains + total_dividends,
-                'total_return_pct': total_return_pct,
-                'daily_change': daily_change,
-                'daily_change_pct': daily_change_pct,
-                'dividend_yield': dividend_yield,
-                'last_price_update': holding.get('last_price_update')
-            }
-
-    def get_portfolio_summary(self, account_id: int = None) -> Dict[str, Any]:
-        """Get overall portfolio summary."""
-        holdings = self.get_investment_holdings(account_id)
-        
-        total_value = 0
-        total_cost = 0
-        total_unrealized_gains = 0
-        total_realized_gains = 0
-        total_dividends = 0
-        
-        holdings_summary = []
-        
-        for holding in holdings:
-            summary = self.calculate_holding_summary(holding['id'])
-            holdings_summary.append(summary)
-            
-            total_value += summary['current_value']
-            total_cost += summary['total_cost']
-            total_unrealized_gains += summary['unrealized_gains']
-            total_realized_gains += summary['realized_gains']
-            total_dividends += summary['total_dividends']
-        
-        total_gains = total_unrealized_gains + total_realized_gains
-        total_return_pct = ((total_value + total_dividends + total_realized_gains) / total_cost - 1) * 100 if total_cost > 0 else 0
-        
-        # Asset allocation
-        allocation = {}
-        for summary in holdings_summary:
-            inv_type = summary['investment_type']
-            allocation[inv_type] = allocation.get(inv_type, 0) + summary['current_value']
-        
-        return {
-            'total_value': total_value,
-            'total_cost': total_cost,
-            'total_unrealized_gains': total_unrealized_gains,
-            'total_realized_gains': total_realized_gains,
-            'total_gains': total_gains,
-            'total_dividends': total_dividends,
-            'total_return_pct': total_return_pct,
-            'holdings_count': len(holdings),
-            'asset_allocation': allocation,
-            'holdings': holdings_summary
-        }
 
     def get_training_data(self, min_transactions: int = 100) -> List[Dict]:
         #"""Get transactions for ML training."""

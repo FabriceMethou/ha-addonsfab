@@ -19,7 +19,6 @@ export const transactionSchema = z.object({
   transfer_account_id: z.string().optional(),
   transfer_amount: z.string().optional(),
   tags: z.string().optional(),
-  debt_id: z.string().optional(),
 });
 
 // Transfer-specific validation - adds conditional requirement for destination account
@@ -137,7 +136,7 @@ export const debtSchema = z.object({
     .string()
     .optional()
     .refine((val) => !val || !isNaN(parseFloat(val)), 'Interest rate must be a valid number'),
-  interest_type: z.enum(['simple', 'compound']),
+  interest_type: z.enum(['simple', 'compound']).optional(),
   minimum_payment: z
     .string()
     .optional()

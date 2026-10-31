@@ -386,7 +386,6 @@ export const debtsAPI = {
   updatePayment: (paymentId: number, data: Record<string, unknown>) =>
     api.put(`/api/debts/payments/${paymentId}`, data),
   getSchedule: (id: number) => api.get(`/api/debts/${id}/schedule`),
-  getPayoff: (id: number) => api.get(`/api/debts/${id}/payoff`),
 };
 
 // Investments API

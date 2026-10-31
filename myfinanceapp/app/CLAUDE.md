@@ -71,7 +71,6 @@ sqlite3 data/finance.db
 - `database.py` - Database layer with `FinanceDatabase` class and `SimpleCRUD` helper
 - `categorizer.py` - ML-based transaction categorization using scikit-learn
 - `predictions.py` - Spending prediction and budget analysis
-- `reports.py` - Financial reporting (category breakdowns, trends, cashflow)
 - `backup_manager.py` - Database backup/restore with versioning
 - `cloud_backup.py` - Google Cloud Storage and WebDAV integration
 - `alerts.py` - Budget threshold alerts by SMTP email. The apprise package is
