@@ -3,7 +3,9 @@ What investments did and are worth. One calculation for the Investments page, th
 dashboard and Reports, so the three cannot disagree. Every function takes the
 database it reads from.
 """
-from typing import Optional
+import calendar
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional
 
 
 def _rows_total(db, where: str, params: list, start_date: Optional[str], end_date: Optional[str],
@@ -30,12 +32,14 @@ def _rows_total(db, where: str, params: list, start_date: Optional[str], end_dat
                for row in rows)
 
 
-def realised_gains(db, start_date, end_date, owner_id, display_currency) -> float:
+def realised_gains(db, start_date, end_date, owner_id, display_currency,
+                   holding_id: Optional[int] = None) -> float:
+    only_holding = " AND holding_id = ?" if holding_id else ""
     return _rows_total(
         db,
         "t.id IN (SELECT gain_transaction_id FROM investment_transactions "
-        "WHERE gain_transaction_id IS NOT NULL)",
-        [], start_date, end_date, owner_id, display_currency)
+        f"WHERE gain_transaction_id IS NOT NULL{only_holding})",
+        [holding_id] if holding_id else [], start_date, end_date, owner_id, display_currency)
 
 
 def investment_activity(db, start_date: Optional[str] = None, end_date: Optional[str] = None,
@@ -168,4 +172,241 @@ def investment_activity(db, start_date: Optional[str] = None, end_date: Optional
         "start_date": start_date,
         "end_date": end_date,
         "currency": display_currency,
+    }
+
+
+def _month_end_dates(start: date, end: date) -> List[date]:
+    """The day before the period, then each month end in it, then its last day."""
+    dates = [start - timedelta(days=1)]
+    year, month = start.year, start.month
+    while True:
+        month_end = date(year, month, calendar.monthrange(year, month)[1])
+        if month_end >= end:
+            break
+        dates.append(month_end)
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    dates.append(end)
+    return dates
+
+
+class _Position:
+    """A holding with its trades and prices, able to value itself on any date."""
+
+    def __init__(self, row: Dict[str, Any], trades: List[Dict[str, Any]], prices: List[Dict[str, Any]]):
+        self.row = row
+        self.trades = trades
+        self.prices = prices
+
+    def value_on(self, on: str) -> float:
+        """Same rule as _net_worth_on: the latest price known on that date. A holding
+        with no market price at all is worth what it cost."""
+        buys = [t for t in self.trades if t['transaction_type'] == 'buy' and t['transaction_date'] <= on]
+        sold = sum(t['shares'] or 0 for t in self.trades
+                   if t['transaction_type'] == 'sell' and t['transaction_date'] <= on)
+        quantity = sum(t['shares'] or 0 for t in buys) - sold
+        if quantity <= 0:
+            return 0.0
+
+        current_price = self.row['current_price'] or 0
+        if current_price > 0 and on >= date.today().isoformat():
+            return quantity * current_price
+        known = [p['price'] for p in self.prices if p['price_date'] <= on]
+        if current_price > 0 and known:
+            return quantity * known[-1]
+        shares_bought = sum(t['shares'] or 0 for t in buys)
+        cost = sum(t['total_amount'] or 0 for t in buys)
+        return quantity * (cost / shares_bought) if shares_bought else 0.0
+
+
+class _LedgerAccount(_Position):
+    """An investment account with no holdings, such as a gold account fed by
+    transfers: worth its ledger, and each row in or out is what was contributed."""
+
+    def __init__(self, account: Dict[str, Any], rows: List[Dict[str, Any]]):
+        trades = [{
+            'transaction_type': 'buy' if row['amount'] > 0 else 'sell',
+            'transaction_date': row['transaction_date'],
+            'total_amount': abs(row['amount']),
+            'shares': None, 'fees': 0, 'tax': 0, 'gain': None, 'gain_currency': None,
+            'currency': account['currency'],
+        } for row in rows]
+        super().__init__({
+            'id': None, 'current_price': 0, 'symbol': account['name'], 'name': account['name'],
+            'investment_type': 'other', 'currency': account['currency'],
+        }, trades, [])
+        self.opening_balance = account['opening_balance'] or 0
+        self.opening_date = account['opening_date']
+        self.rows = rows
+
+    def value_on(self, on: str) -> float:
+        if self.opening_date and on < self.opening_date:
+            return 0.0
+        return self.opening_balance + sum(r['amount'] for r in self.rows if r['transaction_date'] <= on)
+
+
+def _load_positions(db, owner_id: Optional[int], account_id: Optional[int]) -> List[_Position]:
+    query = """
+        SELECT h.id, h.current_price, s.symbol, s.name, s.investment_type,
+               COALESCE(h.currency, s.currency) AS currency
+          FROM investment_holdings h
+          JOIN securities s ON s.id = h.security_id
+          JOIN accounts a ON a.id = h.account_id
+         WHERE 1 = 1"""
+    params: List[Any] = []
+    if owner_id:
+        query += " AND a.owner_id = ?"
+        params.append(owner_id)
+    if account_id:
+        query += " AND a.id = ?"
+        params.append(account_id)
+    with db.db_connection(commit=False) as conn:
+        positions = []
+        for row in conn.execute(query, params).fetchall():
+            trades = conn.execute("""
+                SELECT it.*, g.amount AS gain, a.currency AS gain_currency
+                  FROM investment_transactions it
+                  LEFT JOIN transactions g ON g.id = it.gain_transaction_id
+                  LEFT JOIN accounts a ON a.id = g.account_id
+                 WHERE it.holding_id = ? ORDER BY it.transaction_date, it.id
+            """, (row['id'],)).fetchall()
+            prices = conn.execute("""
+                SELECT price_date, price FROM price_history
+                 WHERE holding_id = ? ORDER BY price_date
+            """, (row['id'],)).fetchall()
+            positions.append(_Position(dict(row), [dict(t) for t in trades], [dict(p) for p in prices]))
+
+        ledger_query = """
+            SELECT a.id, a.name, a.currency, a.opening_balance, a.opening_date FROM accounts a
+             WHERE a.account_type = 'investment'
+               AND NOT EXISTS (SELECT 1 FROM investment_holdings h WHERE h.account_id = a.id)"""
+        ledger_params: List[Any] = []
+        if owner_id:
+            ledger_query += " AND a.owner_id = ?"
+            ledger_params.append(owner_id)
+        if account_id:
+            ledger_query += " AND a.id = ?"
+            ledger_params.append(account_id)
+        for account in conn.execute(ledger_query, ledger_params).fetchall():
+            rows = conn.execute("""
+                SELECT transaction_date, amount FROM transactions
+                 WHERE account_id = ? AND confirmed = 1
+                   AND (? IS NULL OR transaction_date >= ?)
+                 ORDER BY transaction_date, id
+            """, (account['id'], account['opening_date'], account['opening_date'])).fetchall()
+            positions.append(_LedgerAccount(dict(account), [dict(r) for r in rows]))
+    return positions
+
+
+def investment_report(db, start_date: str, end_date: str, owner_id: Optional[int] = None,
+                      account_id: Optional[int] = None) -> Dict[str, Any]:
+    """What a portfolio did in a period, in the display currency.
+
+    The figures add up: end value = start value + net contributed + market gain.
+    """
+    display_currency = db.get_preference('display_currency', 'EUR')
+    rates = db.get_exchange_rates_map()
+
+    def to_display(amount: float, currency: Optional[str]) -> float:
+        return db.convert_with_rates(amount or 0, currency or display_currency, display_currency, rates)
+
+    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    points = _month_end_dates(start, end)
+    day_before = points[0].isoformat()
+    positions = _load_positions(db, owner_id, account_id)
+
+    rows: List[Dict[str, Any]] = []
+    series = [{'date': point.isoformat(), 'value': 0.0, 'contributed': 0.0} for point in points]
+    dividends_by_month: Dict[str, float] = {}
+    allocation: Dict[str, Dict[str, Any]] = {}
+    fees_and_tax = realised = 0.0
+
+    for position in positions:
+        info = position.row
+        currency = info['currency']
+        start_value = to_display(position.value_on(day_before), currency)
+        end_value = to_display(position.value_on(end_date), currency)
+        bought = sold = income = 0.0
+
+        for trade in position.trades:
+            when = trade['transaction_date']
+            if not start_date <= when <= end_date:
+                continue
+            total = to_display(trade['total_amount'], trade['currency'])
+            costs = to_display((trade['fees'] or 0) + (trade['tax'] or 0), trade['currency'])
+            fees_and_tax += costs
+            if trade['transaction_type'] == 'buy':
+                bought += total + costs
+            elif trade['transaction_type'] == 'sell':
+                sold += total - costs
+                realised += to_display(trade['gain'], trade['gain_currency'])
+            elif trade['transaction_type'] == 'dividend':
+                income += total
+                month = when[:7]
+                dividends_by_month[month] = dividends_by_month.get(month, 0.0) + total
+
+        for point in series:
+            point['value'] += to_display(position.value_on(point['date']), currency)
+            contributed = start_value
+            for trade in position.trades:
+                if start_date <= trade['transaction_date'] <= point['date']:
+                    total = to_display(trade['total_amount'], trade['currency'])
+                    costs = to_display((trade['fees'] or 0) + (trade['tax'] or 0), trade['currency'])
+                    if trade['transaction_type'] == 'buy':
+                        contributed += total + costs
+                    elif trade['transaction_type'] == 'sell':
+                        contributed -= total - costs
+            point['contributed'] += contributed
+
+        if not (start_value or end_value or bought or sold or income):
+            continue
+
+        rows.append({
+            'holding_id': info['id'],
+            'symbol': info['symbol'] or info['name'],
+            'name': info['name'],
+            'investment_type': info['investment_type'],
+            'start_value': round(start_value, 2),
+            'bought': round(bought, 2),
+            'sold': round(sold, 2),
+            'income': round(income, 2),
+            'end_value': round(end_value, 2),
+            # Adding 0.0 turns a rounded -0.0 into 0.0, which would read "-€0.00".
+            'gain': round(end_value - start_value - bought + sold + income, 2) + 0.0,
+        })
+
+        if end_value > 0:
+            kind = allocation.setdefault(info['investment_type'] or 'other',
+                                         {'category': info['investment_type'] or 'other',
+                                          'total': 0.0, 'subcategories': []})
+            kind['total'] += end_value
+            kind['subcategories'].append({'category': info['symbol'] or info['name'],
+                                           'total': round(end_value, 2)})
+
+    rows.sort(key=lambda row: row['end_value'], reverse=True)
+    start_total = sum(row['start_value'] for row in rows)
+    end_total = sum(row['end_value'] for row in rows)
+    net_contributed = sum(row['bought'] - row['sold'] for row in rows)
+    for kind in allocation.values():
+        kind['total'] = round(kind['total'], 2)
+        kind['subcategories'].sort(key=lambda sub: sub['total'], reverse=True)
+
+    return {
+        'start_date': start_date,
+        'end_date': end_date,
+        'currency': display_currency,
+        'summary': {
+            'start_value': round(start_total, 2),
+            'end_value': round(end_total, 2),
+            'net_contributed': round(net_contributed, 2),
+            'market_gain': round(end_total - start_total - net_contributed, 2),
+            'dividends': round(sum(dividends_by_month.values()), 2),
+            'realised_gains': round(realised, 2),
+            'fees_and_tax': round(fees_and_tax, 2),
+        },
+        'holdings': rows,
+        'series': [{**point, 'value': round(point['value'], 2),
+                    'contributed': round(point['contributed'], 2)} for point in series],
+        'dividends_by_month': [{'month': month, 'amount': round(amount, 2)}
+                               for month, amount in sorted(dividends_by_month.items())],
+        'allocation': sorted(allocation.values(), key=lambda kind: kind['total'], reverse=True),
     }

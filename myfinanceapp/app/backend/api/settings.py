@@ -28,6 +28,7 @@ ALLOWED_PREFERENCE_KEYS = {
     'debug_mode', 'debug_auto_recalculate', 'debug_show_logs',
     'debug_log_api_calls', 'debug_log_transactions',
     'cloud_webdav_url', 'cloud_webdav_username', 'cloud_webdav_path', 'cloud_enabled',
+    'auto_refresh_prices',
 }
 
 class SettingUpdate(BaseModel):
@@ -61,6 +62,8 @@ def get_all_settings(current_user: User = Depends(get_current_user)):
     return {
         "settings": {
             "display_currency": display_currency,
+            "auto_refresh_prices": str(db.get_preference('auto_refresh_prices', 'true')).lower() != 'false',
+            "last_price_refresh": db.get_preference('last_price_refresh', ''),
             "debug_mode": debug_mode == 'true',
             "debug_auto_recalculate": debug_auto_recalculate == 'true',
             "debug_show_logs": debug_show_logs == 'true',

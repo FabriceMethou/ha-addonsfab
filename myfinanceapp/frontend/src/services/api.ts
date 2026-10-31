@@ -407,9 +407,12 @@ export const investmentsAPI = {
   updateHolding: (id: number, data: Record<string, unknown>) =>
     api.put(`/api/investments/holdings/${id}`, data),
   deleteHolding: (id: number) => api.delete(`/api/investments/holdings/${id}`),
-  getMonthly: (params: { start_date?: string; end_date?: string } = {}) =>
+  getMonthly: (
+    params: { start_date?: string; end_date?: string; owner_id?: number } = {},
+  ) =>
     api.get("/api/investments/monthly", { params }),
-  getSummary: () => api.get("/api/investments/summary"),
+  getSummary: (params: { owner_id?: number; account_id?: number } = {}) =>
+    api.get("/api/investments/summary", { params }),
   getTransactions: () => api.get("/api/investments/transactions"),
   addTransaction: (data: Record<string, unknown>) =>
     api.post("/api/investments/transactions", data),
@@ -520,6 +523,19 @@ export interface ReportPeriodParams {
 }
 
 export const reportsAPI = {
+  /** What the portfolio did in a period. */
+  getInvestments: (params: {
+    start_date: string;
+    end_date: string;
+    owner_id?: number;
+    account_id?: number;
+  }) => api.get("/api/reports/investments", { params }),
+  /** A period's income and where it went: spent, invested, repaid or kept. */
+  getWhereMoneyWent: (params: {
+    start_date?: string;
+    end_date?: string;
+    owner_id?: number;
+  }) => api.get("/api/reports/where-money-went", { params }),
   getNetWorth: (params?: { owner_id?: number }) =>
     api.get("/api/reports/net-worth", { params }),
   getNetWorthTrend: (params: ReportPeriodParams = { months: 12 }) =>

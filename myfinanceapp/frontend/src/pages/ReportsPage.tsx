@@ -49,9 +49,7 @@ import {
 import {
   TrendingUp,
   TrendingDown,
-  Coins,
   Landmark,
-  PiggyBank,
   Tag,
   Wallet,
   ArrowUpCircle,
@@ -91,6 +89,8 @@ import {
 // Nivo
 import { ResponsivePie } from "@nivo/pie";
 import { ResponsiveSankey } from "@nivo/sankey";
+import InvestmentsReport from "../components/reports/InvestmentsReport";
+import WhereMoneyWent from "../components/reports/WhereMoneyWent";
 
 // Enhanced KPI Card with percentage changes (matching Dashboard style)
 function KPICard({
@@ -395,6 +395,18 @@ export default function ReportsPage() {
 
   // Helper to get owner_id for API calls
   const ownerIdParam = selectedOwner ? Number(selectedOwner) : undefined;
+
+  const { data: overviewFlow } = useQuery({
+    queryKey: ["where-money-went", startDate, endDate, selectedOwner],
+    queryFn: async () =>
+      (
+        await reportsAPI.getWhereMoneyWent({
+          start_date: startDate,
+          end_date: endDate,
+          owner_id: ownerIdParam,
+        })
+      ).data,
+  });
 
   // Fetch data
   const {
@@ -985,6 +997,7 @@ export default function ReportsPage() {
           <TabsTrigger value="trends">Spending Trends</TabsTrigger>
           <TabsTrigger value="monthly">Monthly Summary</TabsTrigger>
           <TabsTrigger value="networth">Net Worth History</TabsTrigger>
+          <TabsTrigger value="investments">Investments</TabsTrigger>
           <TabsTrigger value="bycategory" className="flex items-center gap-1">
             <Layers className="w-4 h-4" />
             By Category
@@ -1429,6 +1442,25 @@ export default function ReportsPage() {
                   </p>
                   <p className="text-xl font-bold text-foreground">
                     {transactionsData?.length || 0}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-foreground-muted mb-1">
+                    Net Invested
+                  </p>
+                  <p className="text-xl font-bold text-foreground">
+                    {formatCurrency(overviewFlow?.net_invested ?? 0)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-foreground-muted mb-1">
+                    Investment Income
+                  </p>
+                  <p className="text-xl font-bold text-foreground">
+                    {formatCurrency(
+                      (overviewFlow?.dividends ?? 0) +
+                        (overviewFlow?.realised_gains ?? 0),
+                    )}
                   </p>
                 </div>
                 <div>
@@ -1896,6 +1928,13 @@ export default function ReportsPage() {
                 </div>
 
                 {/* Spending by Category */}
+                {monthlySummaryData.where_money_went && (
+                  <WhereMoneyWent
+                    data={monthlySummaryData.where_money_went}
+                    formatCurrency={formatCurrency}
+                  />
+                )}
+
                 {monthlySummaryData.spending_by_category?.length > 0 && (
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
@@ -2433,6 +2472,10 @@ export default function ReportsPage() {
         </TabsContent>
 
         {/* Money Flow Tab */}
+        <TabsContent value="investments">
+          <InvestmentsReport owners={owners} />
+        </TabsContent>
+
         <TabsContent value="yearbyyear">
           <div className="space-y-6 mt-4">
             {/* Year and Month Selector */}
@@ -2517,39 +2560,10 @@ export default function ReportsPage() {
 
                 {/* What the savings became */}
                 {yearByYearData.where_money_went && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <KPICard
-                      title="Invested (net)"
-                      value={formatCurrency(
-                        yearByYearData.where_money_went.net_invested,
-                      )}
-                      icon={<TrendingUp size={24} className="text-amber-500" />}
-                      iconColor="bg-amber-500"
-                    />
-                    <KPICard
-                      title="Loan capital repaid"
-                      value={formatCurrency(
-                        yearByYearData.where_money_went.loan_capital_repaid,
-                      )}
-                      icon={<Landmark size={24} className="text-blue-500" />}
-                      iconColor="bg-blue-500"
-                    />
-                    <KPICard
-                      title="Kept in cash"
-                      value={formatCurrency(yearByYearData.where_money_went.kept)}
-                      icon={<PiggyBank size={24} className="text-emerald-500" />}
-                      iconColor="bg-emerald-500"
-                    />
-                    <KPICard
-                      title="Realised gains"
-                      value={formatCurrency(
-                        yearByYearData.where_money_went.realised_gains,
-                      )}
-                      subtitle="Included in income"
-                      icon={<Coins size={24} className="text-violet-500" />}
-                      iconColor="bg-violet-500"
-                    />
-                  </div>
+                  <WhereMoneyWent
+                    data={yearByYearData.where_money_went}
+                    formatCurrency={formatCurrency}
+                  />
                 )}
 
                 {/* Sankey Diagram - Money Flow */}

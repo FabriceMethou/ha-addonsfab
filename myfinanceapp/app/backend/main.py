@@ -4,6 +4,7 @@ Main application file with JWT authentication
 """
 import sys, os
 import logging
+import threading
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJECT_ROOT)
@@ -16,6 +17,7 @@ from typing import Optional
 import jwt
 import os
 
+import price_refresh
 from deps import lazy_db
 from backup_manager import BackupManager
 from alerts import AlertManager
@@ -45,7 +47,7 @@ _redoc_url = "/redoc" if os.getenv("ENVIRONMENT", "production") != "production" 
 app = FastAPI(
     title="Finance Tracker API",
     description="Personal finance management API with transaction tracking and reporting",
-    version="2.14.0",
+    version="2.15.0",
     docs_url=_docs_url,
     redoc_url=_redoc_url,
 )
@@ -127,6 +129,11 @@ async def startup_event():
                 logger.warning("Auto backup failed: %s", e)
 
         asyncio.get_event_loop().run_in_executor(None, _do_backup)
+
+    # Keep prices current, and with them the price history.
+    threading.Thread(target=price_refresh.run_forever,
+                     args=(lazy_db, investments.refresh_all_prices_now),
+                     daemon=True, name="price-refresh").start()
 
 @app.on_event("shutdown")
 async def shutdown_event():

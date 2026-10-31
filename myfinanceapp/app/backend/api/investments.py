@@ -625,11 +625,16 @@ def get_monthly_summary(
     return portfolio.investment_activity(db, start_date, end_date, owner_id)
 
 @router.get("/summary")
-def get_summary(current_user: User = Depends(get_current_user)):
+def get_summary(owner_id: Optional[int] = None, account_id: Optional[int] = None,
+                current_user: User = Depends(get_current_user)):
     """Get investment portfolio summary with all amounts converted to the user's display currency"""
     display_currency = db.get_preference('display_currency', 'EUR')
     exchange_rates = db.get_exchange_rates_map()
-    holdings = db.get_investment_holdings()
+    holdings = db.get_investment_holdings(account_id)
+    if owner_id:
+        owned_accounts = {a['id'] for a in db.get_accounts(owner_id=owner_id)}
+        holdings = [h for h in holdings if h.get('account_id') in owned_accounts]
+    held = {h['id'] for h in holdings}
 
     total_value = 0
     total_cost = 0
@@ -639,7 +644,7 @@ def get_summary(current_user: User = Depends(get_current_user)):
     allocation_by_type = {}
 
     # Get all transactions to calculate dividends, fees, and tax
-    all_transactions = db.get_investment_transactions()
+    all_transactions = [t for t in db.get_investment_transactions() if t.get('holding_id') in held]
 
     for holding in holdings:
         quantity = holding.get('quantity', 0) or 0
@@ -698,7 +703,10 @@ def get_summary(current_user: User = Depends(get_current_user)):
     ]
 
     return {
-        "realised_gains": portfolio.realised_gains(db, None, None, None, display_currency),
+        "realised_gains": sum(
+            portfolio.realised_gains(db, None, None, None, display_currency, holding_id=holding_id)
+            for holding_id in held) if owner_id or account_id else
+        portfolio.realised_gains(db, None, None, None, display_currency),
         "total_value": total_value,
         "total_cost": total_cost,
         "total_gain_loss": total_value - total_cost,
@@ -862,6 +870,25 @@ def _run_price_update(holdings, request_delay):
         with _price_update_lock:
             _price_update_state["running"] = False
             _price_update_state["finished_at"] = datetime.now().isoformat()
+
+
+def refresh_all_prices_now() -> None:
+    """The daily refresh: every quote, on the caller's thread. Raises when Yahoo
+    answered for nothing at all, so the day is not counted as done."""
+    holdings = db.get_investment_holdings()
+    if not holdings:
+        return
+    with _price_update_lock:
+        if _price_update_state["running"]:
+            return
+        _price_update_state.update({
+            "running": True, "started_at": datetime.now().isoformat(), "finished_at": None,
+            "total": len(holdings), "processed": 0, "updated_count": 0,
+            "failed": [], "skipped": [], "error": None,
+        })
+    _run_price_update(holdings, float(os.getenv("PRICE_UPDATE_DELAY_SECONDS", "0.3")))
+    if not _price_update_state["updated_count"] and _price_update_state["failed"]:
+        raise RuntimeError(f"no quote received for {len(_price_update_state['failed'])} holding(s)")
 
 
 @router.post("/holdings/update-all-prices", status_code=202)

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.15.0
+
+**Past values use the price of that day**
+- A new price history keeps each quote and each trade's price by date. Net worth history values a past date at the latest price known on that date, not today's. A price rise no longer rewrites your history
+- The upgrade starts the history from every past trade and your current quotes. Before the first daily refresh, a past date uses the price of your last trade
+
+**Prices refresh on their own**
+- Once a day, in the background, and it catches up after a restart. This sends the symbols of your holdings to Yahoo Finance. You can turn it off in Settings
+
+**New Reports tab: Investments**
+- Value at the end of the period, net contributed, market gain, dividends, realised gain, fees and tax. The figures add up
+- Value against money contributed over time, a table of what each holding did, allocation at the end of the period and dividends by month
+- Filter by owner, account and period. A gold account fed by transfers counts too, so the total matches net worth
+
+**Other tabs**
+- Monthly Summary shows the same "where the savings went" figures as Money Flow. Overview adds net invested and investment income
+
 ## 2.14.0
 
 **Where the money went**

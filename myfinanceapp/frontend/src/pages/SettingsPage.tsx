@@ -834,6 +834,33 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      {/* Daily price refresh */}
+      <Card className="p-6 rounded-xl border border-border bg-card/50 backdrop-blur-sm">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <Label className="text-base font-medium text-foreground">
+              Refresh investment prices every day
+            </Label>
+            <p className="text-sm text-foreground-muted">
+              Fetches a price once a day and keeps it in the price history behind
+              past values. This sends the symbols of your holdings to Yahoo
+              Finance. Turned off, prices only change when you update them.
+              {(settings as any)?.last_price_refresh &&
+                ` Last refresh: ${(settings as any).last_price_refresh}.`}
+            </p>
+          </div>
+          <Switch
+            checked={!!(settings as any)?.auto_refresh_prices}
+            onChange={(checked) =>
+              updateDebugSettingMutation.mutate({
+                key: "auto_refresh_prices",
+                value: checked,
+              })
+            }
+          />
+        </div>
+      </Card>
+
       {/* Debug Settings */}
       <Card className="p-6 rounded-xl border border-warning/50 bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-2 mb-4">

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 #: Schema revision, written to PRAGMA user_version after _init_database() runs.
 #: Bump it when adding a migration so a database can report what it has applied.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 #: Ledger rows whose payee the app writes rather than a person: the cash legs of
 #: investment trades and both legs of a debt payment. Their "payee" is a holding
@@ -1150,6 +1150,38 @@ class FinanceDatabase:
             """)
             if cursor.rowcount:
                 logger.info(f"Cleared stored quantity/cost on {cursor.rowcount} holding(s) with trades")
+
+            # Schema 6: prices by date, so a past date is valued at its own price
+            # rather than today's. Every trade already recorded a real price, and
+            # the current quote is known, so history starts with those.
+            history_exists = cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'price_history'"
+            ).fetchone()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS price_history (
+                    holding_id INTEGER NOT NULL,
+                    price_date DATE NOT NULL,
+                    price REAL NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'quote',
+                    PRIMARY KEY (holding_id, price_date),
+                    FOREIGN KEY (holding_id) REFERENCES investment_holdings(id) ON DELETE CASCADE
+                )
+            """)
+            if not history_exists:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO price_history (holding_id, price_date, price, source)
+                    SELECT it.holding_id, it.transaction_date, it.price_per_share, 'trade'
+                      FROM investment_transactions it
+                      JOIN investment_holdings h ON h.id = it.holding_id
+                     WHERE it.transaction_type IN ('buy', 'sell') AND it.price_per_share > 0
+                     ORDER BY it.transaction_date, it.id
+                """)
+                cursor.execute("""
+                    INSERT OR REPLACE INTO price_history (holding_id, price_date, price, source)
+                    SELECT id, DATE(COALESCE(last_price_update, 'now')), current_price, 'quote'
+                      FROM investment_holdings WHERE current_price > 0
+                """)
+                logger.info(f"Started price history with {cursor.rowcount} current quote(s)")
 
             # Schema 5: an extra payment was stored with an amount of 0 and an
             # interest worked out on the balance, though none was charged. That
@@ -5892,10 +5924,8 @@ class FinanceDatabase:
             # it as empty, which is why the trend disagreed with current
             # net worth by exactly the value of the holdings.
             #
-            # Quantity is reconstructed from the trades up to this date,
-            # so what you had then is right. The price is today's: no
-            # price history is kept, so past points value old positions
-            # at current quotes.
+            # Quantity is reconstructed from the trades up to this date, and the
+            # price is the latest known on that date.
             if account.get('account_type') == 'investment':
                 cursor.execute("""
                     SELECT COALESCE(SUM(
@@ -5907,13 +5937,22 @@ class FinanceDatabase:
                            -- Life insurance and similar have no market price, and
                            -- treating them as worthless made the trend disagree
                            -- with current net worth by tens of thousands.
-                           CASE WHEN h.current_price > 0 THEN h.current_price
+                           -- Today is worth today's quote, even with a trade since it.
+                           CASE WHEN h.current_price > 0 AND ? >= DATE('now', 'localtime')
+                                THEN h.current_price
+                                WHEN h.current_price > 0 AND EXISTS (
+                                    SELECT 1 FROM price_history ph
+                                     WHERE ph.holding_id = h.id AND ph.price_date <= ?)
+                                THEN (SELECT ph.price FROM price_history ph
+                                       WHERE ph.holding_id = h.id AND ph.price_date <= ?
+                                       ORDER BY ph.price_date DESC LIMIT 1)
                                 WHEN SUM(CASE WHEN it.transaction_type = 'buy'
                                               THEN it.shares ELSE 0 END) > 0
                                 THEN SUM(CASE WHEN it.transaction_type = 'buy'
                                               THEN it.total_amount ELSE 0 END)
                                      / SUM(CASE WHEN it.transaction_type = 'buy'
                                                 THEN it.shares ELSE 0 END)
+                                WHEN h.current_price > 0 THEN h.current_price
                                 ELSE COALESCE(h.average_cost, 0)
                            END AS price,
                            COALESCE(h.currency, s.currency) AS currency
@@ -5923,7 +5962,7 @@ class FinanceDatabase:
                              ON it.holding_id = h.id AND it.transaction_date <= ?
                      WHERE h.account_id = ?
                      GROUP BY h.id
-                """, (calc_date, account['id']))
+                """, (calc_date, calc_date, calc_date, calc_date, account['id']))
                 holdings = cursor.fetchall()
                 for holding in holdings:
                     held = (holding['quantity'] or 0) * (holding['price'] or 0)
@@ -6323,6 +6362,9 @@ class FinanceDatabase:
             success = cursor.rowcount > 0
 
             if success:
+                if 'current_price' in update_data:
+                    self._record_quote(cursor, holding_id, update_data['current_price'])
+
                 # Build log message based on what was actually updated
                 updated_fields = []
                 if 'security_id' in update_data:
@@ -6351,6 +6393,15 @@ class FinanceDatabase:
 
             return success
 
+    @staticmethod
+    def _record_quote(cursor, holding_id: int, price: float) -> None:
+        """Today's price in the history. A quote outranks a trade made the same day."""
+        if price and price > 0:
+            cursor.execute("""
+                INSERT OR REPLACE INTO price_history (holding_id, price_date, price, source)
+                VALUES (?, DATE('now', 'localtime'), ?, 'quote')
+            """, (holding_id, price))
+
     def update_holding_price(self, holding_id: int, new_price: float) -> bool:
         """Update the current price of a holding."""
 
@@ -6366,6 +6417,7 @@ class FinanceDatabase:
             success = cursor.rowcount > 0
 
             if success:
+                self._record_quote(cursor, holding_id, new_price)
                 account_id = cursor.execute(
                     "SELECT account_id FROM investment_holdings WHERE id = ?",
                     (holding_id,)).fetchone()['account_id']
@@ -6690,6 +6742,13 @@ class FinanceDatabase:
 
         trans_id = cursor.lastrowid
 
+        # A real price on a real date, unless a quote already has that day.
+        if transaction_type in ('buy', 'sell') and (trans_data.get('price_per_share') or 0) > 0:
+            cursor.execute("""
+                INSERT OR IGNORE INTO price_history (holding_id, price_date, price, source)
+                VALUES (?, ?, ?, 'trade')
+            """, (trans_data['holding_id'], trans_data['transaction_date'], trans_data['price_per_share']))
+
         # A buy dated before an existing sale changes what that sale cost.
         self._resplit_sales(cursor, trans_data['holding_id'])
 
@@ -6905,6 +6964,16 @@ class FinanceDatabase:
         # exists trips the constraint.
         cursor.execute("DELETE FROM investment_transactions WHERE id = ?", (transaction_id,))
         success = cursor.rowcount > 0
+
+        # The price came from this trade, unless another one that day confirms it.
+        cursor.execute("""
+            DELETE FROM price_history
+             WHERE holding_id = ? AND price_date = ? AND source = 'trade'
+               AND NOT EXISTS (SELECT 1 FROM investment_transactions it
+                                WHERE it.holding_id = price_history.holding_id
+                                  AND it.transaction_date = price_history.price_date
+                                  AND it.transaction_type IN ('buy', 'sell'))
+        """, (trans['holding_id'], trans['transaction_date']))
 
         # Then the ledger rows it pointed at. A sale wrote two — the capital
         # returned and the gain — and both have to go.

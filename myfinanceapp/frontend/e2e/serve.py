@@ -47,6 +47,19 @@ debt = db.add_debt({"name": "E2E Loan", "principal_amount": 1000.0, "current_bal
                     "start_date": "2026-01-01"})
 db.record_debt_payment(debt, {"amount": 100.0, "payment_date": (date.today() - timedelta(days=20)).isoformat()})
 
+db.set_preference("auto_refresh_prices", "false")  # no calls to Yahoo from a test
+broker = db.add_account({"name": "E2E Broker", "owner_id": owner, "balance": 0.0, "opening_balance": 0.0,
+                         "currency": "EUR", "account_type": "investment", "linked_account_id": account,
+                         "opening_date": (date.today() - timedelta(days=100)).isoformat()})
+security = db.add_security({"symbol": "E2E", "name": "E2E Fund", "investment_type": "etf", "currency": "EUR"})
+holding = db.add_investment_holding({"account_id": broker, "security_id": security, "currency": "EUR",
+                                     "current_price": 0})
+db.add_investment_transaction({"holding_id": holding, "transaction_type": "buy",
+                               "transaction_date": (date.today() - timedelta(days=30)).isoformat(),
+                               "shares": 2, "price_per_share": 50, "total_amount": 100, "fees": 0,
+                               "tax": 0, "currency": "EUR"})
+db.update_holding_price(holding, 60.0)
+
 DIST = os.path.join(HERE, ".dist")
 main.app.mount("/assets", StaticFiles(directory=os.path.join(DIST, "assets")), name="assets")
 

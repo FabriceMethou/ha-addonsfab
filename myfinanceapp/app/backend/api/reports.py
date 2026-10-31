@@ -139,6 +139,18 @@ def _where_money_went(start_date: Optional[str], end_date: Optional[str],
     }
 
 
+@router.get("/investments")
+def investments_report(
+    start_date: str,
+    end_date: str,
+    owner_id: Optional[int] = None,
+    account_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """What the portfolio did in a period: figures, holdings, value over time."""
+    return portfolio.investment_report(db, start_date, end_date, owner_id, account_id)
+
+
 @router.get("/where-money-went")
 def where_money_went(
     start_date: Optional[str] = None,
@@ -492,6 +504,7 @@ def monthly_summary(
             "expenses": expenses,
             "net": income - expenses,
             "transaction_count": len(transactions),
+            "where_money_went": _where_money_went(period_start, period_end, owner_id, display_currency),
             "budget_vs_actual": budget_data,
             "spending_by_category": _format_breakdown(category_spending, amount_key='amount'),
             "currency": display_currency
