@@ -49,7 +49,9 @@ import {
 import {
   TrendingUp,
   TrendingDown,
+  Coins,
   Landmark,
+  PiggyBank,
   Tag,
   Wallet,
   ArrowUpCircle,
@@ -2110,10 +2112,17 @@ export default function ReportsPage() {
                       />
                       <Line
                         type="monotone"
-                        dataKey="assets"
+                        dataKey="cash"
                         stroke="#10b981"
                         strokeWidth={2}
-                        name="Assets"
+                        name="Cash"
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="investments"
+                        stroke="#f59e0b"
+                        strokeWidth={2}
+                        name="Investments"
                       />
                       <Line
                         type="monotone"
@@ -2505,6 +2514,43 @@ export default function ReportsPage() {
                     }
                   />
                 </div>
+
+                {/* What the savings became */}
+                {yearByYearData.where_money_went && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <KPICard
+                      title="Invested (net)"
+                      value={formatCurrency(
+                        yearByYearData.where_money_went.net_invested,
+                      )}
+                      icon={<TrendingUp size={24} className="text-amber-500" />}
+                      iconColor="bg-amber-500"
+                    />
+                    <KPICard
+                      title="Loan capital repaid"
+                      value={formatCurrency(
+                        yearByYearData.where_money_went.loan_capital_repaid,
+                      )}
+                      icon={<Landmark size={24} className="text-blue-500" />}
+                      iconColor="bg-blue-500"
+                    />
+                    <KPICard
+                      title="Kept in cash"
+                      value={formatCurrency(yearByYearData.where_money_went.kept)}
+                      icon={<PiggyBank size={24} className="text-emerald-500" />}
+                      iconColor="bg-emerald-500"
+                    />
+                    <KPICard
+                      title="Realised gains"
+                      value={formatCurrency(
+                        yearByYearData.where_money_went.realised_gains,
+                      )}
+                      subtitle="Included in income"
+                      icon={<Coins size={24} className="text-violet-500" />}
+                      iconColor="bg-violet-500"
+                    />
+                  </div>
+                )}
 
                 {/* Sankey Diagram - Money Flow */}
                 {yearByYearData.sankey &&

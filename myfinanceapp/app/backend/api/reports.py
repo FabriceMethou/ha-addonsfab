@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from deps import lazy_db
 from utils import income_and_expense
 from api.auth import get_current_user, User
+import portfolio
 from predictions import SpendingPredictor
 
 router = APIRouter()
@@ -108,6 +109,49 @@ def _totals(transactions, display_currency):
             expenses += db.convert_currency(exp, currency, display_currency)
     return income, expenses
 
+def _where_money_went(start_date: Optional[str], end_date: Optional[str],
+                      owner_id: Optional[int], display_currency: str) -> Dict[str, float]:
+    """What came in, and where it went: spent, invested, repaid on loans, or kept.
+
+    Kept is what stayed as cash, so it matches how much the accounts really moved.
+    """
+    filters: Dict[str, Any] = {}
+    if start_date:
+        filters['start_date'] = start_date
+    if end_date:
+        filters['end_date'] = end_date
+    if owner_id:
+        filters['owner_id'] = owner_id
+    confirmed = [t for t in db.get_transactions(filters) if t.get('confirmed')]
+    income, expenses = _totals(confirmed, display_currency)
+    activity = portfolio.investment_activity(db, start_date, end_date, owner_id)
+    savings = income - expenses
+    return {
+        "income": income,
+        "expenses": expenses,
+        "savings": savings,
+        "invested": activity['total_invested'],
+        "net_invested": activity['net_invested'],
+        "loan_capital_repaid": activity['loan_capital_repaid'],
+        "kept": round(savings - activity['net_invested'] - activity['loan_capital_repaid'], 2),
+        "realised_gains": activity['realised_gains'],
+        "dividends": activity['total_dividends'],
+    }
+
+
+@router.get("/where-money-went")
+def where_money_went(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    owner_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Income and its uses for a period, in the display currency."""
+    display_currency = db.get_preference('display_currency', 'EUR')
+    return {**_where_money_went(start_date, end_date, owner_id, display_currency),
+            "start_date": start_date, "end_date": end_date, "currency": display_currency}
+
+
 @router.get("/net-worth")
 def net_worth(
     owner_id: Optional[int] = None,
@@ -121,10 +165,15 @@ def net_worth(
     debts = db.debts_of_owner(owner_id)
 
     # Convert all account balances to display currency
-    total_assets = sum(
+    total_investments = sum(
         db.convert_currency(a['balance'], a.get('currency', 'EUR'), display_currency)
-        for a in accounts
+        for a in accounts if a.get('account_type') == 'investment'
     )
+    total_cash = sum(
+        db.convert_currency(a['balance'], a.get('currency', 'EUR'), display_currency)
+        for a in accounts if a.get('account_type') != 'investment'
+    )
+    total_assets = total_cash + total_investments
 
     # Convert all debt balances to display currency
     total_debts = sum(
@@ -134,6 +183,8 @@ def net_worth(
 
     return {
         "total_assets": total_assets,
+        "cash": total_cash,
+        "investments": total_investments,
         "total_debts": total_debts,
         "net_worth": total_assets - total_debts,
         "account_count": len(accounts),
@@ -320,6 +371,8 @@ def net_worth_trend(
                 "date": item['date'],
                 "month": date_obj.strftime('%B %Y'),
                 "assets": item['assets'],
+                "cash": item['cash'],
+                "investments": item['investments'],
                 "debts": item['debts'],
                 "net_worth": item['net_worth']
             })
@@ -1073,8 +1126,33 @@ def year_by_year_stats(
                     "value": round(other_total, 2)
                 })
 
+        # What the savings became, on the right of the diagram. A use bigger than
+        # the money that came in was paid from money already there, on the left.
+        where_went = _where_money_went(period_start, period_end, None, display_currency)
+
+        def add_budget_node(node_id, label, node_type, value, into_budget=False):
+            sankey_nodes.append({"id": node_id, "label": label, "type": node_type})
+            sankey_links.append({"source": node_id, "target": "budget", "value": round(value, 2)}
+                                if into_budget else
+                                {"source": "budget", "target": node_id, "value": round(value, 2)})
+
+        if where_went['net_invested'] > 0.005:
+            add_budget_node("use_invested", "Invested", "allocation", where_went['net_invested'])
+        elif where_went['net_invested'] < -0.005:
+            add_budget_node("from_investments", "Taken out of investments", "income",
+                            -where_went['net_invested'], into_budget=True)
+        if where_went['loan_capital_repaid'] > 0.005:
+            add_budget_node("use_loans", "Loan capital repaid", "allocation",
+                            where_went['loan_capital_repaid'])
+        if where_went['kept'] > 0.005:
+            add_budget_node("use_kept", "Kept", "allocation", where_went['kept'])
+        elif where_went['kept'] < -0.005:
+            add_budget_node("from_cash", "From money you already had", "income",
+                            -where_went['kept'], into_budget=True)
+
         # Format response with sorted lists
         return {
+            "where_money_went": where_went,
             "year": year,
             "month": month,
             "start_date": period_start,

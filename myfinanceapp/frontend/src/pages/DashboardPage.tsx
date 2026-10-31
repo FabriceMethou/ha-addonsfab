@@ -439,7 +439,12 @@ export default function DashboardPage() {
   const monthlyNetInvested =
     monthlyInvestments?.net_invested ?? monthlyInvested;
   const monthlyTakenOut = subtractMoney(monthlyInvested, monthlyNetInvested);
-  const monthlyKeptInCash = subtractMoney(monthlySavings, monthlyNetInvested);
+  // Capital repaid on a loan left the accounts too, without being spent.
+  const monthlyLoanCapital = monthlyInvestments?.loan_capital_repaid ?? 0;
+  const monthlyKeptInCash = subtractMoney(
+    subtractMoney(monthlySavings, monthlyNetInvested),
+    monthlyLoanCapital,
+  );
   // Invested beyond this month's savings came from money already there.
   const monthlyFromExistingCash = Math.max(0, -monthlyKeptInCash);
 
@@ -503,6 +508,11 @@ export default function DashboardPage() {
         <KPICard
           title="Net Worth"
           value={formatCurrency(netWorth)}
+          subtitle={
+            isCurrentMonth && netWorthData
+              ? `Cash ${formatCurrency(netWorthData.cash)} · Investments ${formatCurrency(netWorthData.investments)} · Debts ${formatCurrency(netWorthData.total_debts)}`
+              : undefined
+          }
           change={netWorthChange}
           changeLabel={`vs end of ${format(previousMonth, "MMMM")}`}
           icon={<Wallet size={24} className="text-blue-500" />}
@@ -643,6 +653,14 @@ export default function DashboardPage() {
                 <>
                   {" "}
                   (net of {formatCurrency(monthlyTakenOut)} sold or taken out)
+                </>
+              )}
+              {monthlyLoanCapital > 0 && (
+                <>
+                  {" · "}loan capital repaid{" "}
+                  <span className="text-foreground font-medium">
+                    {formatCurrency(monthlyLoanCapital)}
+                  </span>
                 </>
               )}
             </p>

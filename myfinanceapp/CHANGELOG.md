@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.14.0
+
+**Where the money went**
+- **Money Flow** now shows what your savings became: **Invested**, **Loan capital repaid** and **Kept in cash**, as figures and in the diagram. When you used more than came in, the diagram shows it as "From money you already had"
+- **Kept in cash** is corrected: it used to ignore loan capital. It now matches how much your cash really moved, apart from exchange rate differences on transfers between currencies
+- **Realised gains** are shown on Money Flow
+
+**Net worth, split**
+- The dashboard card shows cash, investments and debts. Net Worth History draws cash and investments as separate lines
+- An investment account without holdings, such as a gold account fed by transfers, keeps its value in net worth history. It used to count as 0 there
+
 ## 2.13.0
 
 **Refunds: one window, one way**

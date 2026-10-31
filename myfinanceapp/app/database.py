@@ -5874,8 +5874,9 @@ class FinanceDatabase:
         return debts
 
     def _net_worth_on(self, cursor, calc_date: str, accounts, debts, display_currency: str) -> Dict[str, float]:
-        """Assets, debts and net worth at the end of `calc_date`."""
-        total_assets = 0
+        """Assets (cash and investments), debts and net worth at the end of `calc_date`."""
+        total_cash = 0
+        total_investments = 0
 
         # Calculate balance for each account at this date
         for account in accounts:
@@ -5923,12 +5924,16 @@ class FinanceDatabase:
                      WHERE h.account_id = ?
                      GROUP BY h.id
                 """, (calc_date, account['id']))
-                for holding in cursor.fetchall():
+                holdings = cursor.fetchall()
+                for holding in holdings:
                     held = (holding['quantity'] or 0) * (holding['price'] or 0)
                     if held:
-                        total_assets += self.convert_currency(
+                        total_investments += self.convert_currency(
                             held, holding['currency'], display_currency)
-                continue
+                # One with no holdings, such as a gold account fed by transfers,
+                # is worth its ledger like any other account.
+                if holdings:
+                    continue
 
             # Start with opening balance
             balance = opening_balance
@@ -5962,7 +5967,10 @@ class FinanceDatabase:
 
             # Convert to display currency
             converted_balance = self.convert_currency(balance, account['currency'], display_currency)
-            total_assets += converted_balance
+            if account.get('account_type') == 'investment':
+                total_investments += converted_balance
+            else:
+                total_cash += converted_balance
 
         # Debt balances at this snapshot date: what is owed now, plus whatever
         # has been repaid since. Working forward from the original amount was
@@ -5997,8 +6005,11 @@ class FinanceDatabase:
                 converted_debt = self.convert_currency(debt_balance, debt_currency, display_currency)
                 total_debts += converted_debt
 
+        total_assets = total_cash + total_investments
         return {
             'assets': total_assets,
+            'cash': total_cash,
+            'investments': total_investments,
             'debts': total_debts,
             'net_worth': total_assets - total_debts,
         }

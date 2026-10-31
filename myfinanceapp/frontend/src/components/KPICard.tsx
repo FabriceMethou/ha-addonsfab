@@ -7,6 +7,8 @@ interface KPICardProps {
   value: string;
   change?: number;
   changeLabel?: string;
+  /** A line under the value. */
+  subtitle?: string;
   icon: React.ReactNode;
   /** Tailwind bg color class e.g. "bg-blue-500" */
   iconColor: string;
@@ -26,6 +28,7 @@ export default function KPICard({
   value,
   change,
   changeLabel,
+  subtitle,
   icon,
   iconColor,
   loading,
@@ -88,6 +91,11 @@ export default function KPICard({
           ) : (
             <p className="text-lg sm:text-2xl font-bold text-foreground truncate">
               {value}
+            </p>
+          )}
+          {subtitle && (
+            <p className="text-xs text-foreground-muted mt-1 truncate" title={subtitle}>
+              {subtitle}
             </p>
           )}
           {changeLabel && (
