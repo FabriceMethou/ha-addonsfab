@@ -702,11 +702,24 @@ def get_summary(owner_id: Optional[int] = None, account_id: Optional[int] = None
         for type_name, value in sorted(allocation_by_type.items(), key=lambda x: x[1], reverse=True)
     ]
 
+    # What went in, less what sales brought back. Fees are in here and in the cost
+    # of what is held, so the return below already carries them.
+    net_invested = 0.0
+    for t in all_transactions:
+        total = t.get('total_amount', 0) or 0
+        costs = (t.get('fees', 0) or 0) + (t.get('tax', 0) or 0)
+        signed = {'buy': total + costs, 'sell': -(total - costs)}.get(t.get('transaction_type'), 0)
+        net_invested += db.convert_with_rates(signed, t.get('currency', 'EUR'), display_currency, exchange_rates)
+
+    realised_gains = (
+        sum(portfolio.realised_gains(db, None, None, None, display_currency, holding_id=holding_id)
+            for holding_id in held)
+        if owner_id or account_id else portfolio.realised_gains(db, None, None, None, display_currency))
+
     return {
-        "realised_gains": sum(
-            portfolio.realised_gains(db, None, None, None, display_currency, holding_id=holding_id)
-            for holding_id in held) if owner_id or account_id else
-        portfolio.realised_gains(db, None, None, None, display_currency),
+        "realised_gains": realised_gains,
+        "total_return": total_value - total_cost + realised_gains + total_dividends,
+        "net_invested": net_invested,
         "total_value": total_value,
         "total_cost": total_cost,
         "total_gain_loss": total_value - total_cost,

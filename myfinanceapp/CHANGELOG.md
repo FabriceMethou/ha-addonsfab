@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.16.0
+
+**Investments page**
+- **Filter by owner and account.** The figures, holdings and trades all follow. The tab is in the address, so it can be linked to
+- **Four figures instead of seven:** Value, Total return, Income over 12 months and Net invested. Fees and tax moved under Net invested
+- **Total return** counts unrealised gains, realised gains and dividends, each shown. Selling at a gain no longer makes the gain disappear
+- **One allocation chart,** by type then holding, in place of two pie charts and the ten Top Holdings cards
+- **Closed holdings are hidden** behind "Show closed holdings", and the table is sorted by value
+- **"Record trade"**, once, instead of an "Add Transaction" button that appeared twice and differed from the one in the top bar. The tab is now "Trades"
+- Readable types: "Mutual fund", not "mutual_fund"
+
 ## 2.15.0
 
 **Past values use the price of that day**

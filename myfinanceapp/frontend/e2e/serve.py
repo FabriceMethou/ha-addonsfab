@@ -59,6 +59,14 @@ db.add_investment_transaction({"holding_id": holding, "transaction_type": "buy",
                                "shares": 2, "price_per_share": 50, "total_amount": 100, "fees": 0,
                                "tax": 0, "currency": "EUR"})
 db.update_holding_price(holding, 60.0)
+closed_security = db.add_security({"symbol": "GONE", "name": "Sold Out Fund", "investment_type": "mutual_fund", "currency": "EUR"})
+closed = db.add_investment_holding({"account_id": broker, "security_id": closed_security, "currency": "EUR",
+                                    "current_price": 0})
+for kind, price, days in (("buy", 10, 60), ("sell", 15, 40)):
+    db.add_investment_transaction({"holding_id": closed, "transaction_type": kind,
+                                   "transaction_date": (date.today() - timedelta(days=days)).isoformat(),
+                                   "shares": 2, "price_per_share": price, "total_amount": 2 * price, "fees": 0,
+                                   "tax": 0, "currency": "EUR"})
 
 DIST = os.path.join(HERE, ".dist")
 main.app.mount("/assets", StaticFiles(directory=os.path.join(DIST, "assets")), name="assets")

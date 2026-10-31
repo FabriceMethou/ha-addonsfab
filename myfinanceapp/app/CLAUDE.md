@@ -80,6 +80,8 @@ sqlite3 data/finance.db
 - `isin_lookup.py` - Investment symbol lookup via yfinance
 - `validators.py` - Input validation utilities
 - `integrity.py` - What can be inconsistent in the data, and the repairs for it. Used by `scripts/check_integrity.py` and the Data check on the Backup page (`/api/settings/data-check`)
+- `portfolio.py` - What investments did and are worth: one calculation for the Investments page, the dashboard and Reports
+- `price_refresh.py` - The daily background price refresh, off with the `auto_refresh_prices` preference. `price_history` holds prices by date; past values read it
 - `utils.py` - Shared utility functions
 
 **API Routers** (`backend/api/`):
@@ -148,7 +150,7 @@ Each page is self-contained with its own data fetching (TanStack Query) and loca
 - `RecipientsPage.tsx` - Recipient management (add, rename, merge, delete, unify spellings)
 - `EnvelopesPage.tsx` - Savings goals (envelope system)
 - `DebtsPage.tsx` - Debt tracking and payment schedules
-- `InvestmentsPage.tsx` - Investment portfolio
+- `InvestmentsPage.tsx` - Investment portfolio. The page only lays out its parts in `components/investments/`; state and actions are in `useInvestments.ts`
 - `BudgetsPage.tsx` - Budget creation and monitoring
 - `ReportsPage.tsx` - Financial analytics and visualizations
 - `BackupPage.tsx` - Database backup/restore UI
